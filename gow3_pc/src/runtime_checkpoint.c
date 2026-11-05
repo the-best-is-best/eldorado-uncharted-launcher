@@ -75,6 +75,41 @@ static void test_request(void) {
     }
 }
 
+/* El Dorado: "Give all treasures" (the launcher's cheat, BB_GIVE_TREASURES=1, 1.02 code): the games' own Dev Menu item
+ * of that name, its callback called as the menu does (message 4), once a session, after 5 s of play (a campaign is
+ * loaded then; the treasures are its own and go into its next save). Uncharted 1 0x9fc60, Uncharted 2 0x3fea90,
+ * Uncharted 3 0x4ba500, each checked against its first bytes first. */
+typedef unsigned char (__attribute__((sysv_abi)) *MenuCallback)(void *item, int message);
+static void give_treasures(uint64_t image, uint64_t at, const char *pattern, const char *name) {
+    static int state=-1; /* -1 unread, 0 off or done, 1 waiting */
+    static unsigned last_calls;
+    static double playing_since;
+    if (state<0) { const char *e=getenv("BB_GIVE_TREASURES"); state=e && e[0]=='1'; }
+    if (state!=1) return;
+    struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
+    const double t=now.tv_sec+now.tv_nsec*1e-9;
+    const unsigned calls=runtime_play_calls;
+    if (calls==last_calls) { playing_since=0; return; }
+    last_calls=calls;
+    if (playing_since==0) { playing_since=t; return; }
+    if (t-playing_since<5.0) return;
+    state=0;
+    const unsigned char *code=(const unsigned char *)(uintptr_t)(image+at);
+    for (const char *p=pattern; *p; ) {
+        while (*p==' ') ++p;
+        if (!*p) break;
+        unsigned v;
+        if (sscanf(p,"%2x",&v)!=1 || *code++!=(unsigned char)v) {
+            printf("Treasures: %s: the Give all Treasures item is not where expected; not given\n",name);
+            return;
+        }
+        p+=2;
+    }
+    printf("Treasures: %s: Give all Treasures\n",name);
+    fflush(stdout);
+    ((MenuCallback)(uintptr_t)(image+at))(NULL,4);
+}
+
 static void frame(const Build *b, uint64_t image) {
     atomic_store(&hooked,1);
     test_request();
@@ -108,6 +143,7 @@ void __attribute__((ms_abi)) runtime_checkpoint_frame_eu(uint64_t rdi, uint64_t 
 void __attribute__((ms_abi)) runtime_checkpoint_frame_us(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
                                                         const uint64_t *regs) {
     (void)rdi; (void)rsi; (void)r14; (void)regs;
+    give_treasures(image,0x4ba500,"55 48 89 e5 83 fe 04 75 0c 48 8d 3d","Uncharted 3 1.02");
     frame(&builds[1],image);
 }
 
@@ -233,6 +269,16 @@ static void old_frame(const OldBuild *b, uint64_t image) {
     void __attribute__((ms_abi)) fn(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14, const uint64_t *regs) { \
         (void)rdi; (void)rsi; (void)r14; (void)regs; old_frame(&old_builds[i],image); }
 OLD_FRAME(runtime_checkpoint_frame_u1_eu,0)
-OLD_FRAME(runtime_checkpoint_frame_u1_us,1)
+void __attribute__((ms_abi)) runtime_checkpoint_frame_u1_us(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                                           const uint64_t *regs) {
+    (void)rdi; (void)rsi; (void)r14; (void)regs;
+    give_treasures(image,0x9fc60,"55 48 89 e5 83 fe 04 75 0c 48 8d 3d","Uncharted 1 1.02");
+    old_frame(&old_builds[1],image);
+}
 OLD_FRAME(runtime_checkpoint_frame_u2_eu,2)
-OLD_FRAME(runtime_checkpoint_frame_u2_us,3)
+void __attribute__((ms_abi)) runtime_checkpoint_frame_u2_us(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                                           const uint64_t *regs) {
+    (void)rdi; (void)rsi; (void)r14; (void)regs;
+    give_treasures(image,0x3fea90,"55 48 89 e5 41 57 41 56 53 50 83 fe 04 75","Uncharted 2 1.02");
+    old_frame(&old_builds[3],image);
+}

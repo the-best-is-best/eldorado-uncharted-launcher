@@ -31,6 +31,7 @@
 #include "bbport_i18n.h"
 #include "bbport_saves.h"
 #include "bbport_settings.h"
+#include "bbport_thumbnail.h"
 #include "eldorado_perf_stats.h"
 #include <miniz.h>
 #include "imgui.h"
@@ -1266,6 +1267,48 @@ constexpr float ShotNoticeSeconds = 2.0f;
 std::atomic<long long> shot_notice_at{0}; // steady_clock ticks of the last screenshot; 0 none
 std::atomic<bool> shot_notice_on{false};
 
+// El Dorado's loading screen: from the start until the game shows its first picture (its title screen, with its
+// music; the window is black until then): the game's name, a gold bar running along and the seconds.
+void LoadingScreen() {
+    if (!BbThumbnail::Loading()) {
+        return;
+    }
+    static const auto started = std::chrono::steady_clock::now();
+    const float t = std::chrono::duration<float>(std::chrono::steady_clock::now() - started).count();
+    const char* exe = std::getenv("BB_EXE");
+    const std::string name = exe ? exe : "";
+    const char *number = "1", *title = "DRAKE'S FORTUNE";
+    if (name.find("big2") != std::string::npos) {
+        number = "2", title = "AMONG THIEVES";
+    } else if (name.find("big3") != std::string::npos) {
+        number = "3", title = "DRAKE'S DECEPTION";
+    }
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImDrawList* draw = ImGui::GetForegroundDrawList();
+    const ImVec2 p0 = viewport->Pos, size = viewport->Size;
+    draw->AddRectFilled(p0, ImVec2(p0.x + size.x, p0.y + size.y), IM_COL32(18, 13, 8, 255));
+    const float s = size.y / 1080.0f;
+    ImFont* font = ImGui::GetFont();
+    const ImU32 gold = IM_COL32(222, 176, 88, 255), parchment = IM_COL32(239, 224, 191, 255),
+                dim = IM_COL32(150, 130, 98, 255);
+    const auto centred = [&](const std::string& text, float y, float px, ImU32 colour) {
+        const ImVec2 w = font->CalcTextSizeA(px, FLT_MAX, 0.0f, text.c_str());
+        draw->AddText(font, px, ImVec2(p0.x + (size.x - w.x) * 0.5f, p0.y + y), colour, text.c_str());
+    };
+    const float cy = size.y * 0.42f;
+    centred("EL DORADO", cy - 120.0f * s, 26.0f * s, gold);
+    centred(std::string("UNCHARTED ") + number, cy - 30.0f * s, 30.0f * s, gold);
+    centred(title, cy + 10.0f * s, 64.0f * s, parchment);
+    // The bar: a gold run sliding along a dark track.
+    const float bw = 520.0f * s, bh = std::max(3.0f, 5.0f * s);
+    const float bx = p0.x + (size.x - bw) * 0.5f, by = p0.y + cy + 110.0f * s;
+    draw->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), IM_COL32(52, 39, 26, 255));
+    const float run = bw * 0.25f;
+    const float x = bx + std::fmod(t * 0.55f, 1.0f) * (bw + run) - run;
+    draw->AddRectFilled(ImVec2(std::max(bx, x), by), ImVec2(std::min(bx + bw, x + run), by + bh), gold);
+    centred(T("Loading"), cy + 135.0f * s, 22.0f * s, dim);
+}
+
 void ScreenshotNotice() {
     if (!shot_notice_on) {
         return;
@@ -1943,7 +1986,7 @@ bool Visible() {
                            BbSettings::Get().show_fps ||
                            toast_busy || shot_notice_on || prep_phase.load(std::memory_order_relaxed) != 0 ||
                            scan_total.load(std::memory_order_relaxed) != 0 ||
-                           prep_screen.load(std::memory_order_relaxed));
+                           prep_screen.load(std::memory_order_relaxed) || BbThumbnail::Loading());
 }
 
 void NotifyTrophy(int grade, std::string game, std::string name, std::vector<unsigned char> png) {
@@ -2080,6 +2123,9 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     TrophyToast();
     ScreenshotNotice();
     ShaderPreparation();
+    if (!prep_screen.load(std::memory_order_relaxed)) { // the preparation page has its own screen
+        LoadingScreen();
+    }
     ImGui::Render();
 
     const vk::RenderingAttachmentInfo attachment{

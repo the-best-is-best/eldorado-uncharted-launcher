@@ -247,11 +247,16 @@ INI_DEFAULTS = {
 # switches for them (CHEATS there).
 CHEATS = (("skipintro", "Skip intro", "No logo movie at start (Sony, Naughty Dog, Bluepoint). All three games."),
           ("invincible", "Invincible", "Nate takes no damage. All three games."),
-          ("ammo", "Infinite ammo", "The magazine never empties: no reloading. All three games."))
-# No reload, infinite grenades and one-hit kills (the old engine's) are not in this engine's patches
-# (gow3_pc/scripts/cheats.py has health, ammo and devmode): left out until they are.
+          ("ammo", "Infinite ammo", "The magazine never empties: no reloading. All three games."),
+          ("grenades", "Infinite grenades", "Nate's grenades never run out. All three games."),
+          ("treasures", "Give all treasures", "Every treasure counts as found in the save you play (a few seconds "
+           "into play). Written into that save and earns the treasure trophies: it stays after the cheat is turned "
+           "off. All three games."),
+          ("rewards", "Unlock all rewards", "Everything in Bonuses: skins, weapons, render modes, art and the "
+           "gameplay tweaks (one-shot kills, slow motion, mirror world, bullet speed), and every story cutscene. "
+           "Nothing is saved: turned off, the menus show your own progress again. All three games."))
 # Cheats that are on until the player turns them off.
-CHEAT_DEFAULTS = {"skipintro": True}
+CHEAT_DEFAULTS = {}  # every cheat starts off
 LAUNCHER_DEFAULTS = {"game": "u1", "diagnostics": True, "game_dir": "", "check_updates": True, "language": "1",
                      "unlock": False}
 
@@ -2149,14 +2154,15 @@ class Launcher:
         return inner
 
     def row(self, page, title, hint, control_factory):
-        row = tk.Frame(page, bg=BG)
+        bg = page.cget("bg")
+        row = tk.Frame(page, bg=bg)
         row.pack(side="top", fill="x", pady=(0, self.px(6)))
-        tk.Frame(page, bg=PANEL_HI, height=1).pack(side="top", fill="x", pady=(0, self.px(6)))
-        text = tk.Frame(row, bg=BG)
+        tk.Frame(page, bg=PANEL_HI if bg == BG else LINE, height=1).pack(side="top", fill="x", pady=(0, self.px(6)))
+        text = tk.Frame(row, bg=bg)
         text.pack(side="left", fill="x", expand=True)
-        tk.Label(text, text="▸ " + title, font=self.f_body_bold, bg=BG, fg=TEXT, anchor="w").pack(side="top", fill="x")
+        tk.Label(text, text="▸ " + title, font=self.f_body_bold, bg=bg, fg=TEXT, anchor="w").pack(side="top", fill="x")
         if hint:
-            tk.Label(text, text=hint, font=self.f_small, bg=BG, fg=MUTED, anchor="w", justify="left",
+            tk.Label(text, text=hint, font=self.f_small, bg=bg, fg=MUTED, anchor="w", justify="left",
                      wraplength=self.px(560)).pack(side="top", fill="x")
         control = control_factory(row)
         control.pack(side="right", padx=(self.px(20), 0))
@@ -2789,25 +2795,44 @@ class Launcher:
 
     def page_cheats(self):
         page = self.page()
-        tk.Label(page, text="The games' own developer switches, applied when a game starts. They need update 1.02.",
+        tk.Label(page, text="Applied when a game starts. Made for update 1.02 of the game.",
                  font=self.f_small, bg=BG, fg=MUTED, anchor="w").pack(side="top", fill="x", pady=(0, self.px(6)))
         for name, title, hint in CHEATS:
             def cheat(parent, key="cheat_" + name):
                 return Toggle(parent, self.s, self.config.get(key, CHEAT_DEFAULTS.get(key[6:], False)),
                               lambda v, k=key: self.change_config(k, v))
             self.row(page, title, hint, cheat)
+        def unlock(parent):
+            return Toggle(parent, self.s, self.config.get("unlock", False),
+                          lambda v: self.change_config("unlock", v))
+        self.row(page, "Unlock all chapters",
+                 "Every chapter in Chapter Select and the Brutal difficulty from the start, in all three "
+                 "games. Your saves and progress stay as they are.", unlock)
         return page
 
     def page_advanced(self):
+        """Advanced: El Dorado's settings cards (your game, picture, controls, launcher) and the tools.
+        Only what the engine uses (5 Nov 2026: U3 exposure, speakers, lamp shadows, full-resolution
+        textures, movie stretch, unlock rewards and torch forward had no effect with it: removed)."""
         page = self.page()
 
+        def card(title):
+            """A cut-corner panel with a gold heading; its rows go inside."""
+            outer = tk.Frame(page, bg=GOLD, padx=1, pady=1)
+            outer.pack(side="top", fill="x", pady=(0, self.px(14)))
+            inner = tk.Frame(outer, bg=PANEL, padx=self.px(16), pady=self.px(10))
+            inner.pack(fill="x")
+            tk.Label(inner, text="\u25c6  " + title, font=self.f_caps, bg=PANEL, fg=GOLD_HI, anchor="w").pack(
+                side="top", fill="x", pady=(0, self.px(8)))
+            return inner
+
+        game = card("YOUR GAME")
         # Save profiles (#66): profile N plays as PS4 user N, with its saves in savedata\N.
         def save_profile(parent):
             return Segmented(parent, (("1", "Profile 1"), ("2", "Profile 2"), ("3", "Profile 3")),
                              str(self.game_settings().get("save_profile", "1")),
                              lambda v: self.change_game_setting("save_profile", v), self.f_small)
-        self.widgets["save_profile"] = self.row(
-            page, "Save profile",
+        self.widgets["save_profile"] = self.row(game, "Save profile",
             "Separate saves for this game: each profile keeps its own progress and in-game settings, "
             "like another PS4 user. Profile 1 has your saves from earlier versions; switching never "
             "deletes anything.", save_profile)
@@ -2817,31 +2842,30 @@ class Launcher:
             options = [(code, label + ("  (+ voices)" if code in voices else "")) for code, label in LANGUAGES]
             return Dropdown(parent, options, self.config.get("language", "1"),
                             lambda v: self.change_config("language", v), self.f_small)
-        self.widgets["language"] = self.row(
-            page, "Language",
+        self.widgets["language"] = self.row(game, "Language",
             "Menus and subtitles in another language: pick it here, then press Square in a game's main "
             "menu to switch. Languages marked + voices are also spoken in your copy of the game.", language)
 
-        # GitHub #199/#195/#204/#212: Uncharted 3 too bright on some PCs (pavlikdcx's exposure patch,
-        # tools/probe_uncharted.py u3_exposure_patch).
-        def u3_exposure(parent):
-            return Segmented(parent, (("0", "Game's"), ("-0.3", "-0.3"), ("-0.6", "-0.6"), ("-1.0", "-1.0")),
-                             str(self.config.get("u3_exposure", "0")),
-                             lambda v: self.change_config("u3_exposure", v), self.f_small, recommended="0")
-        self.row(page, "Uncharted 3 exposure",
-                 "If Uncharted 3 looks washed out or too bright on your PC (bright skies and highlights), "
-                 "lower its exposure here: -0.3 a little, -1.0 about half as bright. Game's = unchanged.",
-                 u3_exposure)
 
-        def speakers(parent):
-            return Segmented(parent, (("auto", "Auto"), ("2", "Stereo"), ("6", "5.1"), ("8", "7.1")),
-                             str(self.config.get("speakers", "auto")),
-                             lambda v: self.change_config("speakers", v), self.f_small, recommended="auto")
-        self.row(page, "Speakers",
-                 "The games have their own stereo, 5.1 and 7.1 sound mixes. Auto picks the one that matches "
-                 "your Windows sound output (Sound settings -> speaker setup); headphones get stereo.",
-                 speakers)
 
+        picture = card("PICTURE")
+        def anisotropy(parent):
+            return Segmented(parent, (("0", "Game"), ("4", "4x"), ("8", "8x"), ("16", "16x")),
+                             str(self.config.get("anisotropy", "0")),
+                             lambda v: self.change_config("anisotropy", v), self.f_small, recommended="16")
+        self.row(picture, "Texture filtering",
+                 "Sharper ground and wall textures seen at an angle, in all three games. 16x costs "
+                 "almost no frame rate. Game = as on the PS4.", anisotropy)
+
+        def no_dof(parent):
+            return Toggle(parent, self.s, self.config.get("no_dof", False),
+                          lambda v: self.change_config("no_dof", v))
+        self.row(picture, "No depth of field (Uncharted 2 and 3)",
+                 "Turns off the background blur (while aiming, in cutscenes and in gameplay). Needs "
+                 "update 1.02.", no_dof)
+
+
+        controls = card("CONTROLS")
         def menu_shortcut(parent):
             # 29 Oct 2026 (GitHub #300): L2 + R3 also zooms the scope with some guns. Written to
             # probe-u*.ini like the in-game menu does (menu_shortcut, gow3_settings.cpp); a custom
@@ -2855,119 +2879,73 @@ class Launcher:
             return Segmented(parent, (("lt_r3", "L2 + R3"), ("view_menu", "Select + Start"),
                                       ("keyboard", "Keyboard only")),
                              self.ini.get("menu_shortcut", "lt_r3"), save, self.f_small)
-        self.row(page, "In-game menu shortcut",
+        self.row(controls, "In-game menu shortcut",
                  "The controller buttons that open the in-game menu. L2 + R3 also zooms the scope with some "
                  "guns: pick Select + Start (View + Menu on Xbox) or Keyboard only (Insert) then.", menu_shortcut)
 
-        def anisotropy(parent):
-            return Segmented(parent, (("0", "Game"), ("4", "4x"), ("8", "8x"), ("16", "16x")),
-                             str(self.config.get("anisotropy", "0")),
-                             lambda v: self.change_config("anisotropy", v), self.f_small, recommended="16")
-        self.row(page, "Texture filtering",
-                 "Sharper ground and wall textures seen at an angle, in all three games. 16x costs "
-                 "almost no frame rate. Game = as on the PS4.", anisotropy)
 
-        def hires_shadows(parent):
-            return Toggle(parent, self.s, self.config.get("hires_shadows", False),
-                          lambda v: self.change_config("hires_shadows", v))
-        self.row(page, "Sharper lamp shadows (Uncharted 2 and 3)",
-                 "The game's own high-resolution shadow buffer for lamps and flashlights (off on the "
-                 "PS4). Extra quality, being tested. Needs update 1.02.", hires_shadows)
-
-        def full_res_textures(parent):
-            return Toggle(parent, self.s, self.config.get("full_res_textures", False),
-                          lambda v: self.change_config("full_res_textures", v))
-        self.row(page, "Full-resolution textures (Uncharted 2 and 3)",
-                 "Always the sharpest version of every texture, no blurry ones while the game streams "
-                 "(off on the PS4). Extra quality, being tested. Needs update 1.02.", full_res_textures)
-
-        def no_dof(parent):
-            return Toggle(parent, self.s, self.config.get("no_dof", False),
-                          lambda v: self.change_config("no_dof", v))
-        self.row(page, "No depth of field (Uncharted 2 and 3)",
-                 "Turns off the background blur (while aiming, in cutscenes and in gameplay). Needs "
-                 "update 1.02.", no_dof)
-
-        def movie_stretch(parent):
-            return Toggle(parent, self.s, self.config.get("movie_stretch", False),
-                          lambda v: self.change_config("movie_stretch", v))
-        self.row(page, "Stretch movies to the screen",
-                 "The prerecorded cutscenes are 16:9 videos. Off: they keep their shape with black bars on "
-                 "ultrawide screens. On: they fill the whole screen, stretched.", movie_stretch)
-
-        def unlock(parent):
-            return Toggle(parent, self.s, self.config.get("unlock", False),
-                          lambda v: self.change_config("unlock", v))
-        self.row(page, "Unlock all chapters",
-                 "Every chapter in Chapter Select and the Brutal difficulty from the start, in all three "
-                 "games. Your saves and progress stay as they are. Needs update 1.02.", unlock)
-
-        def unlock_rewards(parent):
-            return Toggle(parent, self.s, self.config.get("unlock_rewards", False),
-                          lambda v: self.change_config("unlock_rewards", v))
-        self.row(page, "Unlock all rewards",
-                 "Every reward in Bonuses (skins, weapons, render modes, art galleries, gameplay tweaks) "
-                 "and every story cutscene, while this is on. Nothing is saved: turned off, the menus show "
-                 "your own progress again. Needs update 1.02.", unlock_rewards)
-
-        def diagnostics(parent):
-            return Toggle(parent, self.s, self.config.get("diagnostics", True),
-                          lambda v: self.change_config("diagnostics", v))
-        self.row(page, "Performance log", "Writes frame rate statistics to the log every 5 seconds. Helps when "
-                                          "you report a problem.", diagnostics)
-
-        def torch_forward(parent):
-            return Toggle(parent, self.s, self.config.get("torch_forward", True),
-                          lambda v: self.change_config("torch_forward", v))
-        self.row(page, "Torch follows Nate (Uncharted 2)",
-                 "The torch lights where Nate points it. Off: as on the PS4, it lights where the camera "
-                 "looks. Needs update 1.02.", torch_forward)
-
+        launcher = card("LAUNCHER")
         def check_updates(parent):
             return Toggle(parent, self.s, self.config.get("check_updates", True),
                           lambda v: self.change_config("check_updates", v))
         version = updater.installed_version(ROOT)
-        self.row(page, "Check for updates at start",
+        self.row(launcher, "Check for updates at start",
                  f"Installed: {updater.version_text(version) if version else 'source tree (updates with git)'}. "
                  "The launcher asks before it installs anything.", check_updates)
 
-        def section(title, actions, note=""):
-            tk.Label(page, text=title, font=self.f_small, bg=BG, fg=GOLD, anchor="w").pack(
-                side="top", fill="x", pady=(self.px(10), self.px(4)))
-            line = tk.Frame(page, bg=BG)
-            line.pack(side="top", fill="x")
+        def diagnostics(parent):
+            return Toggle(parent, self.s, self.config.get("diagnostics", True),
+                          lambda v: self.change_config("diagnostics", v))
+        self.row(launcher, "Performance log", "Writes frame rate statistics to the log every 5 seconds. Helps when "
+                                          "you report a problem.", diagnostics)
+
+
+        def section(box, title, actions, note=""):
+            tk.Label(box, text=title, font=self.f_small, bg=PANEL, fg=MUTED, anchor="w").pack(
+                side="top", fill="x", pady=(self.px(4), self.px(4)))
+            line = tk.Frame(box, bg=PANEL)
+            line.pack(side="top", fill="x", pady=(0, self.px(6)))
             for label, action in actions:
                 self.flat_button(line, label, action).pack(side="left", padx=(0, self.px(10)))
             if note:
-                tk.Label(line, text=note, font=self.f_small, bg=BG, fg=MUTED, anchor="w").pack(
+                tk.Label(line, text=note, font=self.f_small, bg=PANEL, fg=MUTED, anchor="w").pack(
                     side="left", padx=(self.px(6), 0))
-        section("SHORTCUTS", (("Desktop shortcut", self.desktop_shortcut), ("Game shortcuts", self.game_shortcuts)),
+
+        tools = card("SHORTCUTS")
+        section(tools, "Desktop", (("Desktop shortcut", self.desktop_shortcut),
+                                   ("Game shortcuts", self.game_shortcuts)),
                 "Game shortcuts: one per game on the desktop, each starts its game directly.")
-        section("STEAM", (("Add to Steam", lambda: self.add_to_steam(per_game=False)),
-                          ("Add games to Steam", lambda: self.add_to_steam(per_game=True))),
+        section(tools, "Steam", (("Add to Steam", lambda: self.add_to_steam(per_game=False)),
+                                 ("Add games to Steam", lambda: self.add_to_steam(per_game=True))),
                 "A non-Steam game in your library: the Collection, or one entry per game.")
-        section("FOLDERS", (("Open log folder", self.open_logs), ("Open save folder", self.open_saves),
-                            ("Change game folder", self.choose_game_dir),
-                            ("Install game from .pkg", self.install_game_pkg),
-                            ("Check game files", self.check_game_files)))
+        files = card("GAME FILES")
+        section(files, "Folders", (("Open log folder", self.open_logs), ("Open save folder", self.open_saves),
+                                   ("Change game folder", self.choose_game_dir),
+                                   ("Install game from .pkg", self.install_game_pkg),
+                                   ("Check game files", self.check_game_files)))
+        section(files, "Game update", (("Choose update folder", self.choose_update_folder),
+                                       ("Install from .pkg", self.install_game_update)),
+                "Your extracted update 1.02 folder, wherever it is, or the update's .pkg file.")
+        page_bg = page
+        page = files
         self.game_dir_label = tk.Label(page, text=f"Game files: {self.game_dir()}", font=self.f_small,
-                                       bg=BG, fg=DIM, anchor="w")
+                                       bg=PANEL, fg=DIM, anchor="w")
         self.game_dir_label.pack(side="top", fill="x", pady=(self.px(6), 0))
-        self.update_label = tk.Label(page, text=self.update_text(), font=self.f_small, bg=BG, fg=DIM,
+        self.update_label = tk.Label(page, text=self.update_text(), font=self.f_small, bg=PANEL, fg=DIM,
                                      anchor="w", justify="left")
         self.update_label.pack(side="top", fill="x")
         self.ini_label = tk.Label(page, text=f"Settings: {ini_file(self.config['game'])}", font=self.f_small,
-                                  bg=BG, fg=DIM, anchor="w")
+                                  bg=PANEL, fg=DIM, anchor="w")
         self.ini_label.pack(side="top", fill="x")
-        section("GAME UPDATE", (("Choose update folder", self.choose_update_folder),
-                                ("Install from .pkg", self.install_game_update)),
-                "Your extracted update 1.02 folder, wherever it is, or the update's .pkg file.")
-        section("TROUBLESHOOTING", (("Check for updates", lambda: self.check_updates(manual=True)),
-                                    ("Clear shader cache", self.clear_cache), ("Reset all settings", self.reset)))
+        page = page_bg
+        fixes = card("TROUBLESHOOTING")
+        section(fixes, "If something goes wrong", (("Check for updates", lambda: self.check_updates(manual=True)),
+                                                   ("Clear shader cache", self.clear_cache),
+                                                   ("Reset all settings", self.reset)))
         # Credits for the anti-aliasing technologies (NVIDIA's DLSS license asks for its attribution).
         tk.Label(page, text=CREDITS, font=self.f_small, bg=BG, fg=DIM, anchor="w", justify="left",
                  wraplength=self.width - 2 * self.px(40) - self.px(30)).pack(side="top", fill="x",
-                                                                              pady=(self.px(10), 0))
+                                                                              pady=(self.px(4), 0))
         return page
 
     def flat_button(self, parent, label, action):

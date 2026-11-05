@@ -58,6 +58,28 @@ DEVMODE = {
 }
 for _code, _patch in DEVMODE.items():
     PATCHES[_code]['devmode'] = _patch
+# rewards (El Dorado's "Unlock all rewards", 1.02 code): every reward in Bonuses (skins, weapons, render modes, art,
+# gameplay tweaks) and every story cutscene reads as unlocked while it is on; nothing is written to the save.
+# Uncharted 1 keeps each reward's status in its own record, so its checks are patched (IsUnlocked by item and by id,
+# the "Unlocked N of 47" counter, usable-by-id, CanEnable and its "finish the game first" reason, the Story
+# Cutscenes list). Uncharted 2 and 3 only drop "finish the game on this difficulty first" here; their debug switches
+# "Give all Store Items" / "Give All Movies" (bss bytes) are kept set by run.py (BB_POKE_U2 / BB_POKE_U3).
+REWARDS = {
+    US['eboot.bin']: [(0x32c342, '24', 'b0'), (0x32c3d7, '24', 'b0'), (0x32c518, '19', '00'),
+                      (0x32cd53, '1e', '00'), (0x32c8b1, '94', '92'), (0x32c818, '01', '00'),
+                      (0x138ab7, '88', '00')],
+    US['big2-ps4_Shipping.elf']: [(0xa4ca34, '01', '00')],
+    US['big3-ps4_Shipping.elf']: [(0x4bd55b, '01', '00')],
+}
+for _code, _patches in REWARDS.items():
+    PATCHES[_code]['rewards'] = _patches
+# grenades (El Dorado's "Infinite grenades", 1.02 code): the player's grenade throw no longer calls the ammo use
+# that takes one grenade away. Uncharted 1: weaponcontroller.cpp PostJointUpdate, the kGrenade branch, calls the use
+# (dec [weapon+slot*0x30+0x440]) at 0x734a78. Uncharted 2: player-fast-grenade.cpp Release calls it
+# (dec word [weapon+slot*0x20+0x620]) at 0x802273. The enemies' throws are other calls. Uncharted 3 has the
+# game's own "Infinite Grenades" switch, kept set by run.py (BB_POKE_U3).
+PATCHES[US['eboot.bin']]['grenades'] = (0x734a78, 'e8c319c1ff', NOP * 5)
+PATCHES[US['big2-ps4_Shipping.elf']]['grenades'] = (0x802273, 'e8a87d2e00', NOP * 5)
 
 
 def code_hash(data):
@@ -94,12 +116,18 @@ def compile_cheats(path, cheats):
     for name in cheats:
         if name not in table:
             continue
-        address, original, replacement = table[name]
-        original, replacement = bytes.fromhex(original), bytes.fromhex(replacement)
-        if image_bytes(elf, program_headers, address, len(original)) != original:
-            print(f'Cheats: {name} skipped, unexpected code at {address:#x}')
+        entries = table[name] if isinstance(table[name], list) else [table[name]]
+        found = []
+        for address, original, replacement in entries:
+            original, replacement = bytes.fromhex(original), bytes.fromhex(replacement)
+            if image_bytes(elf, program_headers, address, len(original)) != original:
+                print(f'Cheats: {name} skipped, unexpected code at {address:#x}')
+                found = None
+                break
+            found.append((address, replacement))
+        if found is None:
             continue
-        writes.append((address, replacement))
+        writes.extend(found)
         print(f'Cheats: {name} on')
     return writes
 

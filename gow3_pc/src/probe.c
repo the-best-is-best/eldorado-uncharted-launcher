@@ -83,6 +83,16 @@ static void apply_pokes(void) {
         if (p) ++p;
     }
 }
+/* El Dorado: BB_POKE without BB_WATCH (the launcher's Unlock all rewards): the values are kept set, written every
+ * 250 ms, without the watch's printing. */
+static DWORD WINAPI poke_thread(void *argument) {
+    (void)argument;
+    for (;;) {
+        apply_pokes();
+        Sleep(250);
+    }
+    return 0;
+}
 static DWORD WINAPI watch_thread(void *argument) {
     const char *list=argument;
     for (;;) {
@@ -2328,6 +2338,10 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
     SetThreadDescription(GetCurrentThread(),L"bb:GuestMain");   /* found by name by the sampler (BB_HITCH_MS) */
     if (getenv("BB_WATCH")) CloseHandle(CreateThread(NULL,0,watch_thread,getenv("BB_WATCH"),0,NULL));
+    else if (getenv("BB_POKE") && *getenv("BB_POKE")) {
+        printf("Pokes: %s kept set\n",getenv("BB_POKE"));
+        CloseHandle(CreateThread(NULL,0,poke_thread,NULL,0,NULL));
+    }
 #endif
     /* argv: the executable and, after sceSystemServiceLoadExec, the arguments it was given
      * as its argv (--guest-argv: one per line, argv[0] first). */

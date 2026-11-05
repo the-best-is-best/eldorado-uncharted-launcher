@@ -16,6 +16,7 @@
 #endif
 #include "common/assert.h"
 #include "bbport_overlay.h"
+#include "bbport_thumbnail.h"
 #include "bbport_threads.h"
 #include "bbport_toggles.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
@@ -973,7 +974,10 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         // bbport: the full-screen preparation page is drawn opaque over whatever is presented; before the game opens
         // its video port, blank frames carry it at half the vblank rate (holding the game's flips instead upset its
         // frame rotation: the title flickered afterwards).
-        if (BbOverlay::PreparationScreenActive() && !main_port.is_open) {
+        // El Dorado's loading screen (bbport_overlay.cpp) is carried the same way: it keeps moving while the game
+        // loads without flipping.
+        const bool own_screen = BbOverlay::PreparationScreenActive() || BbThumbnail::Loading();
+        if (own_screen && !main_port.is_open) {
             if (tick % 2 == 0) {
                 DrawBlankFrame();
             }
@@ -986,7 +990,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                 if (timer.GetTotalWait().count() < 0) { // Dont draw too fast
                     // bbport: the page over a later launch's wait (the game held after it opened its video port,
                     // vk_pipeline_serialization.cpp): no flips come, so blank frames carry the page (opaque).
-                    if (!main_port.is_open || BbOverlay::PreparationScreenActive()) {
+                    if (!main_port.is_open || own_screen) {
                         DrawBlankFrame();
                     } else if (ImGui::Core::MustKeepDrawing()) {
                         DrawLastFrame();

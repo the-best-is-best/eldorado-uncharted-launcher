@@ -345,7 +345,7 @@ static ABI int32_t save_umount(const MountPoint *point) {
     /* A save closed: the overlay's story save follows the game's campaign saves (bbport_saves.cpp). */
     bbport_saves_closed(host);
     const int written=picture[0] ? bbgpu_thumbnail_save(picture) : 0;
-    if (written==2) remove(picture); /* an older picture of this save would show another place meanwhile */
+    /* written==2: the picture follows once play goes on (or at exit); the older one stays meanwhile */
     if (written) printf("Runtime: save picture %s (%s)\n",written==1 ? "written" : "waits for play to go on",picture);
     if (loaded[0]) {
         bbgpu_thumbnail_loaded(loaded);

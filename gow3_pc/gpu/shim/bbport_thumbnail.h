@@ -20,5 +20,12 @@ void Store(const unsigned char* rgba);
 /// The game's save list ("Save game") was shown: the next save written within two minutes gets the picture from
 /// before the pause menu (bbgpu_thumbnail_pause).
 void NoteSaveList();
+/// El Dorado's loading screen (bbport_overlay.cpp): true from the start until the game shows a picture that is
+/// not black (its title screen, with its music), at most two minutes. BB_LOADING_SCREEN=0: off.
+bool Loading();
+/// Present thread: whether to take a small picture now only to see whether the game shows anything yet.
+bool LoadingProbeWanted();
+/// Present thread: that picture (Width x Height RGBA8); two in a row that are not black end the loading screen.
+void LoadingProbe(const unsigned char* rgba);
 
 } // namespace BbThumbnail

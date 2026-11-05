@@ -463,7 +463,9 @@ extern "C" int bbgpu_preparation_screen(void) {
     return BbOverlay::PreparationScreenActive() ? 1 : 0;
 }
 
+extern "C" void bbgpu_thumbnail_flush(void);
 extern "C" void bbgpu_prepare_exit(void) {
+    bbgpu_thumbnail_flush(); // saves still waiting for a picture get the last one
     Vulkan::FlushPipelineCacheForExit();
 }
 

@@ -96,6 +96,7 @@ enum Shape : u8 {
     Puck,        ///< 512x512: a raised button seen from the side (tapping prompts)
     PressedPuck, ///< 512x512: the same button pressed down (hold prompts)
     HudDPad,     ///< 256x256: the weapon switch d-pad
+    RotateStick, ///< 256x512: Uncharted 1's "turn the left stick" (a ring arrow over the stick, 4 frames)
 };
 struct Picture {
     u64 hash;
@@ -104,6 +105,7 @@ struct Picture {
     u8 icon; ///< the Action, or for HudDPad the lit directions
     u8 glow[3];
     const char* name;
+    u16 tall = 0; ///< height when not square (El Dorado: RotateStick)
 };
 const Picture pictures[] = {
     {0x5db884aa1bae54f9ull, 256, RoundButton, Triangle, {55, 216, 104}, "Uncharted 2 triangle prompt"},
@@ -113,6 +115,12 @@ const Picture pictures[] = {
      "Uncharted 2 triangle hold prompt"},
     {0x705083db743dd2f9ull, 256, HudDPad, LitUp, {206, 185, 156}, "Uncharted 2 weapon d-pad"},
     {0xe8a2f49b992621fcull, 256, HudDPad, LitUp, {206, 185, 156}, "Uncharted 3 weapon d-pad"},
+    // El Dorado (5 Nov 2026): Uncharted 1's wheel/valve prompt, its four animation frames (the game's ring arrow is
+    // kept; the stick under it becomes the move keys).
+    {0x349208a673329cceull, 256, RotateStick, Move, {205, 178, 140}, "Uncharted 1 turn-the-stick prompt (1)", 512},
+    {0x7515a2f4f6a1022dull, 256, RotateStick, Move, {205, 178, 140}, "Uncharted 1 turn-the-stick prompt (2)", 512},
+    {0x62ce1cf45bcd3fa6ull, 256, RotateStick, Move, {205, 178, 140}, "Uncharted 1 turn-the-stick prompt (3)", 512},
+    {0x8d9e67192111aafbull, 256, RotateStick, Move, {205, 178, 140}, "Uncharted 1 turn-the-stick prompt (4)", 512},
     {0x94d741f6b51815eeull, 512, Puck, Circle, {222, 32, 32}, "Uncharted 3 circle tapping prompt"},
     {0x93b46ba81469882cull, 512, PressedPuck, Circle, {222, 32, 32}, "Uncharted 3 circle hold prompt"},
 };
@@ -225,6 +233,8 @@ constexpr Color cap_top{0.250f, 0.180f, 0.110f};
 constexpr Color cap_bottom{0.100f, 0.068f, 0.040f};
 constexpr Color rim{0.870f, 0.690f, 0.345f};
 constexpr Color text_color{0.965f, 0.900f, 0.760f};
+constexpr Color lit_text{0.110f, 0.075f, 0.040f}; ///< labels on a lit (gold) key
+constexpr Color dim_text{0.520f, 0.460f, 0.370f}; ///< labels on the keys a prompt is not about
 constexpr Color highlight{0.950f, 0.700f, 0.300f}; ///< the d-pad's lit direction
 
 /// A straight-alpha RGBA float canvas the size of the sheet.
@@ -298,7 +308,7 @@ public:
 
     /// Draws `text` (UTF-8) centred on (cx, cy), as large as fits `max_width` up to `size` px.
     void Draw(Canvas& c, const std::string& text, float cx, float cy, float max_width,
-              float size) const {
+              float size, const Color& colour = text_color) const {
         if (!ok) {
             return;
         }
@@ -326,7 +336,7 @@ public:
                 for (int x = 0; x < w; ++x) {
                     // Slightly bold: each pixel also takes its left neighbour's coverage.
                     const float a = std::max(bitmap[y * w + x], x ? bitmap[y * w + x - 1] : u8(0));
-                    c.Blend(left + x, top + y, text_color, a / 255.0f);
+                    c.Blend(left + x, top + y, colour, a / 255.0f);
                 }
             }
             stbtt_FreeBitmap(bitmap, nullptr);
@@ -830,7 +840,55 @@ void DrawHudDPad(Canvas& up, const Font& font, const Bindings& b, u8 lit) {
 }
 
 
+u32 PictureHeight(const Picture& picture) {
+    return picture.tall ? picture.tall : picture.size;
+}
+
+/// El Dorado: the wheel prompt as the move keys in their places (W over A S D, by the keyboard layout), on the
+/// picture's own background, under the game's ring arrow, which is kept: only the lower half (shown) is redrawn.
+std::vector<Patch> BuildRotateStick(const Picture& picture, u32 levels, Style style) {
+    if (style != Style::Keyboard) {
+        return {}; // controllers: the game's own stick
+    }
+    const Bindings bindings = LoadBindings();
+    const Font font;
+    const u32 w = picture.size, h = PictureHeight(picture) / 2;
+    Canvas up{w, h};
+    const Color glow{picture.glow[0] / 255.0f, picture.glow[1] / 255.0f, picture.glow[2] / 255.0f};
+    for (u32 y = 0; y < h; ++y) {
+        for (u32 x = 0; x < w; ++x) {
+            up.Blend(x, y, glow, 1.0f);
+        }
+    }
+    const u16 k = 68, gap = 6, cx = u16(w / 2), top = 18;
+    const u16 row2 = u16(top + k + gap);
+    // move[]: ls_up, ls_left, ls_down, ls_right
+    const Slot places[4] = {
+        {u16(cx - k / 2), top, u16(cx + k / 2), u16(top + k), 0},
+        {u16(cx - k / 2 - gap - k), row2, u16(cx - k / 2 - gap), u16(row2 + k), 0},
+        {u16(cx - k / 2), row2, u16(cx + k / 2), u16(row2 + k), 0},
+        {u16(cx + k / 2 + gap), row2, u16(cx + k / 2 + gap + k), u16(row2 + k), 0},
+    };
+    for (int i = 0; i < 4; ++i) {
+        DrawKey(up, font, places[i], KeyLabel(bindings.move[i]));
+    }
+    // Stored upside down: the shown lower half is the stored upper half.
+    Canvas level{w, h};
+    for (u32 y = 0; y < h; ++y) {
+        std::memcpy(&level.px[size_t(y) * w * 4], &up.px[size_t(h - 1 - y) * w * 4], w * 4 * sizeof(float));
+    }
+    std::vector<Patch> patches;
+    for (u32 mip = 0; mip < std::max(levels, 1u) && level.height >= 4 && level.width >= 4; ++mip) {
+        patches.push_back({mip, 0, 0, level.width, level.height, EncodeBc1(level)});
+        level = Downsample(level);
+    }
+    return patches;
+}
+
 std::vector<Patch> BuildPicture(const Picture& picture, u32 levels, Style style) {
+    if (picture.shape == RotateStick) {
+        return BuildRotateStick(picture, levels, style);
+    }
     const Bindings bindings = LoadBindings();
     const Font font;
     const u32 size = picture.size;
@@ -923,7 +981,20 @@ void DrawArrows(Canvas& c, const Font& font, const Slot& s, const Bindings& b) {
             c, key.x, key.y, key.x + k, key.y + k,
             [&](float x, float y) { return CutRect(x, y, kx, ky, k * 0.5f, k * 0.5f, k * 0.22f); },
             (s.icon & key.lit) ? &highlight : nullptr);
-        font.Draw(c, KeyLabel(b.dpad[key.binding]), kx, ky, k - 4.0f, k * 0.62f);
+        // A lit key is gold: its label in dark ink, or it would not read (parchment on gold).
+        // The keys the prompt is about (lit) stand out: gold with dark labels; the others are dimmed, so the
+        // lit ones read as the ones to press.
+        const bool lit = (s.icon & key.lit) != 0;
+        if (!lit && (s.icon & (LitUp | LitDown | LitLeft | LitRight))) {
+            for (int y = int(key.y) - 1; y < int(key.y + k) + 2; ++y) {
+                for (int x = int(key.x) - 1; x < int(key.x + k) + 2; ++x) {
+                    c.Blend(x, y, {0.05f, 0.035f, 0.02f},
+                            0.55f * Coverage(CutRect(x + 0.5f, y + 0.5f, kx, ky, k * 0.5f, k * 0.5f, k * 0.22f)));
+                }
+            }
+        }
+        font.Draw(c, KeyLabel(b.dpad[key.binding]), kx, ky, k - 4.0f, k * 0.62f,
+                  lit ? lit_text : (s.icon & (LitUp | LitDown | LitLeft | LitRight)) ? dim_text : text_color);
     }
 }
 
@@ -1140,7 +1211,7 @@ bool Candidate(u32 width, u32 height, Format format) {
     }
     if (format == Format::Bc1) {
         for (const Picture& picture : pictures) {
-            if (picture.size == width && picture.size == height) {
+            if (picture.size == width && PictureHeight(picture) == height) {
                 return true;
             }
         }
@@ -1175,7 +1246,7 @@ static const std::vector<Patch>* FindIn(Style style, u64 hash, u32 width, u32 he
     const auto known_picture = [&]() -> const Picture* {
         for (const Picture& picture : pictures) {
             if (format == Format::Bc1 && picture.hash == hash && picture.size == width &&
-                picture.size == height) {
+                PictureHeight(picture) == height) {
                 return &picture;
             }
         }
@@ -1245,8 +1316,8 @@ void KeymapChanged() {
                 FindIn(Style::Keyboard, sheet.hash, sheet.width, sheet.height, 1, Format::Rgba8);
             }
             for (const Picture& picture : pictures) {
-                FindIn(Style::Keyboard, picture.hash, picture.size, picture.size, u32(std::bit_width(picture.size)),
-                       Format::Bc1);
+                FindIn(Style::Keyboard, picture.hash, picture.size, PictureHeight(picture),
+                       u32(std::bit_width(std::max<u32>(picture.size, PictureHeight(picture)))), Format::Bc1);
             }
         }
         switches.fetch_add(1, std::memory_order_release);
@@ -1272,8 +1343,8 @@ void Prebuild() {
                 FindIn(style, sheet.hash, sheet.width, sheet.height, 1, Format::Rgba8);
             }
             for (const Picture& picture : pictures) {
-                FindIn(style, picture.hash, picture.size, picture.size, u32(std::bit_width(picture.size)),
-                       Format::Bc1);
+                FindIn(style, picture.hash, picture.size, PictureHeight(picture),
+                       u32(std::bit_width(std::max<u32>(picture.size, PictureHeight(picture)))), Format::Bc1);
             }
         }
     }).detach();

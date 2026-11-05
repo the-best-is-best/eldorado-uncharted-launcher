@@ -263,6 +263,33 @@ def trophies_module(root):
         return None
 
 
+def game_window_open():
+    """Whether the game's window is up (its title ends in " — El Dorado"; the launcher's starts with it)."""
+    if os.name != "nt":
+        return False
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    found = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def visit(window, _param):
+        if user32.IsWindowVisible(window):
+            length = user32.GetWindowTextLengthW(window)
+            if length:
+                buffer = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(window, buffer, length + 1)
+                if buffer.value.endswith(" \u2014 El Dorado"):
+                    found.append(window)
+                    return False
+        return True
+    try:
+        user32.EnumWindows(visit, 0)
+    except Exception:
+        return False
+    return bool(found)
+
+
 def list_screenshots(user_dir, key):
     """The game's screenshots (F12 in the game), newest first."""
     folder = Path(user_dir) / "screenshots" / key
@@ -492,6 +519,7 @@ class Hub:
         self.armed_delete = None
         self.saves_cache = {}
         self.trophy_cache = {}
+        self.loading = None  # {"key", "since", "checked"} from PLAY until the game's window is up
         self.trophy_lib = None
         self.grid_columns = 1
         self.photos = {}
@@ -757,6 +785,19 @@ class Hub:
             self.last_pad = held
         else:
             self.last_pad = set()
+        if self.loading:
+            now = time.monotonic()
+            if not self.running() or now - self.loading["since"] > 240:
+                self.loading = None
+                self.draw()
+            elif now - self.loading["checked"] > 0.4:
+                self.loading["checked"] = now
+                if game_window_open():
+                    self.loading = None
+                self.draw()
+            elif int(now * 8) != self.loading.get("frame"):
+                self.loading["frame"] = int(now * 8)
+                self.draw()
         state = (self.status_text(), self.running(), bool(getattr(self.launcher, "update_release", None)))
         if state != getattr(self, "shown_state", None):
             self.shown_state = state
@@ -1069,6 +1110,8 @@ class Hub:
                 self.launcher.stop()
         else:
             self.launcher.play()
+            if self.running():
+                self.loading = {"key": self.game, "since": time.monotonic(), "checked": 0.0}
         self.draw()
 
     def quit(self):
@@ -1406,6 +1449,8 @@ class Hub:
         elif self.screen == "gallery":
             self.draw_gallery()
         self.draw_bottom()
+        if self.loading:
+            self.draw_loading()
 
     # -- the rail ------------------------------------------------------------------------
 
@@ -1903,6 +1948,49 @@ class Hub:
         if rows_total > visible_rows:
             self.canvas.create_text(x0 + stage, ly + visible_rows * row - self.px(4), anchor="ne", font=self.f_small,
                                     fill=FAINT, tags="ui", text=f"{self.save_index + 1} / {len(shots)}")
+
+
+    # -- loading -------------------------------------------------------------------------
+
+    def draw_loading(self):
+        """From PLAY until the game's window opens: the game's own screen over the hub (its picture, its
+        logo, its name), a moving gold bar, what the start is doing."""
+        w, h = self.size
+        key = self.loading["key"]
+        info = self.game_info(key)
+        accent = self.accent(key)
+
+        def make():
+            image = self.background(key).convert("RGBA").resize((w, h))
+            image = Image.alpha_composite(image, Image.new("RGBA", (w, h), (10, 7, 4, 205)))
+            return image
+        self.canvas.create_image(0, 0, anchor="nw", tags="ui", image=self.photo(("loading-bg", key, w, h), make))
+        cx, cy = w // 2, int(h * 0.42)
+        logo = self.logo(key)
+        if logo is not None:
+            size = self.px(220)
+            picture = self.photo(("loading-logo", key, size), lambda: self.fit_logo(logo, size))
+            self.canvas.create_image(cx, cy - self.px(70), image=picture, tags="ui")
+        self.canvas.create_text(cx, cy + self.px(60), text=f"UNCHARTED {info['number']}", font=self.f_kicker,
+                                fill=accent, tags="ui")
+        self.canvas.create_text(cx, cy + self.px(96), text=info["title"], font=self.f_title, fill=INK, tags="ui")
+        # The bar: a gold run sliding along a dark track (the start has no steps to count).
+        bw, bh = self.px(420), max(3, self.px(4))
+        bx, by = cx - bw // 2, cy + self.px(140)
+        self.canvas.create_rectangle(bx, by, bx + bw, by + bh, fill="#2b2016", outline="", tags="ui")
+        elapsed = time.monotonic() - self.loading["since"]
+        run = bw // 4
+        x = bx + int(((elapsed * 0.55) % 1.0) * (bw + run)) - run
+        self.canvas.create_rectangle(max(bx, x), by, min(bx + bw, x + run), by + bh, fill=accent, outline="",
+                                     tags="ui")
+        status = self.status_text() or "Starting..."
+        self.canvas.create_text(cx, by + self.px(26), text=status, font=self.f_small, fill=DIM, tags="ui",
+                                width=bw + self.px(200))
+
+    def fit_logo(self, logo, size):
+        copy = logo.convert("RGBA").copy()
+        copy.thumbnail((size, size), Image.LANCZOS)
+        return copy
 
 
 def start(root, module):

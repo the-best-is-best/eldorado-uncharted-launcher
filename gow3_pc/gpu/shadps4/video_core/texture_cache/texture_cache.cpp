@@ -7,6 +7,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <set>
+#include <string>
+#include <fmt/format.h>
 #include <unordered_map>
 #include <vector>
 #include <xxhash.h>
@@ -1427,6 +1430,33 @@ std::vector<std::pair<VAddr, u32>> prompt_ranges;
 /// upload.
 void ReplaceButtonPrompts(Vulkan::Runtime& runtime, Image& image) {
     const auto& info = image.info;
+    // El Dorado: BB_BUTTON_PROMPTS_DUMP_ALL=1 (with BB_BUTTON_PROMPTS_DUMP): every small picture the game uploads
+    // (32 to 512 pixels a side, any format), each once, to find a prompt of a size or format the table lacks.
+    {
+        static const char* dump = std::getenv("BB_BUTTON_PROMPTS_DUMP");
+        static const bool all = [] {
+            const char* env = std::getenv("BB_BUTTON_PROMPTS_DUMP_ALL");
+            return env && env[0] == '1';
+        }();
+        static std::mutex dump_mutex;
+        static std::set<u64> dumped_all;
+        const auto& mip0 = info.mips_layout[0];
+        if (all && dump && *dump && info.guest_address && mip0.size && info.size.width >= 32 &&
+            info.size.height >= 32 && info.size.width <= 512 && info.size.height <= 512 && mip0.size <= (2u << 20)) {
+            const u8* data = std::bit_cast<const u8*>(info.guest_address) + mip0.offset;
+            const u64 key = XXH3_64bits(data, mip0.size);
+            std::scoped_lock lock{dump_mutex};
+            if (dumped_all.insert(key).second) {
+                const std::string path = fmt::format("{}/all-{:016x}-{}x{}-{}-{}.bin", dump, key, info.size.width,
+                                                     info.size.height, vk::to_string(info.pixel_format),
+                                                     static_cast<int>(info.tile_mode));
+                if (FILE* f = std::fopen(path.c_str(), "wb")) {
+                    std::fwrite(data, 1, mip0.size, f);
+                    std::fclose(f);
+                }
+            }
+        }
+    }
     ButtonPrompts::Format format;
     switch (info.pixel_format) {
     case vk::Format::eR8G8B8A8Unorm:
@@ -1448,9 +1478,23 @@ void ReplaceButtonPrompts(Vulkan::Runtime& runtime, Image& image) {
         return;
     }
     const u8* guest = std::bit_cast<const u8*>(info.guest_address) + mip.offset;
-    const auto* patches = ButtonPrompts::Find(XXH3_64bits(guest, mip.size), info.size.width,
-                                              info.size.height, info.resources.levels, format);
+    const u64 hash = XXH3_64bits(guest, mip.size);
+    const auto* patches = ButtonPrompts::Find(hash, info.size.width, info.size.height, info.resources.levels, format);
     if (!patches) {
+        // El Dorado: BB_BUTTON_PROMPTS_DUMP=<folder>: an unknown picture's mip 0 as the game stored it
+        // (<hash>-<width>x<height>-<bc1|rgba8>-<tile mode>.bin), each once, to find a prompt the table lacks.
+        static const char* dump = std::getenv("BB_BUTTON_PROMPTS_DUMP");
+        static std::set<u64> dumped;
+        if (dump && *dump && dumped.insert(hash).second) {
+            const std::string path = fmt::format("{}/{:016x}-{}x{}-{}-{}.bin", dump, hash, info.size.width,
+                                                 info.size.height,
+                                                 format == ButtonPrompts::Format::Bc1 ? "bc1" : "rgba8",
+                                                 static_cast<int>(info.tile_mode));
+            if (FILE* f = std::fopen(path.c_str(), "wb")) {
+                std::fwrite(guest, 1, mip.size, f);
+                std::fclose(f);
+            }
+        }
         return;
     }
     {

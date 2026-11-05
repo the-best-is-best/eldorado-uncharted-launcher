@@ -422,7 +422,9 @@ static void save_list(const unsigned char *param) {
     snprintf(save_dialog.title,sizeof(save_dialog.title),"%.9s",title ? title : "");
     const int offer_new=type==1 && new_item;
     static const int which[]={0,1,0,1,2,3,4};
-    if (focus_pos==0 && offer_new) save_dialog.pick=0;
+    /* El Dorado: saving opens on the new save entry (the first), whatever the game asks to focus: a save made
+     * from the list is a new one unless another is chosen on purpose. */
+    if (offer_new) save_dialog.pick=0;
     else save_dialog.pick=runtime_savedata_pick(user,title,names,count,focus_pos<7 ? which[focus_pos] : 2,
                                                 focus,save_dialog.dir,save_dialog.param);
     if (save_dialog.pick<0 && offer_new) save_dialog.pick=0;

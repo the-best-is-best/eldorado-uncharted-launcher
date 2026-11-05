@@ -70,7 +70,14 @@ TEMPORAL_UPSCALERS = ("fsr3", "fsr4", "fsr411", "dlss", "xess")
 # The engine's mouse turns the camera 0.15 degrees per pixel at sensitivity 1; the old one about 0.063.
 MOUSE_SENSITIVITY_SCALE = 0.42
 # Our cheats (launcher names) that the engine's scripts/cheats.py applies, by its names.
-CHEAT_NAMES = {"invincible": "health", "ammo": "ammo", "devmode": "devmode"}
+CHEAT_NAMES = {"invincible": "health", "ammo": "ammo", "devmode": "devmode", "rewards": "rewards",
+               "grenades": "grenades"}
+# Unlock all rewards in Uncharted 2 and 3: Naughty Dog's debug switches "Give all Store Items" and "Give All Movies"
+# (update 1.02 image offsets), kept set by the engine (BB_POKE, per game through run.py's BB_POKE_U2/U3).
+REWARD_POKES = {"u2": "1114178:b=1,1114179:b=1", "u3": "17b2a94:b=1,17b2a95:b=1"}
+# Infinite grenades: Uncharted 3's own debug switch "Infinite Grenades" (1.02 image offset), kept set the same way.
+# Uncharted 1 and 2 have no such switch: their throw's ammo use is patched out (gow3_pc/scripts/cheats.py).
+GRENADE_POKES = {"u3": "17faa92:b=1"}
 # Mouse button names: the settings file's (GOW3_MOUSE_MAP) to the engine's input.ini names.
 MOUSE_NAMES = {"left": "Mouse Left", "right": "Mouse Right", "middle": "Mouse Middle", "x1": "Mouse 4",
                "x2": "Mouse 5", "wheel_up": "Wheel Up", "wheel_down": "Wheel Down"}
@@ -387,6 +394,17 @@ def game_environment(args, game, executable, game_dir):
     env["BB_CHEATS"] = ",".join(f"{g}:{CHEAT_NAMES[c]}" for g in ("u1", "u2", "u3") for c in cheats if c in CHEAT_NAMES)
     if "devmode" in cheats:
         env["BB_DEV_MENU"] = "1"
+    if "treasures" in cheats:  # the games' own Dev Menu "Give all Treasures", once a start (runtime_checkpoint.c)
+        env["BB_GIVE_TREASURES"] = "1"
+    pokes = {}
+    if "rewards" in cheats:
+        for key, value in REWARD_POKES.items():
+            pokes.setdefault(key, []).append(value)
+    if "grenades" in cheats:
+        for key, value in GRENADE_POKES.items():
+            pokes.setdefault(key, []).append(value)
+    for key, values in pokes.items():
+        env[f"BB_POKE_{key.upper()}"] = ",".join(values)
     # Skip intro (the launcher's cheat, on by default): the boot logo movie of all three games (runtime_file.c).
     if "skipintro" in cheats:
         env.setdefault("BB_SKIP_INTRO", "1")

@@ -1008,7 +1008,11 @@ void Presenter::ReadThumbnail() {
     }
     thumbnail.pending = vk::Fence{};
     vmaInvalidateAllocation(instance.GetAllocator(), thumbnail.buffer_allocation, 0, VK_WHOLE_SIZE);
-    BbThumbnail::Store(static_cast<const unsigned char*>(thumbnail.mapped));
+    if (thumbnail.probe_only) {
+        BbThumbnail::LoadingProbe(static_cast<const unsigned char*>(thumbnail.mapped));
+    } else {
+        BbThumbnail::Store(static_cast<const unsigned char*>(thumbnail.mapped));
+    }
 }
 
 // bbport: the screenshot key (bbport_screenshot.h). The game frame (RGBA8, in TransferSrcOptimal after its blit to the
@@ -1272,9 +1276,15 @@ bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last, bool game
                          MakeImageBlitFit(frame->width, frame->height, extent.width, extent.height,
                                           frame->fill),
                          vk::Filter::eLinear);
-        if (last && game_frame && !frame->is_hdr && !thumbnail.failed && !thumbnail.pending &&
-            BbThumbnail::Wanted()) {
-            CaptureThumbnail(cmdbuf, frame);
+        if (last && game_frame && !frame->is_hdr && !thumbnail.failed && !thumbnail.pending) {
+            // A save picture while the game plays, or (until the game shows its first picture) a look at the
+            // frame for the loading screen (bbport_thumbnail.h).
+            const bool wanted = BbThumbnail::Wanted();
+            const bool probe = !wanted && BbThumbnail::LoadingProbeWanted();
+            if (wanted || probe) {
+                thumbnail.probe_only = probe;
+                CaptureThumbnail(cmdbuf, frame);
+            }
         }
         // bbport: the screenshot key: this game frame whole, before the overlay below.
         if (last && game_frame && !screenshot.pending && BbScreenshot::Requested()) {

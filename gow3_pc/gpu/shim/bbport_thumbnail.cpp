@@ -123,6 +123,7 @@ bool Wanted() {
 }
 
 void Store(const unsigned char* rgba) {
+    LoadingProbe(rgba);
     std::vector<unsigned char> rgb(size_t(Width) * Height * 3);
     for (size_t i = 0, n = size_t(Width) * Height; i < n; ++i) {
         rgb[i * 3 + 0] = rgba[i * 4 + 0];
@@ -151,10 +152,10 @@ void Store(const unsigned char* rgba) {
         size_t changed = 0, samples = 0;
         for (size_t i = 0; i + 2 < a.size() && i + 2 < b.size(); i += 3 * 97) {
             const int d = std::max({std::abs(a[i] - b[i]), std::abs(a[i + 1] - b[i + 1]), std::abs(a[i + 2] - b[i + 2])});
-            changed += d > 10;
+            changed += d > 6;
             ++samples;
         }
-        return samples && changed * 1000 > samples * 3;
+        return samples && changed * 1000 > samples;
     };
     const bool keep = !before.empty() && !middle.empty() && moved(before, middle) && moved(middle, rgb);
     before = std::move(middle);
@@ -195,6 +196,59 @@ void Store(const unsigned char* rgba) {
             }
         }
     }).detach();
+}
+
+namespace {
+std::atomic<bool> loading_done{false};
+std::atomic<int> loading_lit{0};
+Clock::time_point loading_since = Clock::now(), loading_probe_at{};
+} // namespace
+
+bool Loading() {
+    if (loading_done.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    static const bool on = [] {
+        const char* env = std::getenv("BB_LOADING_SCREEN");
+        return !(env && env[0] == '0');
+    }();
+    if (!on || Clock::now() - loading_since > std::chrono::minutes(2)) {
+        loading_done = true;
+        return false;
+    }
+    return true;
+}
+
+bool LoadingProbeWanted() {
+    if (!Loading()) {
+        return false;
+    }
+    const auto now = Clock::now();
+    if (now - loading_probe_at < std::chrono::milliseconds(250)) {
+        return false;
+    }
+    loading_probe_at = now;
+    return true;
+}
+
+void LoadingProbe(const unsigned char* rgba) {
+    if (loading_done.load(std::memory_order_relaxed)) {
+        return;
+    }
+    uint64_t sum = 0;
+    size_t samples = 0;
+    for (size_t i = 0, n = size_t(Width) * Height; i < n; i += 61) {
+        sum += rgba[i * 4] + rgba[i * 4 + 1] + rgba[i * 4 + 2];
+        ++samples;
+    }
+    const bool lit = samples && sum / (samples * 3) >= 14;
+    if (!lit) {
+        loading_lit = 0;
+    } else if (++loading_lit >= 2) {
+        loading_done = true;
+        std::printf("Loading screen: the game shows its first picture after %.1f s\n",
+                    std::chrono::duration<double>(Clock::now() - loading_since).count());
+    }
 }
 
 void NoteSaveList() {
@@ -248,6 +302,30 @@ extern "C" int bbgpu_thumbnail_save(const char* path) {
         }
     }
     return WritePng(path, rgb) ? 1 : 0;
+}
+
+// The game is closing: saves still waiting for a picture of play get the last one there is (closed before play went
+// on, a save had no picture at all, 5 Nov 2026).
+extern "C" void bbgpu_thumbnail_flush(void) {
+    using namespace BbThumbnail;
+    std::vector<std::string> paths;
+    std::vector<unsigned char> rgb;
+    {
+        std::scoped_lock lock{mutex};
+        if (picture.empty()) {
+            return;
+        }
+        rgb = picture;
+        for (const Pending& p : pending) {
+            paths.push_back(p.path);
+        }
+        pending.clear();
+    }
+    for (const std::string& path : paths) {
+        if (WritePng(path, rgb)) {
+            std::printf("GPU: save picture written at exit (%s)\n", path.c_str());
+        }
+    }
 }
 
 extern "C" void bbgpu_thumbnail_loaded(const char* path) {

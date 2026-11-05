@@ -254,6 +254,13 @@ def main():
         this = ['--run'] if getattr(sys, 'frozen', False) else [str(Path(__file__).resolve())]
         env['BB_EXE'] = exe
         env['BB_CHEATS'] = game_cheats(all_cheats, exe)
+        # El Dorado: memory pokes kept set for this executable only (BB_POKE_U1/U2/U3: offsets differ per game).
+        game_key = next((k for k, name in EXECUTABLES.items() if name == exe), '')
+        pokes = env.get(f'BB_POKE_{game_key.upper()}', '') if game_key else ''
+        if pokes:
+            env['BB_POKE'] = pokes
+        else:
+            env.pop('BB_POKE', None)
         patches = cheats.build(game / exe, out, [c for c in env['BB_CHEATS'].split(',') if c])
         env['BB_RESTART_COMMAND'] = subprocess.list2cmdline([sys.executable, *this, '--after', str(os.getpid()), *args])
         command = [str(probe), str(out / 'boot-linked.bin'), '--content-profile', str(out / 'content.bin'),
