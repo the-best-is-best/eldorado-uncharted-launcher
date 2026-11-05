@@ -1,0 +1,87 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: in-game settings menu (Dear ImGui), drawn by the presenter into the swapchain image
+// after the game frame, at display resolution. Insert (keyboard) or L3+R3 (gamepad) opens it;
+// while it is open the game gets no pad/keyboard input. Settings live in bbport_settings.h.
+
+#pragma once
+
+#include <string>
+#include <vector>
+#include "bbport_png.h"
+#include "common/types.h"
+#include "video_core/renderer_vulkan/vk_common.h"
+
+union SDL_Event;
+struct SDL_Window;
+
+namespace Vulkan {
+class Instance;
+}
+
+namespace BbOverlay {
+
+/// Present thread, once: the ImGui context and its Vulkan backend.
+void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count);
+
+/// Window thread, for every SDL event: true when the menu consumed it.
+bool HandleEvent(const SDL_Event& event);
+/// Turns SDL text input on while the menu edits a value (window thread, once per poll).
+void UpdateTextInput(SDL_Window* window);
+
+/// Whether anything is drawn this frame (menu open or FPS counter on).
+bool Visible();
+
+/// Present thread: draws into `view` (layout ColorAttachmentOptimal).
+void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent);
+/// Every presented frame (FPS readout; BB_FPS_LOG=1 prints the rate every 5 seconds).
+void NotePresent();
+/// Every new frame of the game's own (not generated, not shown again): the game's frame rate,
+/// lows and frame time graph of the FPS counter.
+void NoteGameFrame();
+
+/// Any thread: queues the notice of an earned trophy (grade 1 platinum .. 4 bronze, `png` the
+/// trophy's icon file or empty). Notices are shown at the top of the screen one after the other.
+void NotifyTrophy(int grade, std::string game, std::string name, std::vector<unsigned char> png);
+/// Any thread (bbport_screenshot.cpp): "Screenshot saved" in a corner for about two seconds.
+void NotifyScreenshot();
+
+/// Any thread (bbport shader variant list): progress of the background shader preparation, shown in a corner
+/// while it runs; `phase` 0 = none, 1 = shaders (`done` of `total`), 2 = pipelines.
+void SetShaderPreparation(int phase, u32 done, u32 total);
+/// The scan of the game files for shaders (a release without a shipped index), MiB read of MiB; total 0: not
+/// scanning. Its own state: the pipeline warm-up may run beside it and sets the preparation phase meanwhile.
+void SetScanProgress(u32 done_mib, u32 total_mib);
+
+/// Any thread: the full-screen preparation page instead of the corner box. While it is on, the presenter shows blank
+/// frames with the page and holds the game's flips (the game waits at its first frames until preparation is done).
+void SetPreparationScreen(bool on);
+/// The page shown on a later launch: the graphics driver compiles the shaders again (its own cache was reset, e.g.
+/// after a driver update), so the page says why instead of "this happens once".
+void SetPreparationRebuild(bool on);
+bool PreparationScreenActive();
+
+/// Preparation without a window (BB_PREPARE_ONLY, the launcher's Prepare shaders button): the warm-up thread marks
+/// its end, and one thread prints the progress for the launcher's bar as "PREP <percent> <done> <total> <step>|<eta>".
+void SetPreparationFinished();
+bool PreparationFinished();
+void PrintPreparationProgress();
+
+/// The menu is open or a text entry is shown: the game's input is held neutral.
+bool CapturesInput();
+
+/// Window thread: the game's text dialog (sceImeDialog). Shown as a box on screen until
+/// `active` is false; typing goes to the window (sdl_window), the box only displays it.
+void SetTextEntry(bool active, const std::string& prompt, const std::string& text);
+
+/// Any thread (the game's, sceSaveDataDialog): a list to choose from, drawn over the game, a picture per
+/// entry (empty: none). kind 1 save, 2 load, 3 delete (the title); an empty item is the "New save" entry;
+/// deletable_from: the first entry the player may delete (Delete / Triangle twice), -1 none. The list takes
+/// the keyboard and controller (CapturesInput) until a choice is made or EndChoice.
+void BeginChoice(int kind, std::vector<std::string> items, std::vector<BbPng::Image> pictures, int focus,
+                 int deletable_from);
+/// -1 while the list is open, -2 cancelled, <= -3 entry -3 - result deleted, else the chosen index.
+int PollChoice();
+/// Takes the list off the screen (the game closed the dialog): PollChoice then says cancelled.
+void EndChoice();
+
+} // namespace BbOverlay

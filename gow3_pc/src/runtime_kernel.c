@@ -1,0 +1,551 @@
+/* libkernel/libScePosix process services: clocks, sleeping, errno mapping,
+ * pthread once/keys, signal bookkeeping and a narrow sysctl. Guest values
+ * use FreeBSD numbering; host errno values never reach the guest directly. */
+#define _GNU_SOURCE
+#include "runtime.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <pthread.h>
+#include <sched.h>
+#include <time.h>
+#include <unistd.h>
+#include <sys/time.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include <x86intrin.h>
+#ifndef _WIN32
+#include <sys/random.h>
+#include <sys/resource.h>
+#endif
+#define ERR(n) ((int32_t)(UINT32_C(0x80020000)|(n)))
+#define PAGE 16384
+
+typedef struct { int64_t sec, nsec; } GuestTimespec;
+typedef struct { int64_t sec, usec; } GuestTimeval;
+
+int32_t runtime_guest_errno(int e) {
+    switch (e) {
+    case 0: return 0;
+    case EPERM: return 1; case ENOENT: return 2; case ESRCH: return 3; case EINTR: return 4;
+    case EIO: return 5; case ENXIO: return 6; case E2BIG: return 7; case ENOEXEC: return 8;
+    case EBADF: return 9; case ECHILD: return 10; case EDEADLK: return 11; case ENOMEM: return 12;
+    case EACCES: return 13; case EFAULT: return 14; case EBUSY: return 16; case EEXIST: return 17;
+    case EXDEV: return 18; case ENODEV: return 19; case ENOTDIR: return 20; case EISDIR: return 21;
+    case EINVAL: return 22; case ENFILE: return 23; case EMFILE: return 24; case ENOTTY: return 25;
+    case EFBIG: return 27; case ENOSPC: return 28; case ESPIPE: return 29; case EROFS: return 30;
+    case EMLINK: return 31; case EPIPE: return 32; case ERANGE: return 34; case EAGAIN: return 35;
+    case ENAMETOOLONG: return 63; case ENOTEMPTY: return 66; case ETIMEDOUT: return 60;
+    case ELOOP: return 62; case ENOSYS: return 78; case EOVERFLOW: return 84; case ECANCELED: return 85;
+    default: return 5; /* EIO: unmapped host error */
+    }
+}
+static int32_t fail_posix(int e) { *runtime_errno()=runtime_guest_errno(e); return -1; }
+
+/* ---- clocks and sleeping ---- */
+static struct timespec process_start;
+__attribute__((constructor)) static void remember_start(void) { clock_gettime(CLOCK_MONOTONIC,&process_start); }
+/* BB_TIME_SCALE=<factor> (diagnosis): the guest's clocks (kernel clocks, process time, TSC;
+ * probe.c patches U3's own rdtsc instructions) run at that rate, and the vblank thread drops
+ * vblanks alike: the game believes it runs faster than it does (0.5 at a real 30 FPS looks
+ * like 60 FPS to it). BB_TIME_SCALE_FILE=<path>: the factor is read from that file every
+ * 250 ms and may change while the game runs (load a save at 1, then slow down); the clocks
+ * stay continuous. Each clock maps as guest = guest_base + (host - host_base) * scale. */
+typedef struct { int64_t host, guest; } TimeBase;
+static struct {
+    uint32_t seq; /* odd while a change is written */
+    double scale;
+    int changed;  /* the mapping is no longer the identity */
+    TimeBase mono, real, tsc;
+} clocks={0,1.0,0,{0,0},{0,0},{0,0}};
+static int64_t ts_ns(const struct timespec *t) { return (int64_t)t->tv_sec*1000000000+t->tv_nsec; }
+/* The game's clocks stand still while its threads are frozen (runtime_freeze_guest: the preparation page, and the
+ * hold on a later launch, which freezes a game that already runs). Without this it resumed with a step of up to
+ * ~35 s in its frame time and movie clocks. Monotonic time, process time, the TSC and the GPU clock all read
+ * "host reading minus the time spent paused", which is constant while paused and continuous afterwards. Wall-clock
+ * time (gettimeofday, realtime, RTC) is left alone, and host code reads the host clocks, so it keeps real time.
+ * A seqlock with the host clock read inside it: a reader racing a pause or resume retries rather than mixing the
+ * old state with a newer reading, so no reader ever sees time go backwards. */
+static struct {
+    uint32_t seq;                  /* odd while a change is written; 0: never paused */
+    int active;
+    int64_t mono_start, tsc_start; /* host readings where the current pause began */
+    int64_t mono_total, tsc_total; /* the length of the finished pauses */
+} clock_pause={0,0,0,0,0,0};
+static pthread_mutex_t pause_lock=PTHREAD_MUTEX_INITIALIZER;
+static int64_t host_mono_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return ts_ns(&t); }
+/* which 0: monotonic ns, 1: TSC ticks. host_out (optional): the host reading it came from. */
+static int64_t unpaused(int which,int64_t *host_out) {
+    for (;;) {
+        const uint32_t s1=__atomic_load_n(&clock_pause.seq,__ATOMIC_ACQUIRE);
+        if (s1&1) { _mm_pause(); continue; }
+        const int64_t now=which ? (int64_t)__rdtsc() : host_mono_ns();
+        if (host_out) *host_out=now;
+        const int active=__atomic_load_n(&clock_pause.active,__ATOMIC_RELAXED);
+        const int64_t start=__atomic_load_n(which ? &clock_pause.tsc_start : &clock_pause.mono_start,__ATOMIC_RELAXED);
+        const int64_t total=__atomic_load_n(which ? &clock_pause.tsc_total : &clock_pause.mono_total,__ATOMIC_RELAXED);
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (__atomic_load_n(&clock_pause.seq,__ATOMIC_RELAXED)!=s1) continue;
+        return (active ? start : now)-total;
+    }
+}
+void runtime_guest_clock_pause(int on) {
+    pthread_mutex_lock(&pause_lock);
+    if (!on==!clock_pause.active) { pthread_mutex_unlock(&pause_lock); return; } /* nested freeze calls (hold + page) */
+    __atomic_add_fetch(&clock_pause.seq,1,__ATOMIC_SEQ_CST);
+    const int64_t mono=host_mono_ns(), tsc=(int64_t)__rdtsc();
+    if (on) {
+        /* A hair ahead of now: a reader whose host reading lands just after ours but which still passes with the
+         * old state (store-buffer latency) gets less than the frozen value, never more. */
+        __atomic_store_n(&clock_pause.mono_start,mono+2000,__ATOMIC_RELAXED);
+        __atomic_store_n(&clock_pause.tsc_start,tsc+20000,__ATOMIC_RELAXED);
+    } else {
+        __atomic_store_n(&clock_pause.mono_total,clock_pause.mono_total+(mono-clock_pause.mono_start),__ATOMIC_RELAXED);
+        __atomic_store_n(&clock_pause.tsc_total,clock_pause.tsc_total+(tsc-clock_pause.tsc_start),__ATOMIC_RELAXED);
+        printf("Runtime: the game's clocks stood still for %.0f ms\n",(double)(mono-clock_pause.mono_start)/1e6);
+    }
+    __atomic_store_n(&clock_pause.active,on ? 1 : 0,__ATOMIC_RELAXED);
+    __atomic_add_fetch(&clock_pause.seq,1,__ATOMIC_RELEASE);
+    pthread_mutex_unlock(&pause_lock);
+}
+static int64_t map_clock(int which,int64_t host) {
+    for (;;) {
+        uint32_t s1=__atomic_load_n(&clocks.seq,__ATOMIC_ACQUIRE);
+        if (s1&1) continue;
+        const int changed=clocks.changed;
+        const double scale=clocks.scale;
+        const TimeBase b=which==0 ? clocks.mono : which==1 ? clocks.real : clocks.tsc;
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if (__atomic_load_n(&clocks.seq,__ATOMIC_RELAXED)!=s1) continue;
+        return changed ? b.guest+(int64_t)((double)(host-b.host)*scale) : host;
+    }
+}
+static void set_time_scale(double scale) {
+    struct timespec b; clock_gettime(CLOCK_REALTIME,&b);
+    /* monotonic and TSC bases in the paused domain (minus the frozen time), as map_clock gets them */
+    const int64_t mono=unpaused(0,NULL), real=ts_ns(&b), tsc=unpaused(1,NULL);
+    const TimeBase m={mono,map_clock(0,mono)}, r={real,map_clock(1,real)}, t={tsc,map_clock(2,tsc)};
+    __atomic_add_fetch(&clocks.seq,1,__ATOMIC_ACQ_REL);
+    clocks.mono=m; clocks.real=r; clocks.tsc=t; clocks.scale=scale; clocks.changed=1;
+    __atomic_add_fetch(&clocks.seq,1,__ATOMIC_RELEASE);
+    printf("Time scale: %g\n",scale);
+}
+static void *time_scale_watcher(void *path) {
+    for (double last=1.0;;) {
+        FILE *f=fopen((const char *)path,"r");
+        double value=1.0;
+        if (f) { if (fscanf(f,"%lf",&value)!=1 || value<=0) value=1.0; fclose(f); }
+        if (value!=last) { set_time_scale(value); last=value; }
+#ifdef _WIN32
+        compat_sleep_ns(250000000);
+#else
+        struct timespec nap={0,250000000}; nanosleep(&nap,NULL);
+#endif
+    }
+    return NULL;
+}
+#ifdef _WIN32
+/* BB_TIME_SCALE_KEY=1: the game starts at normal speed and F10 switches between that and
+ * BB_TIME_SCALE (default 0.25), e.g. for slowing just the moment of a glitch. */
+static double key_scale=0.25;
+static void *time_scale_key_watcher(void *unused) {
+    (void)unused;
+    for (int slow=0, held=0;;) {
+        const int down=(GetAsyncKeyState(VK_F10)&0x8000)!=0;
+        if (down && !held) { slow=!slow; set_time_scale(slow ? key_scale : 1.0); }
+        held=down;
+        compat_sleep_ns(20000000);
+    }
+    return NULL;
+}
+#endif
+static int time_scale_state;
+static void time_scale_init(void) {
+    const char *v=getenv("BB_TIME_SCALE"), *file=getenv("BB_TIME_SCALE_FILE");
+    const double scale=v && atof(v)>0 ? atof(v) : 1.0;
+#ifdef _WIN32
+    const char *key=getenv("BB_TIME_SCALE_KEY");
+    if (key && key[0]=='1') {
+        if (scale!=1.0) key_scale=scale;
+        time_scale_state=1;
+        static pthread_t watcher; pthread_create(&watcher,NULL,time_scale_key_watcher,NULL);
+        printf("Time scale: F10 switches between normal speed and %g\n",key_scale);
+        return;
+    }
+#endif
+    time_scale_state=scale!=1.0 || (file && *file);
+    if (scale!=1.0) set_time_scale(scale);
+    if (file && *file) { static pthread_t watcher; pthread_create(&watcher,NULL,time_scale_watcher,(void *)file); }
+}
+static int time_scale_setup(void) { /* 1 when the guest's clocks may be scaled */
+    static pthread_once_t once=PTHREAD_ONCE_INIT;
+    pthread_once(&once,time_scale_init);
+    return time_scale_state;
+}
+static void scale_clock(struct timespec *t,int which) {
+    if (!time_scale_setup()) return;
+    const int64_t ns=map_clock(which,ts_ns(t));
+    t->tv_sec=ns/1000000000; t->tv_nsec=ns%1000000000;
+}
+/* The game's monotonic clock: stopped while it is frozen (pause above), then scaled (BB_TIME_SCALE). */
+static void guest_mono(struct timespec *t) {
+    const int64_t ns=unpaused(0,NULL);
+    t->tv_sec=ns/1000000000; t->tv_nsec=ns%1000000000;
+    scale_clock(t,0);
+}
+static int host_clock(uint32_t id,clockid_t *out) {
+    switch (id) {
+    case 0: case 9: case 10: *out=CLOCK_REALTIME; return 1;            /* REALTIME(_PRECISE/_FAST) */
+    case 4: case 11: case 12: case 5: case 7: case 8: *out=CLOCK_MONOTONIC; return 1; /* MONOTONIC/UPTIME */
+    case 13: *out=CLOCK_REALTIME_COARSE; return 1;                    /* SECOND */
+    case 14: *out=CLOCK_THREAD_CPUTIME_ID; return 1;
+    case 2: case 15: *out=CLOCK_PROCESS_CPUTIME_ID; return 1;         /* PROF/PROCTIME */
+    case 16: case 17: case 18: case 19: *out=CLOCK_MONOTONIC; return 1; /* PS4 network clocks */
+    default: return 0;
+    }
+}
+static int clock_read(uint32_t id,GuestTimespec *ts) {
+    clockid_t host;
+    if (!ts || !host_clock(id,&host)) return EINVAL;
+    struct timespec t;
+    if (host==CLOCK_MONOTONIC) guest_mono(&t);
+    else {
+        if (clock_gettime(host,&t)) return errno;
+        if (host==CLOCK_REALTIME || host==CLOCK_REALTIME_COARSE) scale_clock(&t,1);
+    }
+    if (id==13) t.tv_nsec=0;
+    ts->sec=t.tv_sec; ts->nsec=t.tv_nsec; return 0;
+}
+static ABI int32_t kernel_clock_gettime(uint32_t id,GuestTimespec *ts) {
+    int e=clock_read(id,ts); return e ? ERR(runtime_guest_errno(e)) : 0;
+}
+static ABI int32_t posix_clock_gettime(uint32_t id,GuestTimespec *ts) {
+    int e=clock_read(id,ts); return e ? fail_posix(e) : 0;
+}
+static ABI int32_t posix_clock_getres(uint32_t id,GuestTimespec *ts) {
+    clockid_t host; struct timespec t;
+    if (!host_clock(id,&host)) return fail_posix(EINVAL);
+    if (clock_getres(host,&t)) return fail_posix(errno);
+    if (ts) { ts->sec=t.tv_sec; ts->nsec=t.tv_nsec; }
+    return 0;
+}
+static ABI uint64_t process_time(void) {
+    struct timespec t; guest_mono(&t);
+    return (uint64_t)(t.tv_sec-process_start.tv_sec)*1000000+(uint64_t)((t.tv_nsec-process_start.tv_nsec)/1000);
+}
+static ABI uint64_t process_time_counter(void) {
+    struct timespec t; guest_mono(&t);
+    return (uint64_t)(t.tv_sec-process_start.tv_sec)*1000000000+(uint64_t)(t.tv_nsec-process_start.tv_nsec);
+}
+static ABI uint64_t process_time_frequency(void) { return 1000000000; }
+static ABI uint64_t read_tsc(void) {
+    const uint64_t now=(uint64_t)unpaused(1,NULL); /* stopped while the game is frozen */
+    return time_scale_setup() ? (uint64_t)map_clock(2,(int64_t)now) : now;
+}
+static uint64_t tsc_hz;
+static ABI uint64_t tsc_frequency(void) {
+    if (!tsc_hz) {
+        struct timespec a,b,nap={0,20000000};
+        clock_gettime(CLOCK_MONOTONIC,&a); uint64_t t0=__rdtsc();
+#ifdef _WIN32
+        (void)nap; compat_sleep_ns(20000000);
+#else
+        nanosleep(&nap,NULL);
+#endif
+        clock_gettime(CLOCK_MONOTONIC,&b); uint64_t t1=__rdtsc();
+        uint64_t ns=(uint64_t)(b.tv_sec-a.tv_sec)*1000000000+(uint64_t)(b.tv_nsec-a.tv_nsec);
+        tsc_hz=(t1-t0)*1000000000/(ns ? ns : 1);
+    }
+    return tsc_hz;
+}
+/* The guest's TSC as rdtsc instructions patched for BB_TIME_SCALE get it (probe.c). */
+uint64_t runtime_guest_tsc(void) { return read_tsc(); }
+/* The guest's monotonic clock in microseconds (pad timestamps) and its wall clock (gettimeofday),
+ * scaled like the kernel clocks under BB_TIME_SCALE. */
+uint64_t runtime_guest_monotonic_us(void) {
+    struct timespec t; guest_mono(&t);
+    return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u;
+}
+void runtime_guest_realtime(struct timespec *t) { scale_clock(t,1); }
+/* The GPU's 64-bit clock (EOP timestamps, pm4_cmds.h GetGpuClock64): host nanoseconds from any
+ * epoch, slowed from the first scaled reading on. */
+uint64_t runtime_guest_gpu_clock(uint64_t host_ns) {
+    if (__atomic_load_n(&clock_pause.seq,__ATOMIC_ACQUIRE)) {
+        /* Stopped while the game is frozen, like the monotonic clock: the paused time so far is subtracted (any
+         * epoch works, only the length counts). host_ns was read a moment before the pause state, so the result
+         * is kept from stepping back. */
+        int64_t host;
+        const int64_t adjusted=unpaused(0,&host);
+        host_ns-=(uint64_t)(host-adjusted);
+        static uint64_t last;
+        uint64_t prev=__atomic_load_n(&last,__ATOMIC_RELAXED);
+        while (host_ns>prev && !__atomic_compare_exchange_n(&last,&prev,host_ns,1,__ATOMIC_RELAXED,__ATOMIC_RELAXED)) {}
+        if (host_ns<prev) host_ns=prev;
+    }
+    if (!time_scale_setup()) return host_ns;
+    static uint64_t base;
+    uint64_t expected=0;
+    __atomic_compare_exchange_n(&base,&expected,host_ns,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE);
+    const uint64_t b=__atomic_load_n(&base,__ATOMIC_ACQUIRE);
+    return host_ns<b ? host_ns : b+(uint64_t)((double)(host_ns-b)*clocks.scale);
+}
+int runtime_time_scaled(void) { return time_scale_setup(); }
+double runtime_time_scale_now(void) { return time_scale_setup() ? clocks.scale : 1.0; }
+/* Shared with the GPU library so flip/label timestamps use the guest's clock. */
+uint64_t runtime_process_time_us(void) { return process_time(); }
+uint64_t runtime_process_time_counter(void) { return process_time_counter(); }
+uint64_t runtime_tsc_frequency(void) { return tsc_frequency(); }
+static int sleep_ns(uint64_t ns) {
+#ifdef _WIN32
+    compat_sleep_ns(ns);
+#else
+    struct timespec t={.tv_sec=(time_t)(ns/1000000000),.tv_nsec=(long)(ns%1000000000)};
+    while (nanosleep(&t,&t)) if (errno!=EINTR) return errno;
+#endif
+    return 0;
+}
+static ABI int32_t kernel_usleep(uint32_t usec) { const double t0=runtime_wait_begin(); sleep_ns((uint64_t)usec*1000); runtime_wait_end("usleep",t0); return 0; }
+static ABI int32_t posix_usleep(uint32_t usec) { const double t0=runtime_wait_begin(); sleep_ns((uint64_t)usec*1000); runtime_wait_end("usleep",t0); return 0; }
+static ABI uint32_t posix_sleep(uint32_t seconds) { sleep_ns((uint64_t)seconds*1000000000); return 0; }
+static ABI int32_t posix_nanosleep(const GuestTimespec *rq,GuestTimespec *rem) {
+    if (!rq || rq->nsec<0 || rq->nsec>=1000000000 || rq->sec<0) return fail_posix(EINVAL);
+    const double t0=runtime_wait_begin();
+    sleep_ns((uint64_t)rq->sec*1000000000+(uint64_t)rq->nsec);
+    runtime_wait_end("nanosleep",t0);
+    if (rem) { rem->sec=0; rem->nsec=0; }
+    return 0;
+}
+static ABI int32_t kernel_nanosleep(const GuestTimespec *rq,GuestTimespec *rem) {
+    return posix_nanosleep(rq,rem) ? ERR(*runtime_errno()) : 0;
+}
+typedef struct { int32_t minuteswest, dsttime; } GuestTimezone;
+static ABI int32_t kernel_gettimezone(GuestTimezone *tz) {
+    if (!tz) return ERR(22);
+    time_t now=time(NULL);
+#ifdef _WIN32
+    tz->minuteswest=(int32_t)(-compat_utc_offset(now)/60); tz->dsttime=0;
+#else
+    struct tm local; localtime_r(&now,&local);
+    tz->minuteswest=(int32_t)(-local.tm_gmtoff/60); tz->dsttime=0;
+#endif
+    return 0;
+}
+static ABI int32_t posix_gettimeofday(GuestTimeval *tv,GuestTimezone *tz) {
+    struct timeval t;
+    gettimeofday(&t,NULL);
+    if (tv) { tv->sec=t.tv_sec; tv->usec=t.tv_usec; }
+    if (tz) kernel_gettimezone(tz);
+    return 0;
+}
+static ABI int32_t kernel_gettimeofday(GuestTimeval *tv) {
+    if (!tv) return ERR(22);
+    return posix_gettimeofday(tv,NULL);
+}
+static ABI int64_t posix_time(int64_t *out) { int64_t t=(int64_t)time(NULL); if (out) *out=t; return t; }
+static int64_t utc_offset(int64_t at) {
+#ifdef _WIN32
+    return compat_utc_offset((time_t)at);
+#else
+    time_t t=(time_t)at; struct tm local; localtime_r(&t,&local); return local.tm_gmtoff;
+#endif
+}
+typedef struct { int64_t t; uint32_t west_sec, dst_sec; } GuestTimesec;
+/* west_sec carries the offset east of UTC in seconds, as libkernel fills it. */
+static ABI int32_t convert_utc_to_local(int64_t utc,int64_t *local,GuestTimesec *st,uint64_t *dst) {
+    int64_t offset=utc_offset(utc);
+    if (local) *local=utc+offset;
+    if (st) { st->t=utc; st->west_sec=(uint32_t)offset; st->dst_sec=0; }
+    if (dst) *dst=0;
+    return 0;
+}
+static ABI int32_t convert_local_to_utc(int64_t local,int64_t unused,int64_t *utc,GuestTimezone *tz,int32_t *dst) {
+    (void)unused;
+    int64_t offset=utc_offset(local);
+    if (utc) *utc=local-offset;
+    if (tz) { tz->minuteswest=(int32_t)(-offset/60); tz->dsttime=0; }
+    if (dst) *dst=0;
+    return 0;
+}
+
+/* ---- process ---- */
+/* Debugger range names and page locking have no effect on a PC (memory is never paged to disc). */
+static ABI int32_t name_range(void *address,uint64_t size,const char *name) { (void)address; (void)size; (void)name; return 0; }
+static ABI int32_t lock_range(void *address,uint64_t size) { (void)address; (void)size; return 0; }
+static ABI int32_t get_pagesize(void) { return PAGE; }
+static ABI int32_t get_pid(void) { return 1000; }
+static ABI int32_t yield(void) { runtime_freeze_point(); sched_yield(); return 0; }
+static ABI __attribute__((noreturn)) void hard_exit(int status) {
+    printf("Runtime: guest requested _exit(%d)\n",status);
+    runtime_report();
+    fflush(stdout);
+    runtime_quit(status);
+}
+static ABI __attribute__((noreturn)) void raise_exception(uint32_t code,uint64_t argument) {
+    fprintf(stderr,"STOP: guest raised debug exception code=0x%x argument=0x%llx\n",code,(unsigned long long)argument);
+    runtime_report();
+    exit(23);
+}
+static ABI int32_t print_backtrace(void) {
+    fputs("Runtime: guest requested a backtrace (not available)\n",stderr);
+    return 0;
+}
+typedef struct { uint32_t bits[4]; } GuestSigset;
+static _Thread_local GuestSigset signal_mask;
+static uintptr_t handlers[128];
+static ABI uintptr_t guest_signal(int sig,uintptr_t handler) {
+    if (sig<=0 || sig>=128) { *runtime_errno()=22; return (uintptr_t)-1; } /* SIG_ERR */
+    uintptr_t old=handlers[sig]; handlers[sig]=handler;
+    printf("Runtime: guest signal(%d) handler recorded (host signals are not forwarded)\n",sig);
+    return old;
+}
+static ABI int32_t guest_sigprocmask(int how,const GuestSigset *set,GuestSigset *old) {
+    if (old) *old=signal_mask;
+    if (!set) return 0;
+    for (int i=0;i<4;++i) {
+        if (how==1) signal_mask.bits[i]|=set->bits[i];        /* SIG_BLOCK */
+        else if (how==2) signal_mask.bits[i]&=~set->bits[i];  /* SIG_UNBLOCK */
+        else if (how==3) signal_mask.bits[i]=set->bits[i];    /* SIG_SETMASK */
+        else return fail_posix(EINVAL);
+    }
+    return 0;
+}
+static ABI int32_t guest_sigfillset(GuestSigset *set) { if (!set) return fail_posix(EINVAL); memset(set,0xff,sizeof(*set)); return 0; }
+static ABI int32_t guest_sigemptyset(GuestSigset *set) { if (!set) return fail_posix(EINVAL); memset(set,0,sizeof(*set)); return 0; }
+typedef struct { GuestTimeval utime, stime; int64_t rest[14]; } GuestRusage;
+static ABI int32_t guest_getrusage(int who,GuestRusage *out) {
+    if (!out || (who!=0 && who!=1)) return fail_posix(EINVAL);
+    memset(out,0,sizeof(*out));
+#ifdef _WIN32
+    int64_t user=0,kernel=0;
+    compat_cpu_times(who,&user,&kernel);
+    out->utime=(GuestTimeval){user/1000000,user%1000000};
+    out->stime=(GuestTimeval){kernel/1000000,kernel%1000000};
+#else
+    struct rusage r;
+    getrusage(who==0 ? RUSAGE_SELF : RUSAGE_THREAD,&r);
+    out->utime=(GuestTimeval){r.ru_utime.tv_sec,r.ru_utime.tv_usec};
+    out->stime=(GuestTimeval){r.ru_stime.tv_sec,r.ru_stime.tv_usec};
+#endif
+    return 0;
+}
+static ABI int32_t guest_sysctl(const int32_t *name,uint32_t namelen,void *old,uint64_t *oldlen,const void *new_value,uint64_t newlen) {
+    (void)newlen;
+    if (!name || namelen<2 || new_value) return fail_posix(EINVAL);
+    if (name[0]==1 && name[1]==37) { /* kern.arandom */
+        if (!old || !oldlen) return fail_posix(EINVAL);
+#ifdef _WIN32
+        if (compat_random(old,(size_t)*oldlen)) return fail_posix(EIO);
+#else
+        if (getrandom(old,(size_t)*oldlen,0)<0) return fail_posix(errno);
+#endif
+        return 0;
+    }
+    if (name[0]==6 && (name[1]==7 || name[1]==3)) { /* hw.pagesize / hw.ncpu */
+        if (!oldlen) return fail_posix(EINVAL);
+        int32_t value=name[1]==7 ? PAGE : 7;
+        if (old) { if (*oldlen<4) return fail_posix(ENOMEM); memcpy(old,&value,4); }
+        *oldlen=4; return 0;
+    }
+    fprintf(stderr,"STOP: unsupported sysctl mib");
+    for (uint32_t i=0;i<namelen && i<8;++i) fprintf(stderr," %d",name[i]);
+    fputc('\n',stderr);
+    runtime_quit(21);
+}
+
+/* ---- pthread_once and thread-specific data ---- */
+static ABI int32_t thread_once(int32_t *once,void (ABI *routine)(void)) {
+    if (!once || !routine) return ERR(22);
+    for (;;) {
+        int32_t state=__atomic_load_n(once,__ATOMIC_ACQUIRE);
+        if (state==1) return 0;
+        if (state==0 && __atomic_compare_exchange_n(once,&state,2,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) {
+            routine();
+            __atomic_store_n(once,1,__ATOMIC_RELEASE);
+            return 0;
+        }
+        sched_yield();
+    }
+}
+static ABI int32_t posix_once(int32_t *once,void (ABI *routine)(void)) { return thread_once(once,routine) ? 22 : 0; }
+#define KEYS 256
+typedef void (ABI *KeyDestructor)(void *);
+static struct { int used; KeyDestructor destructor; } keys[KEYS];
+static pthread_mutex_t key_lock=PTHREAD_MUTEX_INITIALIZER;
+static _Thread_local void *key_values[KEYS];
+static ABI int32_t key_create(uint32_t *key,KeyDestructor destructor) {
+    if (!key) return ERR(22);
+    pthread_mutex_lock(&key_lock);
+    for (uint32_t i=1;i<KEYS;++i) if (!keys[i].used) {
+        keys[i].used=1; keys[i].destructor=destructor;
+        pthread_mutex_unlock(&key_lock);
+        *key=i; return 0;
+    }
+    pthread_mutex_unlock(&key_lock);
+    return ERR(35);
+}
+static ABI int32_t key_delete(uint32_t key) {
+    if (!key || key>=KEYS) return ERR(22);
+    pthread_mutex_lock(&key_lock);
+    int32_t r=keys[key].used ? 0 : ERR(22);
+    keys[key].used=0; keys[key].destructor=NULL;
+    pthread_mutex_unlock(&key_lock);
+    return r;
+}
+static ABI int32_t key_set(uint32_t key,void *value) {
+    if (!key || key>=KEYS || !keys[key].used) return ERR(22);
+    key_values[key]=value; return 0;
+}
+static ABI void *key_get(uint32_t key) { return key && key<KEYS ? key_values[key] : NULL; }
+void runtime_thread_keys_cleanup(void) {
+    for (int round=0;round<4;++round) {
+        int any=0;
+        for (uint32_t i=1;i<KEYS;++i) {
+            void *value=key_values[i];
+            if (!value || !keys[i].used || !keys[i].destructor) continue;
+            key_values[i]=NULL; any=1;
+            keys[i].destructor(value);
+        }
+        if (!any) break;
+    }
+}
+static ABI int32_t posix_key_create(uint32_t *k,KeyDestructor d) { int32_t r=key_create(k,d); return r ? r&0xffff : 0; }
+static ABI int32_t posix_key_delete(uint32_t k) { int32_t r=key_delete(k); return r ? r&0xffff : 0; }
+static ABI int32_t posix_key_set(uint32_t k,void *v) { int32_t r=key_set(k,v); return r ? r&0xffff : 0; }
+/* Only the game and its bundled modules exist; nothing was loaded at run time (the Uncharted games import it). */
+static ABI int32_t stop_unload_module(int32_t handle,uint64_t args,const void *argp,uint32_t flags,const void *opt,int32_t *result) {
+    (void)args; (void)argp; (void)flags; (void)opt; (void)result;
+    printf("Runtime: sceKernelStopUnloadModule(%d): no such module\n",handle);
+    return ERR(3); /* ESRCH */
+}
+
+static const RuntimeExport exports[]={
+    {"sceKernelClockGettime",kernel_clock_gettime}, {"clock_gettime",posix_clock_gettime},
+    {"clock_getres",posix_clock_getres},
+    {"sceKernelGetProcessTime",process_time}, {"sceKernelGetProcessTimeCounter",process_time_counter},
+    {"sceKernelGetProcessTimeCounterFrequency",process_time_frequency},
+    {"sceKernelReadTsc",read_tsc}, {"sceKernelGetTscFrequency",tsc_frequency},
+    {"sceKernelUsleep",kernel_usleep}, {"usleep",posix_usleep}, {"sleep",posix_sleep},
+    {"nanosleep",posix_nanosleep}, {"sceKernelNanosleep",kernel_nanosleep},
+    {"sceKernelGettimezone",kernel_gettimezone}, {"gettimeofday",posix_gettimeofday},
+    {"sceKernelGettimeofday",kernel_gettimeofday},
+    {"time",posix_time},
+    {"sceKernelConvertUtcToLocaltime",convert_utc_to_local}, {"sceKernelConvertLocaltimeToUtc",convert_local_to_utc},
+    {"sceKernelSetVirtualRangeName",name_range}, {"sceKernelMlock",lock_range},
+    {"sceKernelStopUnloadModule",stop_unload_module},
+    {"getpagesize",get_pagesize}, {"getpid",get_pid}, {"sched_yield",yield},
+    {"_exit",hard_exit},
+    {"sceKernelDebugRaiseException",raise_exception},
+    {"sceKernelDebugRaiseExceptionOnReleaseMode",raise_exception},
+    {"sceKernelPrintBacktraceWithModuleInfo",print_backtrace},
+    {"signal",guest_signal}, {"sigprocmask",guest_sigprocmask}, {"_sigprocmask",guest_sigprocmask},
+    {"sigfillset",guest_sigfillset}, {"sigemptyset",guest_sigemptyset},
+    {"getrusage",guest_getrusage}, {"sysctl",guest_sysctl},
+    {"scePthreadOnce",thread_once}, {"pthread_once",posix_once},
+    {"scePthreadKeyCreate",key_create}, {"scePthreadKeyDelete",key_delete},
+    {"scePthreadSetspecific",key_set}, {"scePthreadGetspecific",key_get},
+    {"pthread_key_create",posix_key_create}, {"pthread_key_delete",posix_key_delete},
+    {"pthread_setspecific",posix_key_set}, {"pthread_getspecific",key_get},
+};
+uintptr_t runtime_kernel_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }

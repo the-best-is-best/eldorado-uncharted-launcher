@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#include <cstdlib>
+#include <chrono>
+#include <cstdint>
+#include <cstddef>
+#include <setjmp.h>
+// Renderer tests have no guest process. Clock/host-thread services work; guest accesses abort.
+extern "C" {
+thread_local sigjmp_buf* runtime_fault_recover = nullptr;
+uint32_t runtime_disabled_optimizations = 0;
+int runtime_ultrawide_fill = 0;
+float runtime_ultrawide_scale = 1.0f;
+void runtime_ultrawide_select(int) {}
+uint64_t runtime_tsc_frequency() { return 1000000000; }
+int runtime_file_translate(const char*, char*, size_t) { std::abort(); }
+uint64_t runtime_memory_clamp(uintptr_t, uint64_t) { std::abort(); }
+uint64_t runtime_process_time_us() { return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+int runtime_memory_region(uintptr_t, uintptr_t*, uintptr_t*, int*) { std::abort(); }
+void runtime_memory_set_gpu_hooks(void (*)(uintptr_t, uint64_t),
+    void (*)(uintptr_t, uint64_t), void (*)(uintptr_t, uint64_t)) { std::abort(); }
+void runtime_thread_attach_host(const char*) {}
+int runtime_thread_is_guest() { return 1; }
+void runtime_memory_gpu_protect(uintptr_t, uint64_t, int, int) { std::abort(); }
+void runtime_restart() { std::abort(); }
+uint64_t runtime_process_time_counter() { return runtime_process_time_us() * 1000; }
+int32_t* runtime_errno() { std::abort(); }
+int runtime_memory_write_backing(uintptr_t, const void*, uint64_t) { std::abort(); }
+int runtime_memory_merge_backing(uintptr_t, const void*, const void*, uint64_t) { std::abort(); }
+}
+

@@ -1,0 +1,758 @@
+// SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#pragma once
+
+#include <atomic>
+#include <mutex>
+#include <vector>
+
+#include "common/recursive_lock.h"
+#include "common/shared_first_mutex.h"
+#include "shader_recompiler/ir/passes/srt.h"
+#include "video_core/buffer_cache/buffer_cache.h"
+#include "video_core/page_manager.h"
+#include "video_core/renderer_vulkan/vk_bind_helper.h"
+#include "video_core/renderer_vulkan/vk_camera_motion.h"
+#include "video_core/renderer_vulkan/vk_constant_ring.h"
+#include "video_core/renderer_vulkan/vk_ring_collector.h"
+#include "video_core/renderer_vulkan/vk_scene_resolution.h"
+#include "video_core/renderer_vulkan/vk_object_motion.h"
+#include "video_core/renderer_vulkan/vk_draw_pipe.h"
+#include "video_core/renderer_vulkan/vk_draw_prep.h"
+#include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
+#include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+#include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/texture_cache/texture_cache.h"
+
+namespace AmdGpu {
+struct Liverpool;
+}
+
+namespace Core {
+class MemoryManager;
+}
+
+namespace Vulkan {
+
+class GraphicsPipeline;
+class Runtime;
+
+/// bbport diagnosis (BB_SUBMIT_CHECK): a graphics submission was handed over / finished.
+void SubmitCheckPush();
+void SubmitCheckPop();
+
+class Rasterizer {
+public:
+    explicit Rasterizer(const Instance& instance, Scheduler& scheduler, Runtime& runtime,
+                        AmdGpu::Liverpool* liverpool);
+    ~Rasterizer();
+
+    [[nodiscard]] Runtime& GetRuntime() noexcept {
+        return runtime;
+    }
+
+    [[nodiscard]] VideoCore::BufferCache& GetBufferCache() noexcept {
+        return buffer_cache;
+    }
+
+    /// bbport: whether the game drew a 3D scene since the last call (dozens of depth-tested
+    /// draws on a full-size depth buffer): menus, loading screens and movies have none or few.
+    /// Read when a frame is prepared for display.
+    [[nodiscard]] bool TakeSceneFrame() noexcept;
+    [[nodiscard]] TemporalUpscaler& GetUpscaler() noexcept {
+        return *upscaler;
+    }
+
+    [[nodiscard]] VideoCore::TextureCache& GetTextureCache() noexcept {
+        return texture_cache;
+    }
+
+    void Draw(bool is_indexed, u32 index_offset = 0, const PreparedDraw* prepared = nullptr);
+    void NoteNullPipelineDraw();
+
+    /// bbport: draw preparation workers (vk_draw_prep.h), fed and consumed by Liverpool.
+    DrawPreparation& GetDrawPreparation() {
+        return *draw_prep;
+    }
+    /// bbport: the async compute queues' pipelines built ahead (BB_PREP_ASYNC_COMPUTE=1), fed by Liverpool::SubmitAsc.
+    ComputePreparation& GetComputePreparation() {
+        return *compute_prep;
+    }
+    void DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u32 size, u32 max_count,
+                      VAddr count_address, u16 vertex_sgpr_offset, u16 instance_sgpr_offset);
+
+    void DispatchDirect();
+    void DispatchIndirect(VAddr address, u32 offset, u32 size);
+
+    void ScopeMarker(fmt::string_view fmt, fmt::format_args args, auto&& func) {
+        if (host_markers_enabled) {
+            ScopeMarkerBegin(fmt::vformat(fmt, args));
+            func();
+            ScopeMarkerEnd();
+        } else {
+            func();
+        }
+    }
+
+    void ScopeMarkerBegin(const std::string_view& str, bool from_guest = false);
+    void ScopeMarkerEnd(bool from_guest = false);
+    void ScopedMarkerInsert(const std::string_view& str, bool from_guest = false);
+    void ScopedMarkerInsertColor(const std::string_view& str, const u32 color,
+                                 bool from_guest = false);
+
+    void FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds);
+    void CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, bool src_gds);
+    u32 ReadDataFromGds(u32 gsd_offset);
+    /// before_write (bbport): a write fault, the CPU has not written yet (TextureCache).
+    bool InvalidateMemory(VAddr addr, u64 size, bool assume_locks = false,
+                          bool before_write = false);
+    /// GPU thread, before a write the guest can observe (see Scheduler::WaitHostCopies).
+    void WaitHostCopies() {
+        DrainDrawPipe();
+        scheduler.WaitHostCopies();
+    }
+
+    /// bbport: GPU command thread: waits until the draw recording thread has recorded every
+    /// draw handed to it (vk_draw_pipe.h); no-op on other threads.
+    /// `line`/`function`: the caller, for the statistics of where stage A waits.
+    void DrainDrawPipe(u32 reason = DrawPipe::ReasonRasterizer, u32 line = __builtin_LINE(),
+                       const char* function = __builtin_FUNCTION());
+    /// Diagnosis (U2 train flicker, 2026-11-03): BB_HLE_WAIT_AT=<mask>: stage A waits until the recording thread
+    /// has run the last copy shader queued, at the places in the mask (1 draws/dispatches, 2 other graphics
+    /// packets, 4 compute queue packets, 8 constant engine packets).
+    void WaitHleCopies(u32 where);
+    static u32 HleWaitAt();
+    std::atomic<u64> hle_copy_end{0};
+    /// Runs `task(rasterizer, copy of data)` in order with the draws: on the draw recording
+    /// thread while the draw pipeline is in use (PipelinedTasks), else here after a drain.
+    using OrderedTask = void (*)(Rasterizer& rasterizer, const u8* data);
+    /// Returns true when the task was handed to the recording thread (not run yet).
+    /// drain (diagnosis): run it after a drain anyway (BB_TOGGLE_FILE second number, per task kind).
+    bool RunInOrder(OrderedTask task, const void* data, u32 size,
+                    u64 toggle = BbToggle::PipelinedTasks, bool drain = false);
+    /// Stage A: a GPU write handed to the recording thread (fence, copy) may still change these
+    /// bytes.
+    bool HasPendingGpuWrite(VAddr address, u64 size) {
+        return PendingWriteOverlaps(address, size);
+    }
+    /// Submits the work recorded so far, in order with the draws handed to the recording thread
+    /// (no drain: stage A goes on decoding).
+    void FlushInOrder();
+    /// Runs `task` on the draw recording thread before the draws already queued for it (here
+    /// after a drain when the pipeline is off).
+    void RunNext(Common::UniqueFunction<void> task);
+    /// Stage A: the draw pipe position after the last handed-over packet, and whether the
+    /// recording thread has run everything before a position.
+    [[nodiscard]] u64 DrawPipeHead() const {
+        return draw_pipe ? draw_pipe->Head() : 0;
+    }
+    [[nodiscard]] bool DrawPipeReached(u64 position) const {
+        return !draw_pipe || draw_pipe->Reached(position);
+    }
+    /// Stage A: no draws waiting for the recording thread.
+    [[nodiscard]] bool DrawPipeIdle() const {
+        return !draw_pipe || draw_pipe->Idle();
+    }
+    /// Stage A, end of a submission: its prepared draws stay alive until the recording thread
+    /// has recorded them (instead of a drain).
+    void RetireSubmission();
+    /// Stage A: guest memory the recording thread will write for work handed to it (storage
+    /// buffers, DMA, WriteData, fences); constants overlapping it are bound there, not copied here.
+    void NotePendingGpuWrite(VAddr address, u64 size);
+    /// bbport: set while PostDraw prepares a packet (its written resources are noted before the
+    /// packet is committed): such notes last until that packet has run, not the one before it.
+    bool notes_before_commit{false};
+    /// The notes made while the packet is prepared, recorded once it is committed (its position is known then: a
+    /// packet that does not fit at the end of the ring starts at the next lap, past Head() at the time of the note).
+    std::vector<std::pair<VAddr, u64>> notes_held;
+    /// Records notes_held at the position after the packet just committed.
+    void CommitHeldNotes();
+    /// bbport: U3's auto-exposure value, a 16-byte buffer its compute shaders write and its CPU
+    /// code reads. The dispatch notes it and the next end-of-pipe event copies it to guest memory
+    /// without waiting (see SmallReadBackMode; BB_READBACK_SMALL_BUFFERS=0: off).
+    void NoteSmallWrittenBuffers(const Shader::Info& stage);
+    /// bbport (BB_COPY64_EOP_READBACK=1): the dwords a GPU dispatch of the 64-dword copy shader
+    /// (6a6422a9) writes, when they total 64 KiB or less, land at the next end-of-pipe event, and
+    /// that event's label waits for them.
+    void NoteCopy64Readback(const Shader::Info& stage);
+    /// True when it queued landings the end-of-pipe label must wait for (re-read LandingGate::Pending).
+    bool ReadBackSmallWrittenBuffers();
+    /// Before a guest-visible write: fences deferred earlier are written first.
+    /// bbport: fences deferred to the Vulkan recording thread not written yet.
+    [[nodiscard]] bool DeferredSignalsPending() const {
+        return scheduler.DeferredSignalsPending();
+    }
+    void WaitDeferredSignals() {
+        scheduler.WaitDeferredSignals();
+    }
+    /// Runs `signal` after the guest memory copies issued so far, without waiting here.
+    void SignalRawAfterHostCopies(Scheduler::RawSignalFn fn, const void* bytes, u32 size,
+                                  u64 landing_seq) {
+        scheduler.SignalRawAfterHostCopies(fn, bytes, size, landing_seq);
+    }
+    void SignalAfterHostCopies(std::function<void()> signal, u64 landing_seq = 0) {
+        scheduler.SignalAfterHostCopies(std::move(signal), landing_seq);
+    }
+    /// bbport diagnosis (BB_GPU_FENCES=1): runs `signal` once the GPU has finished the work
+    /// recorded so far.
+    void SignalAfterGpu(std::function<void()> signal) {
+        scheduler.DeferPriorityOperation([signal = std::move(signal)] { signal(); });
+    }
+    /// The GPU command thread or the draw recording thread (fault handling runs inline there).
+    bool IsGpuSideThread() const;
+    bool IsGpuSideThreadId(u32 tid) const;
+    /// A guest write hit a protected page.
+    bool OnWriteFault(VAddr addr, bool assume_locks);
+    bool ReadMemory(VAddr addr, u64 size, bool assume_locks = false);
+    void ProcessDownloadImages();
+    /// bbport diagnosis (BB_OUTPUT_CHECK=N with BB_STALE_CHECK): at every Nth end-of-pipe
+    /// fence, reads back this frame's compute-written vertices and reports impossible ones.
+    void CheckComputeOutputs();
+    /// bbport diagnosis: the guest's flip, in stream order (BB_STALE_CHECK frames).
+    void OnGuestFlip();
+    /// bbport diagnosis (BB_CONST_CHECK): before a fence the guest can see.
+    void CheckConstants();
+    u32 current_vs_hash{}; ///< bbport diagnosis: the draw being bound (BB_FORCE_UPLOAD_VS)
+    bool IsMapped(VAddr addr, u64 size);
+    void MapMemory(VAddr addr, u64 size);
+    void RegisterMemory(VAddr addr, u64 size);
+    void UnmapMemory(VAddr addr, u64 size);
+
+    u64 Flush();
+    void Finish();
+    void OnSubmit();
+
+    PipelineCache& GetPipelineCache() {
+        return pipeline_cache;
+    }
+
+    template <typename Func>
+    void ForEachMappedRangeInRange(VAddr addr, u64 size, Func&& func) {
+        const auto range = decltype(mapped_ranges)::interval_type::right_open(addr, addr + size);
+        Common::RecursiveSharedLock lock{mapped_ranges_mutex};
+        for (const auto& mapped_range : (mapped_ranges & range)) {
+            func(mapped_range);
+        }
+    }
+
+    std::thread::id GetGpuCommandProcessorThread();
+#if defined(__linux__) || defined(_WIN32)
+    u32 GetGpuCommandProcessorThreadId();
+#endif
+
+private:
+    void PrepareRenderState(const GraphicsPipeline* pipeline);
+    RenderState BeginRendering(const GraphicsPipeline* pipeline);
+    RenderState BeginRenderingFull(const GraphicsPipeline* pipeline);
+    /// bbport: a draw continuing the open render pass with the same inputs gets the same render
+    /// state (RenderStateMemo); nothing can have broken the pass in between (barriers, copies and
+    /// dispatches end it).
+    struct BeginSignature {
+        std::array<VideoCore::ImageId, AmdGpu::NUM_COLOR_BUFFERS + 1> ids{};
+        std::array<VideoCore::ImageViewInfo, AmdGpu::NUM_COLOR_BUFFERS + 1> views{};
+        u32 mrt_mask = 0;
+        u32 num_samples = 0;
+        std::array<u8, AmdGpu::NUM_COLOR_BUFFERS> color_samples{};
+        bool motion = false;
+        bool scene_started = false;
+        bool raster_scaling = false;
+        u64 upscaler_state = 0;
+        u64 generation = 0;
+        u32 depth_control = 0;
+        bool depth_valid = false;
+        bool stencil_valid = false;
+        bool operator==(const BeginSignature&) const = default;
+    };
+    BeginSignature MakeBeginSignature(const GraphicsPipeline* pipeline) const;
+    struct BeginMemo {
+        bool valid = false;
+        BeginSignature signature;
+        RenderState state;
+        u32 scene_size = 0;
+        std::array<float, 2> target_scale{};
+        u64 meta_clears = 0; ///< TextureCache::MetaClears when stored
+    } begin_memo;
+    u64 begin_memo_hits = 0, begin_memo_misses = 0;
+    void Resolve();
+    void DepthStencilCopy(bool is_depth, bool is_stencil);
+    void EliminateFastClear();
+
+    void UpdateDynamicState(const GraphicsPipeline* pipeline, bool is_indexed) const;
+    void UpdateViewportScissorState() const;
+    void UpdateDepthStencilState() const;
+    void UpdatePrimitiveState(bool is_indexed) const;
+    void UpdateRasterizationState() const;
+    void UpdateColorBlendingState(const GraphicsPipeline* pipeline) const;
+
+    bool FilterDraw();
+    bool FilterDrawPasses() const;
+    /// Everything of a direct draw after the pipeline selection (GPU thread or stage B).
+    void DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw* used_prepared,
+                    bool is_indexed, u32 index_offset);
+    static bool DrawPipeWanted();
+    bool UseDrawPipe() const;
+    bool OnStageA() const;
+    /// bbport: tables an SRT walker read in guest memory that hold GPU-written data are read
+    /// back (true: walk again). BB_SRT_SYNC=0: only counted.
+    bool SyncSrtReads(const Shader::SrtReadLog& log);
+    /// Arguments of an indirect draw: `args` holds `max_count` commands `stride` apart.
+    struct IndirectDraw {
+        VAddr args;
+        VAddr count; ///< the draw count, or 0 for max_count draws
+        u32 stride;
+        u32 max_count;
+    };
+    /// Everything of an indirect draw after the pipeline selection (GPU thread or stage B).
+    void DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_indexed,
+                            const IndirectDraw& indirect);
+    /// Everything of an indirect dispatch after the pipeline selection.
+    void DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr args, u32 size);
+    void WaitAsyncWindows(const Pipeline* pipeline, bool is_indexed, u32 index_offset,
+                          bool compute, const IndirectDraw* indirect);
+    /// Hands a draw (or, with `cs`, a dispatch) to the recording thread.
+    void PostDraw(const Pipeline* pipeline, const PreparedDraw* used_prepared, bool is_indexed,
+                  u32 index_offset, const AmdGpu::ComputeProgram* cs = nullptr,
+                  const IndirectDraw* indirect = nullptr);
+    /// Everything of a direct dispatch after the pipeline selection (GPU thread or stage B).
+    void DispatchRecord(const ComputePipeline* pipeline);
+    /// The compute registers of the dispatch being recorded.
+    const AmdGpu::ComputeProgram& CsRegs() const;
+    static void RunDrawPacket(void* rasterizer, const u8* packet, u32 size);
+    struct RingBinding;
+    /// BB_RING_COLLECTOR: stage A's part of CollectRingBindings; the collector thread does
+    /// the rest (RingCollectOne).
+    void QueueRingCandidates(const Shader::Info& stage, const PreparedDraw* prepared,
+                             u32 stage_index);
+    static bool RingCollectOne(void* context, VAddr address, u64& size, const u8* source,
+                               u64& ring_offset, u64& ring_end);
+    /// bbport (draw batching, BB_DRAW_BATCH=1): consecutive draws with the same pipeline, the
+    /// same buffer, image and sampler objects and the same state are drawn by the pipeline's
+    /// batched variant with one indexed indirect multi-draw (AppendDrawBatch, FlushDrawBatch).
+    struct DrawBatch {
+        const GraphicsPipeline* base = nullptr;
+        const GraphicsPipeline* variant = nullptr;
+        u64 key = 0;
+        Shader::PushData push{};
+        vk::Buffer index_buffer{};
+        vk::IndexType index_type{};
+        u32 index_size = 0;
+        u32 num_buffers = 0;                    ///< all stages
+        std::array<u32, 2> stage_buffers{};     ///< fragment, vertex
+        std::array<u32, 2> stage_first{};       ///< first buffer of the stage (all-stage index)
+        std::array<u32, 2> stage_words{};       ///< user data + flat data words per draw
+        std::array<u32, 2> stage_ud{};
+        u32 fs_bindings = 0;                    ///< the normal variant's fragment bindings
+        std::vector<u8> flat_buffer;            ///< per buffer: a flat buffer (the table)
+        std::vector<vk::DescriptorBufferInfo> buffers; ///< draws x num_buffers, exact offsets
+        std::vector<vk::WriteDescriptorSet> image_writes; ///< the first draw's
+        std::vector<vk::DescriptorImageInfo> image_infos;
+        /// The first draw's own writes (normal variant): a run of one draw is drawn as usual.
+        std::vector<vk::WriteDescriptorSet> first_writes;
+        std::vector<vk::DescriptorBufferInfo> first_buffers;
+        /// Flush scratch (kept: a flush per run, tens of thousands a second).
+        std::vector<u64> lo, hi;
+        std::vector<u32> table;
+        std::vector<vk::DescriptorBufferInfo> infos;
+        std::vector<vk::WriteDescriptorSet> writes;
+        std::array<std::vector<u32>, 2> data;   ///< per stage: draws x stage_words
+        std::vector<vk::DrawIndexedIndirectCommand> commands;
+        std::vector<u64> index_offsets;
+        u64 candidates = 0, batched = 0, runs = 0, run_draws = 0; ///< statistics
+        std::array<u64, 8> breaks{};
+    } draw_batch;
+    bool AppendDrawBatch(const GraphicsPipeline* pipeline, const GraphicsPipeline* variant);
+    void FlushDrawBatch();
+    static void FlushDrawBatchHook(void* self);
+    void CollectRingBindings(const Shader::Info& stage, const PreparedDraw* prepared,
+                             boost::container::static_vector<RingBinding, Shader::NUM_BUFFERS>& out);
+    void PrintPipeStats();
+    /// The registers of the draw being recorded: stage B's copy there, else Liverpool's.
+    const AmdGpu::Regs& Regs() const;
+    AmdGpu::CbDbExtent CbExtent(u32 index) const;
+    AmdGpu::CbDbExtent DbExtent() const;
+
+    void BindBuffers(const Shader::Info& stage, const PreparedStage* prepared,
+                     Shader::Backend::Bindings& binding,
+                     Shader::PushData& push_data, u32& write_index);
+    /// `on_helper`: run by the texture binding helper; out-of-date images are not refreshed.
+    void BindTextures(const Shader::Info& stage, const PreparedStage* prepared,
+                      Shader::Backend::Bindings& binding, u32& write_index, bool& barrier,
+                      bool on_helper = false);
+    bool BindResources(const Pipeline* pipeline);
+    /// bbport diagnosis (draw log): the bound images, size and format.
+    std::string DescribeImages();
+    void BindSamplers(const Shader::Info& stage, const PreparedStage* prepared,
+                      Shader::Backend::Bindings& binding, u32& write_index);
+    /// bbport: a stage's resolved textures remembered by its prepared T# hashes
+    /// (TextureSetMemo): a hit only redoes the per-draw effects (binding flags, transitions).
+    struct TextureSetEntry {
+        VideoCore::ImageId id{}; ///< after the depth redirect; null descriptor when invalid
+        vk::ImageView view;
+        const void* backing = nullptr;
+        VideoCore::SubresourceRange range;
+        bool proxy = false; ///< sampled from the scene proxy (view: SampleProxy on each use)
+        /// bbport: the image has exactly the T#'s address, size, extent and format (no view into
+        /// another image, no depth redirect): the same T# finds it again while it is registered
+        /// (as TextureCache::FindImage's exact matches). `uid` tells it from a reused slot.
+        bool exact = false;
+        u64 uid = 0;
+    };
+    struct TextureSet {
+        u64 key = 0;
+        const Shader::Info* stage = nullptr;
+        u64 generation = ~0ull;
+        u64 scene_generation = 0; ///< SceneTargets::Generation of the proxy views
+        u32 count = 0;
+        static constexpr u32 MaxImages = 16; ///< larger sets are not memoized
+        std::array<u64, MaxImages> hashes{};
+        std::array<TextureSetEntry, MaxImages> entries{};
+    };
+    std::array<TextureSet, 32768> texture_sets{};
+    u64 texture_set_hits = 0, texture_set_misses = 0;
+    u64 texture_set_revalidated = 0; ///< bbport: generation changed, all images exact and still there
+    std::array<u64, 4> texture_set_why{}; ///< misses: other key, generation, image check, new
+    /// Returns true when the stage's images were bound from the memo.
+    bool BindTexturesFromSet(const Shader::Info& stage, const PreparedStage* prepared,
+                             u32 first_image_idx, bool& barrier, TextureSet*& slot);
+    /// The prepared sharps of `stage` in the current prepared draw, if they fit it.
+    const PreparedStage* FindPreparedStage(const Shader::Info& stage) const;
+    /// Whether the helper may bind textures for this pipeline at all (fixed descriptor layout,
+    /// no storage writes that invalidate cached images).
+    bool HelperEligible(const Pipeline* pipeline) const;
+    /// The current draw writes a display buffer and FrameCapture collects icons.
+    bool DrawsToDisplayForIcons() const;
+    /// Whether every texture of `stage` takes the memoized path without refreshing, creating or
+    /// redirecting anything that records commands or touches the buffer cache.
+    bool TexturesBindableOnHelper(const Shader::Info& stage, const PreparedStage* prepared);
+    static void RunTextureTask(void* rasterizer);
+    static void JoinBindHelper(void* rasterizer);
+
+    /// Display pass: counts the frame (BbStats::gpu_frames) and, with BB_BUFFER_STATS, the lag.
+    void NoteFrameStart();
+    /// BB_GPU_PROFILE: a timestamp where a render pass starts (vk_gpu_profiler.h).
+    void MarkPass(const GraphicsPipeline* pipeline, const RenderState& state);
+    void BindVertexBuffers(const GraphicsPipeline* pipeline,
+                           const PreparedDraw* prepared = nullptr);
+    void BindIndexBuffer(u32 index_offset = 0);
+    /// bbport: BindVertexBuffers/BindIndexBuffer in two halves: obtaining the buffers
+    /// (vertex_binds, index_bind) and recording the binds.
+    void ResolveVertexBuffers(const GraphicsPipeline* pipeline, const PreparedDraw* prepared);
+    void EmitVertexBuffers();
+    void ResolveIndexBuffer(u32 index_offset);
+    void EmitIndexBuffer();
+
+    void ResetBindings(bool is_compute);
+
+    bool IsComputeMetaClear(const Pipeline* pipeline);
+    /// bbport: a dispatch's buffer V#s, read once for the metadata check and the binding
+    /// (BB_SHARE_CS_SHARPS=0: each reads them).
+    std::array<AmdGpu::Buffer, 32> cs_sharps{};
+    const Shader::Info* cs_sharps_info = nullptr;
+    AmdGpu::Buffer ComputeSharp(const Shader::Info& info, u32 index) const {
+        return &info == cs_sharps_info && index < cs_sharps.size()
+                   ? cs_sharps[index]
+                   : info.buffers[index].GetSharp(info);
+    }
+    bool IsComputeImageCopy(const Pipeline* pipeline);
+    bool IsComputeImageClear(const Pipeline* pipeline);
+
+private:
+    friend class VideoCore::BufferCache;
+
+    const Instance& instance;
+    Scheduler& scheduler;
+    Runtime& runtime;
+    VideoCore::PageManager page_manager;
+    VideoCore::BufferCache buffer_cache;
+    VideoCore::TextureCache texture_cache;
+    std::mutex small_written_mutex;
+    std::vector<std::pair<VAddr, u32>> small_written_buffers;
+    std::vector<std::pair<VAddr, u32>> copy64_readbacks; ///< NoteCopy64Readback; small_written_mutex
+    AmdGpu::Liverpool* liverpool;
+    Core::MemoryManager* memory;
+    boost::icl::interval_set<VAddr> mapped_ranges;
+    Common::SharedFirstMutex mapped_ranges_mutex;
+    PipelineCache pipeline_cache;
+    std::unique_ptr<DrawPreparation> draw_prep;
+    std::unique_ptr<ComputePreparation> compute_prep;
+    std::unique_ptr<CameraMotion> camera_motion; // bbport: motion vectors (docs/upscaler.md)
+    std::unique_ptr<SceneTargets> scene_targets;
+    bool scene_started = false;
+    std::unique_ptr<ObjectMotion> object_motion;
+    bool motion_draw = false;
+    u64 motion_geometry{};    ///< vertex-stream identity of the current direct draw
+    bool gbuffer_draw = false;
+    std::unique_ptr<TemporalUpscaler> upscaler; // bbport: FSR (docs/upscaler.md)
+    std::array<float, 2> draw_jitter{};         ///< viewport offset of the current draw, pixels
+    /// The upscaler's jitter for a draw with depth buffer `depth`: whole for the scene depth,
+    /// halved for a depth buffer of exactly half its size, none otherwise.
+    std::array<float, 2> SceneJitterFor(VideoCore::ImageId depth);
+    std::array<float, 2> target_scale{1.0f, 1.0f}; ///< pass drawn into the upscaler's output-size images
+    const bool host_markers_enabled;
+    const bool guest_markers_enabled;
+
+    using RenderTargetInfo = std::pair<VideoCore::ImageId, VideoCore::TextureCache::ImageDesc>;
+    std::array<RenderTargetInfo, AmdGpu::NUM_COLOR_BUFFERS> cb_descs;
+    std::pair<VideoCore::ImageId, VideoCore::TextureCache::ImageDesc> db_desc;
+    boost::container::static_vector<vk::DescriptorImageInfo, Shader::NUM_IMAGES> image_infos;
+    boost::container::static_vector<vk::DescriptorBufferInfo, Shader::NUM_BUFFERS> buffer_infos;
+    boost::container::static_vector<VideoCore::ImageId, Shader::NUM_IMAGES> bound_images;
+    struct BoundBuffer {
+        const VideoCore::Buffer* buffer;
+        u64 offset;
+        u32 size;
+        bool is_written;
+    };
+    boost::container::static_vector<BoundBuffer, Shader::NUM_BUFFERS> bound_buffers;
+
+    u32 set_write_index{};
+    size_t set1_first_write = ~size_t{0}; ///< bbport (BB_GPL): first write of a split layout's set 1
+    Pipeline::DescriptorWrites set_writes;
+    Shader::PushData push_data;
+
+    // bbport: bindings point at their description instead of copying it (a hot spot): into
+    // image_desc_cache for memoized lookups (pinned for the current BindTextures call), else
+    // into image_desc_storage.
+    using ImageBindingInfo = std::pair<VideoCore::ImageId, const VideoCore::TextureCache::ImageDesc*>;
+    // bbport: texture descriptions depend only on the T# and three resource flags; building
+    // them (mip layout sizes) for every binding of every draw was a hot spot.
+    struct ImageDescCacheEntry {
+        std::array<u64, 4> sharp{};
+        u32 flags = ~0u;
+        VideoCore::TextureCache::ImageDesc desc;
+        /// The image lies in GPU memory (ImageInPlausibleMemory); a T# read from a resource
+        /// table the game had not finished writing can describe gigabytes of unmapped memory.
+        bool plausible = true;
+        // Memoized FindImage for bindings without mip overrides (TextureBindingMemo).
+        u64 found_generation = ~0ULL;
+        VideoCore::ImageId found_id{};
+        VideoCore::TextureCache::ImageDesc found_desc;
+        u64 pinned = 0; ///< bind_epoch of the BindTextures call referencing found_desc
+        u64 last_use = 0;
+        // Memoized FindView for found_id (after the depth redirect): valid while the entry's
+        // FindImage memo holds and the image keeps this backing (TextureViewMemo).
+        VideoCore::TextureCache::ViewMemo view_memo;
+    };
+    std::array<ImageDescCacheEntry, 4096> image_desc_cache{};
+    u64 desc_use_counter = 0;
+    /// Entries replacing pinned cache slots during one BindTextures call.
+    boost::container::static_vector<ImageDescCacheEntry, Shader::NUM_IMAGES> image_desc_overflow;
+    boost::container::static_vector<VideoCore::TextureCache::ImageDesc, Shader::NUM_IMAGES * 2>
+        image_desc_storage;
+    u64 bind_epoch = 0;
+    // bbport: render/depth target lookups memoized by their raw register bytes while image
+    // registrations are unchanged (the descriptions depend only on those registers).
+    struct TargetMemo {
+        std::array<u8, 256> key{};
+        u32 key_size = 0;
+        u64 generation = ~0ULL;
+        VideoCore::ImageId image_id{};
+        VideoCore::TextureCache::ImageDesc desc;
+    };
+    std::array<TargetMemo, 64> target_memo{};
+    // bbport: consecutive draws mostly keep their targets; the slot's description (cb_descs,
+    // db_desc) is then still the right one and is neither looked up nor copied.
+    struct LastTarget {
+        std::array<u8, 256> key{};
+        u32 key_size = 0;
+        u64 generation = ~0ULL;
+        VideoCore::ImageId image_id{};
+    };
+    std::array<LastTarget, AmdGpu::NUM_COLOR_BUFFERS + 1> last_targets{}; ///< CBs, then DB
+    template <typename... Parts>
+    VideoCore::ImageId FindTargetMemoized(VideoCore::TextureCache::ImageDesc& desc,
+                                          LastTarget& last, auto&& make_desc,
+                                          const Parts&... parts);
+    /// The prepared draw whose pipeline the current Draw uses (its sharps are valid), or null.
+    const PreparedDraw* bind_prepared = nullptr;
+    bool ImageInPlausibleMemory(const VideoCore::ImageInfo& info);
+    /// `hash` is ImageDescHash(sharp, res), computed by a draw-preparation worker or here.
+    ImageDescCacheEntry& CachedImageDescEntry(const AmdGpu::Image& sharp,
+                                              const Shader::ImageResource& res, u64 hash);
+    ImageDescCacheEntry& CachedImageDescEntry(const AmdGpu::Image& sharp,
+                                              const Shader::ImageResource& res) {
+        return CachedImageDescEntry(sharp, res, ImageDescHash(sharp, res));
+    }
+    const VideoCore::TextureCache::ImageDesc& CachedImageDesc(const AmdGpu::Image& sharp,
+                                                              const Shader::ImageResource& res) {
+        return CachedImageDescEntry(sharp, res).desc;
+    }
+    boost::container::static_vector<ImageBindingInfo, Shader::NUM_IMAGES> image_bindings;
+    struct VertexBinds {
+        VertexInputs<vk::VertexInputAttributeDescription2EXT> attributes;
+        VertexInputs<vk::VertexInputBindingDescription2EXT> bindings;
+        VertexInputs<vk::Buffer> host_buffers;
+        VertexInputs<vk::DeviceSize> host_offsets;
+        VertexInputs<vk::DeviceSize> host_sizes;
+        VertexInputs<vk::DeviceSize> host_strides;
+        u32 num_buffers = 0;
+    } vertex_binds;
+    struct IndexBind {
+        vk::Buffer handle;
+        u64 offset;
+        vk::IndexType type;
+    } index_bind{};
+    /// The direct draw whose vertex/index buffers BindResources may resolve early.
+    struct DrawInputs {
+        const GraphicsPipeline* pipeline;
+        const PreparedDraw* prepared;
+        u32 index_offset;
+        bool is_indexed;
+        bool pending;
+        bool resolved;
+    } draw_inputs{};
+    // bbport: textures of a draw bound on the helper thread while this thread binds buffers.
+    static bool BindHelperWanted();
+    BindHelper bind_helper{BindHelperWanted()};
+    struct TextureTask {
+        struct Stage {
+            const Shader::Info* info;
+            const PreparedStage* prepared;
+            Shader::Backend::Bindings binding;
+            u32 write_index;
+        };
+        std::array<Stage, Shader::MaxStageTypes> stages;
+        u32 count = 0;
+        u32 completed = 0; ///< stages the helper bound; the rest are bound after the join
+        bool barrier = false;
+    } texture_task;
+    /// Draws whose textures the helper bound completely, partly or not at all (BB_FRAME_STATS).
+    u64 helper_full = 0, helper_partial = 0, helper_serial = 0;
+    /// The memoized cache entry of each image binding (FindImage memo taken), else null.
+    boost::container::static_vector<ImageDescCacheEntry*, Shader::NUM_IMAGES> image_binding_entries;
+    bool fault_process_pending{};
+    bool attachment_feedback_loop{};
+    bool needs_barrier{};
+    // bbport: two-stage draw pipeline (stage B state; the thread is the last member so it
+    // stops first).
+    static inline thread_local const AmdGpu::Regs* stage_regs = nullptr;
+    static inline thread_local const AmdGpu::ComputeProgram* stage_cs = nullptr;
+
+public:
+    /// bbport (native batch): the ordered task a batch may hold back until its flush (the
+    /// compute queue's RELEASE_MEM, set by Liverpool), and whether native batching is on
+    /// (BB_NATIVE_BATCH=1; BB_NATIVE_BATCH_SHADERS=<hex hash,...>, default U3's cs 8f067540).
+    OrderedTask native_batch_deferrable = nullptr;
+    static bool NativeBatchEnabled();
+    /// Stage A: a run of batchable dispatches may have ended (before a drain, a wait the guest
+    /// may hold, or going idle): the recording thread flushes its batch at this point.
+    void EndNativeRun();
+    bool native_run_open = false; ///< stage A: batchable dispatches handed over since the end
+    static bool NativeBatchShader(u64 pgm_hash);
+
+private:
+    /// Native batch (vk_native_batch.cpp): consecutive single-workgroup dispatches of one
+    /// batchable program, recorded as one dispatch of the batched variant (one workgroup per
+    /// object; Profile::batched_compute) with the fences between them held back until then.
+    struct NativeBatch {
+        const ComputePipeline* base = nullptr;
+        const ComputePipeline* batched = nullptr;
+        u32 count = 0;
+        u32 num_buffers = 0;
+        u32 stride = 0; ///< dwords per object: buffer offsets, user data, flat data
+        std::vector<u32> table;          ///< [stride][object entries]
+        std::vector<VAddr> addresses;    ///< per object, per buffer (0: special)
+        /// Read-only buffers are streamed per object at append: per object, per buffer, the
+        /// offset of its data in the stream buffer (one lap), and the batch's stream range.
+        std::vector<u64> stream_offsets;
+        u64 stream_lap = 0, stream_lo = 0, stream_hi = 0;
+        /// BB_NB_RING (on with the ring collector): the read-only inputs are the collector's
+        /// copies in the constant ring (stream_lo/hi are ring offsets), not stream copies.
+        bool ring_mode = false;
+        /// Written buffers are obtained per object at append; all of a batch's in one buffer
+        /// (an arena), at these offsets (stream_offsets holds each object's offset too).
+        /// The batch's ranges (hazards between its objects), read and written, with bounds:
+        /// outputs move forward and inputs lie elsewhere, so the bounds settle almost every check.
+        std::vector<std::pair<VAddr, VAddr>> read_ranges, write_ranges;
+        VAddr read_min = 0, read_max = 0, write_min = 0, write_max = 0;
+        /// Written ranges are obtained at the flush, merged into runs; all in one arena.
+        u64 arena_key = 0;
+        const VideoCore::Buffer* written_buffer = nullptr;
+        u64 written_lo = 0, written_hi = 0;
+        std::vector<VAddr> lo, hi;       ///< per buffer: union over the objects
+        std::vector<u8> written;         ///< per buffer
+        std::vector<std::pair<OrderedTask, u32>> deferred; ///< held-back tasks, data offset
+        std::vector<u8> deferred_data;
+        u64 objects = 0, batches = 0, fences = 0; ///< statistics
+        std::array<u64, 16> span_binding{}; ///< span flushes by buffer index
+        std::array<u64, 10> flush_reasons{}; ///< end of run, task, packet, dispatch, shape, full, span, hazard
+    };
+    NativeBatch native_batch;
+    /// Stage B, inside a dispatch packet: adds it to the open batch (true) or leaves it to
+    /// DispatchRecord (false; the batch is flushed first).
+    bool AppendNativeBatch(const ComputePipeline* pipeline);
+    /// Stage B: records the open batch (one dispatch) and runs the tasks it held back.
+    void FlushNativeBatch(u32 reason = 0);
+    /// Stage B: holds back an ordered task while a batch is open (true).
+    bool DeferToNativeBatch(OrderedTask task, const u8* data, u32 size);
+    AmdGpu::Regs pipe_regs{};
+    bool pipe_synced = false;
+    std::array<AmdGpu::CbDbExtent, AmdGpu::NUM_COLOR_BUFFERS> pipe_cb_extent{};
+    AmdGpu::CbDbExtent pipe_db_extent{};
+    /// Stage A: small read-only guest buffers copied into the constant ring for a packet.
+    struct RingBinding {
+        u32 index;  ///< buffer resource of the stage
+        u32 size;
+        u64 offset; ///< in the ring
+        VAddr address;
+    };
+    struct PendingWrite {
+        VAddr begin;
+        VAddr end;
+        u64 position;
+    };
+    std::vector<PendingWrite> pending_writes;
+    VAddr pending_min = ~VAddr{0}, pending_max = 0; ///< bounds of pending_writes
+    /// Diagnosis (BB_FRAME_STATS line): calls and entries scanned (note, overlap check).
+    u64 pending_stats[4]{};
+    u32 pending_checks = 0;
+    size_t pending_prune_at = 32; ///< NotePendingGpuWrite drops done entries at this size
+    /// BB_PENDING_FAST (default on): pending_writes in note order from pending_first; entries
+    /// stage B has run (position <= pending_done) leave from the front.
+    size_t pending_first = 0;
+    u64 pending_done = 0; ///< stage B's consumed position, read every 16 calls (stale is safe)
+    u32 pending_refresh = 0;
+    /// Newest note position per 64 KiB block (direct mapped: a shared slot only means a scan);
+    /// ranges over 32 blocks raise pending_big instead.
+    std::array<u64, 4096> pending_blocks{};
+    u64 pending_big = 0;
+    /// bbport: ranges over 32 blocks, kept apart (BB_PENDING_BIG_LIST=0: they disable the block
+    /// filter, as before): one big pending write used to send every check through the whole
+    /// list (U3 market: ~1M checks a second scanning 50-70 entries each).
+    std::vector<PendingWrite> pending_big_writes;
+    void PrunePendingWrites();
+    u64 proxy_samples = 0; ///< texture bindings that read a scene proxy (statistics)
+    float sampler_lod_bias = 0.0f; ///< bbport: extra bias of this draw's samplers
+    bool material_draw = false;    ///< bbport: writes 5+ targets (G-buffer: scene materials)
+    bool scene_debug_frame = false; ///< BB_SCENE_DEBUG: this frame's passes are printed
+    bool PendingWriteOverlaps(VAddr address, u64 size);
+    /// Stage B: the ring bindings of the stages of the packet being recorded.
+    struct RingStage {
+        const Shader::Info* info;
+        const RingBinding* bindings;
+        u32 count;
+    };
+    std::array<RingStage, Shader::MaxStageTypes> ring_stages{};
+    u32 num_ring_stages = 0;
+    const RingBinding* FindRingBinding(const Shader::Info& stage, u32 index) const {
+        for (u32 i = 0; i < num_ring_stages; ++i) {
+            if (ring_stages[i].info == &stage) {
+                for (u32 j = 0; j < ring_stages[i].count; ++j) {
+                    if (ring_stages[i].bindings[j].index == index) {
+                        return &ring_stages[i].bindings[j];
+                    }
+                }
+                return nullptr;
+            }
+        }
+        return nullptr;
+    }
+    std::unique_ptr<ConstantRing> constant_ring;
+    std::unique_ptr<RingCollector> ring_collector; ///< BB_RING_COLLECTOR=1
+    /// Submissions (prepared draws) kept alive until stage B reaches the position.
+    std::deque<std::pair<u64, std::shared_ptr<const void>>> pipe_keepalive;
+    std::unique_ptr<DrawPipe> draw_pipe;
+};
+
+} // namespace Vulkan

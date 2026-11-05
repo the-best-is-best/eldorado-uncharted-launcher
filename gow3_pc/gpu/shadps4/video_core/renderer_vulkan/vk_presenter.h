@@ -1,0 +1,207 @@
+// SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#pragma once
+
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <deque>
+#include <memory>
+
+#include <condition_variable>
+
+#include "core/libraries/videoout/buffer.h"
+#include "video_core/renderer_vulkan/host_passes/fsr_pass.h"
+#include "video_core/renderer_vulkan/host_passes/pp_pass.h"
+#include "video_core/renderer_vulkan/vk_frame_generation.h"
+#include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_runtime.h"
+#include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_swapchain.h"
+#include "video_core/texture_cache/texture_cache.h"
+
+namespace Frontend {
+class WindowSDL;
+}
+
+namespace AmdGpu {
+struct Liverpool;
+}
+
+namespace Vulkan {
+
+struct Frame {
+    u32 width;
+    u32 height;
+    VmaAllocation allocation;
+    vk::Image image;
+    vk::ImageView image_view;
+    vk::Fence present_done;
+    vk::Semaphore ready_semaphore;
+    u64 ready_tick;
+    bool is_hdr{false};
+    /// bbport: fills the window instead of being letterboxed (a widened gameplay frame).
+    bool fill{false};
+    u8 id{};
+
+    /// bbport: frame generation: frames between the previous game frame and this one,
+    /// presented before it (FrameGenerator), the first `generated_count` of them.
+    struct Generated {
+        VmaAllocation allocation{};
+        vk::Image image{};
+        vk::ImageView view{};
+    };
+    std::array<Generated, FrameGenerator::MaxGenerated> generated{};
+    u32 generated_count{};
+};
+
+enum SchedulerType {
+    Draw,
+    Present,
+    CpuFlip,
+};
+
+class Rasterizer;
+
+class Presenter {
+public:
+    Presenter(Frontend::WindowSDL& window, AmdGpu::Liverpool* liverpool);
+    ~Presenter();
+
+    HostPasses::PostProcessingPass::Settings& GetPPSettingsRef() {
+        return pp_settings;
+    }
+
+    HostPasses::FsrPass::Settings& GetFsrSettingsRef() {
+        return fsr_settings;
+    }
+
+    Frontend::WindowSDL& GetWindow() const {
+        return window;
+    }
+
+    Rasterizer& GetRasterizer() const {
+        return *rasterizer.get();
+    }
+
+    bool IsHDRSupported() const {
+        return swapchain.HasHDR();
+    }
+
+    void SetHDR(bool enable) {
+        if (!IsHDRSupported()) {
+            return;
+        }
+        swapchain.SetHDR(enable);
+        pp_settings.hdr = enable ? 1 : 0;
+    }
+
+    VideoCore::Image& RegisterVideoOutSurface(
+        const Libraries::VideoOut::BufferAttributeGroup& attribute, VAddr cpu_address) {
+        vo_buffers_addr.emplace_back(cpu_address);
+        auto desc = VideoCore::TextureCache::ImageDesc{attribute, cpu_address};
+        const auto image_id = texture_cache.FindImage(desc);
+        auto& image = texture_cache.GetImage(image_id);
+        image.usage.vo_surface = 1u;
+        return image;
+    }
+
+    bool IsVideoOutSurface(const AmdGpu::ColorBuffer& color_buffer) const;
+
+    Frame* PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& attribute,
+                        VAddr cpu_address);
+
+    Frame* PrepareBlankFrame(bool present_thread);
+
+    void Present(Frame* frame, bool is_reusing_frame = false, bool is_game_frame = true);
+    Frame* PrepareLastFrame();
+
+private:
+    Frame* GetRenderFrame(bool fill = false);
+
+    void RecreateFrame(Frame* frame, u32 width, u32 height);
+    /// bbport: the images frame generation writes for `frame` (its size, made once).
+    void EnsureGenerated(Frame* frame);
+    void DestroyGenerated(Frame* frame);
+    /// bbport: blits `image` (General layout) into a swapchain image with the overlay and
+    /// presents it. `last`: the game frame itself, which also signals the frame's fence.
+    /// False when the swapchain could not give an image. `game_frame`: a new frame of the game
+    /// (not a blank or re-shown one), which may be captured for the save pictures.
+    bool PresentImage(Frame* frame, vk::Image image, bool last, bool game_frame = false);
+
+    void SetExpectedGameSize(s32 width, s32 height);
+
+private:
+    float expected_ratio{1920.0 / 1080.0f};
+    /// bbport: the window's size, for frames that fill it (widened gameplay frames).
+    u32 window_frame_width{1920}, window_frame_height{1080};
+    u32 expected_frame_width{1920};
+    u32 expected_frame_height{1080};
+
+    Frontend::WindowSDL& window;
+    Instance instance;
+    HostPasses::FsrPass fsr_pass;
+    HostPasses::FsrPass::Settings fsr_settings{};
+    HostPasses::PostProcessingPass::Settings pp_settings{};
+    HostPasses::PostProcessingPass pp_pass;
+    AmdGpu::Liverpool* liverpool;
+    Scheduler draw_scheduler;
+    std::deque<u64> recent_frame_ticks; ///< bbport: BB_FRAMES_AHEAD bound (PrepareFrame)
+    Scheduler present_scheduler;
+    Scheduler flip_scheduler;
+    Swapchain swapchain;
+    Runtime runtime;
+    std::unique_ptr<Rasterizer> rasterizer;
+    VideoCore::TextureCache& texture_cache;
+    vk::UniqueCommandPool command_pool;
+    std::vector<Frame> present_frames;
+    std::queue<Frame*> free_queue;
+    Frame* last_submit_frame;
+    std::mutex free_mutex;
+    std::condition_variable free_cv;
+    std::condition_variable_any frame_cv;
+    std::vector<VAddr> vo_buffers_addr;
+    /// bbport: frame generation, and the interval of the game's frames its frames are paced
+    /// in (present thread).
+    std::unique_ptr<FrameGenerator> frame_generator;
+    /// The game's picture before its UI, through the same passes as the frame.
+    Frame hudless_frame{};
+    std::chrono::steady_clock::time_point last_game_present{};
+    std::atomic<double> game_frame_ms{16.7}; ///< written by the present thread
+
+    /// bbport: the save pictures (bbport_thumbnail.h): a game frame scaled down into `image`,
+    /// copied to the mapped `buffer` and read once that frame's present has finished (present
+    /// thread only).
+    struct Thumbnail {
+        vk::Image image{};
+        VmaAllocation image_allocation{};
+        vk::Buffer buffer{};
+        VmaAllocation buffer_allocation{};
+        void* mapped = nullptr;
+        vk::Fence pending{}; ///< present_done of the frame that copied it; null: nothing to read
+        bool failed = false; ///< not supported or not created: no pictures
+    } thumbnail;
+    void CaptureThumbnail(vk::CommandBuffer cmdbuf, const Frame* frame);
+    void ReadThumbnail();
+
+    /// bbport: the screenshot key (bbport_screenshot.h): a game frame at its full size copied to a mapped buffer
+    /// (made for the copy, freed once read) and read once that frame's present has finished (present thread only).
+    struct Screenshot {
+        vk::Buffer buffer{};
+        VmaAllocation allocation{};
+        void* mapped = nullptr;
+        u32 width = 0, height = 0;
+        vk::Fence pending{}; ///< present_done of the frame that copied it; null: nothing to read
+    } screenshot;
+    void CaptureScreenshot(vk::CommandBuffer cmdbuf, const Frame* frame);
+    /// `wait`: waits (briefly) for the copy instead of returning when it is not done.
+    void ReadScreenshot(bool wait);
+    void FreeScreenshot();
+};
+
+/// bbport (BB_PREPARE_ONLY, the launcher's Prepare shaders button): prepares the shader list without a window and
+/// without the game, printing the progress for the launcher; returns once the cache is saved.
+void PrepareShadersWithoutWindow(AmdGpu::Liverpool* liverpool);
+
+} // namespace Vulkan

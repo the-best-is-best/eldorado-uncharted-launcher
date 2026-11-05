@@ -1,0 +1,92 @@
+/* C interface of the GPU library (gpu/): shadPS4's Liverpool/Vulkan video core,
+ * GnmDriver, VideoOut and kernel event queues, adapted to the native loader. */
+#ifndef BBGPU_H
+#define BBGPU_H
+#include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+typedef struct {
+    const char *title;          /* window title */
+    const char *serial;         /* CUSA id, names the pipeline cache */
+    const char *user_dir;       /* pipeline cache/logs directory */
+    uint32_t sdk_version;       /* from the eboot's procparam */
+    uint32_t psf_attributes;    /* param.sfo ATTRIBUTE */
+    int32_t width, height;      /* initial window size */
+} BbGpuConfig;
+/* Registers kernel event queues (needed with or without graphics). */
+void bbgpu_register_kernel(void);
+/* Co-op: the game folder and param.sfo identity for the network and PSN libraries. */
+void bbnet_configure(const char *app0, const char *serial, const char *title, const char *app_ver);
+/* Creates window, Vulkan device, presenter and GPU command processor. */
+int bbgpu_init(const BbGpuConfig *config);
+/* Function for an imported NID ("NID#lib#mod"), or 0 when the GPU library does not provide it. */
+uintptr_t bbgpu_resolve(const char *scoped_nid);
+/* Called first by the loader's SIGSEGV handler: 1 when a GPU page-tracking fault was handled. */
+int bbgpu_handle_fault(void *ucontext, void *address);
+/* BB_WRITE_LOG=1: prints the logged GPU-side writes to guest memory near the fault. */
+void bbgpu_dump_guest_writes(void *ucontext);
+/* U3's heap frees the block whose data this is (header at address-0x10): noted for the GPU's
+ * read-backs, which leave the heap's own bytes in free blocks alone. Lock-free, any thread. */
+void bbgpu_note_guest_free(uintptr_t address, uint64_t size);
+/* Keyboard text entry through the game window (IME dialog). begin returns 0 when
+ * no window exists; poll returns 0 typing, 1 confirmed, 2 cancelled (UTF-8 text). */
+int bbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
+int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
+/* A list for the player to choose from, drawn over the game (the save list, sceSaveDataDialog).
+ * kind: 1 save, 2 load, 3 delete (the title). items: a label per entry (title and more lines;
+ * NULL or "" = the "New save" entry). images: a PNG path per entry drawn beside it (NULL array
+ * or entry: none). deletable_from: the first entry the player may delete (Delete / Triangle
+ * twice), -1: none. begin: 0 when no window exists (the caller decides without a list).
+ * poll: -1 while open, -2 cancelled, <= -3 entry -3 - result deleted, else the chosen index.
+ * end: takes the list off the screen (the game closed the dialog); poll then says cancelled. */
+int bbgpu_choice_begin(int kind, const char *const *items, const char *const *images, int count, int focus,
+                       int deletable_from);
+int bbgpu_choice_poll(void);
+void bbgpu_choice_end(void);
+/* The last picture of the game in play (gpu/shim/bbport_thumbnail.h) written as a PNG for the save
+ * list: 1 written, 2 when the game is not in play now (the next picture once it is, within 10
+ * minutes), 0 when it could not be written (also while pictures are off: BB_SAVE_PICTURE=0, or a
+ * build without the capture). */
+int bbgpu_thumbnail_save(const char *path);
+/* A save without a picture was read (loaded): it gets the first picture once play has settled after it. */
+void bbgpu_thumbnail_loaded(const char *path);
+/* Options was pressed (runtime_pad.c): the picture now is kept for a save made from the save list. */
+void bbgpu_thumbnail_pause(void);
+/* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
+int bbgpu_overlay_captures_input(void);
+/* 1 while the full-screen shader preparation page shows (the game runs behind it). */
+int bbgpu_preparation_screen(void);
+/* The shader cache's last writes, before the process ends without destructors (runtime_quit). */
+void bbgpu_prepare_exit(void);
+/* Button prompts (button_prompts.cpp), the device used last: 0 keyboard or mouse (pictures of the
+ * bound keys), 1 a PlayStation controller (the game's own buttons), 2 an Xbox or other controller
+ * (Xbox buttons). */
+void bbgpu_prompts_controller(int device);
+/* Mouse controls: look=1 captures the cursor while the game window has the focus (relative
+ * mode). sample returns the motion (pixels) and wheel steps since the last call and the held
+ * buttons (1 left, 2 right, 4 middle, 8 X1, 16 X2); 1 while the cursor is captured. */
+void bbgpu_mouse_configure(int look);
+/* Heading (degrees, about the vertical axis) of the camera the game last rendered with and how old
+ * it is; 0 before the first frame with a known camera. */
+int bbgpu_camera_yaw(float *yaw_degrees, double *age_seconds);
+int bbgpu_mouse_sample(float *dx, float *dy, uint32_t *buttons, int *wheel);
+/* The game window is in front (Windows; 1 without a window): the controller is read only then. */
+int bbgpu_window_foreground(void);
+/* The mouse movement over the last window_s seconds, in pixels per second, from the event times (paced cameras). */
+void bbgpu_mouse_rate(double window_s, float *rate_x, float *rate_y);
+/* In-game trophy notice (the overlay draws it for a few seconds, one at a time): grade 1 platinum,
+ * 2 gold, 3 silver, 4 bronze; png is the trophy's icon (a PNG file) or empty. */
+void bbgpu_trophy_notify(int grade, const char *game, const char *name, const void *png, uint64_t png_size);
+/* The player is aiming (called while the aiming camera runs): BB_DOF=aim leaves out the game's
+ * depth of field until shortly after the last call. */
+void bbgpu_note_aiming(void);
+/* Number of symbols registered by the vendored libraries (diagnostics). */
+unsigned bbgpu_symbol_count(void);
+/* Set by the host before bbgpu_init: prints every thread's stack (the GPU stall report calls it
+ * once, so a deadlock between the port's threads shows where each one waits). */
+extern void (*bbgpu_thread_stack_dump)(const char *reason);
+#ifdef __cplusplus
+}
+#endif
+#endif

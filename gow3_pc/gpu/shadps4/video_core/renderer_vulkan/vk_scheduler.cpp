@@ -1,0 +1,1136 @@
+// SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#include <thread>
+#include <algorithm>
+#include <cstdio>
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include <cstdlib>
+#include <cstring>
+#include <unordered_map>
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
+#include <functional>
+
+#include "bbport_copy.h"
+#include <fmt/format.h>
+#include <string>
+#include "video_core/renderer_vulkan/vk_gpu_profiler.h"
+#include "video_core/landing_gate.h"
+#include "bbport_toggles.h"
+#include "bbport_trace.h"
+#include "common/assert.h"
+#include "common/debug.h"
+#include "common/thread.h"
+#include "imgui/renderer/texture_manager.h"
+#include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_draw_pipe.h"
+#include "bbport_threads.h"
+
+#include <chrono>
+
+namespace Vulkan {
+
+namespace {
+/// bbport diagnosis: BB_GPU_BUSY=1 — a timestamp where each command buffer of the draw scheduler
+/// starts and ends; every 5 s: how busy the GPU was, its idle gaps, and how long submissions
+/// took from submit to done (how far the GPU runs behind).
+struct GpuBusy {
+    static constexpr u32 Slots = 2048;
+    static constexpr u32 Marks = 128; // segment timestamps per command buffer
+    static constexpr u32 Labels = 16;
+    vk::Device device;
+    vk::QueryPool pool;
+    vk::QueryPool marks; // Slots x Marks
+    struct Block {
+        std::array<u8, Marks> labels;
+        u32 count;
+        u8 initial;
+    };
+    std::vector<Block> blocks = std::vector<Block>(Slots);
+    u8 last_label = 0;
+    std::array<double, Labels> label_ns{};
+    u64 overflowed = 0;
+    double period_ns = 1.0;
+    const Scheduler* owner = nullptr;
+    s64 open = -1; // slot of the command buffer being recorded
+    u64 next = 0;
+    struct Pending {
+        u32 slot;
+        u64 tick;
+        std::chrono::steady_clock::time_point submitted;
+    };
+    std::vector<Pending> pending;
+    std::vector<std::pair<u64, u64>> spans; // GPU [start, end) of finished command buffers
+    double latency_ms = 0;
+    u64 latency_count = 0;
+    std::chrono::steady_clock::time_point window = std::chrono::steady_clock::now();
+
+    static GpuBusy* Get(const Instance& instance) {
+        static GpuBusy* busy = [&]() -> GpuBusy* {
+            const char* env = std::getenv("BB_GPU_BUSY");
+            if (!env || env[0] != '1') {
+                return nullptr;
+            }
+            auto* b = new GpuBusy;
+            b->device = instance.GetDevice();
+            b->period_ns = instance.GetPhysicalDevice().getProperties().limits.timestampPeriod;
+            b->pool = Check(b->device.createQueryPool({
+                .queryType = vk::QueryType::eTimestamp,
+                .queryCount = Slots * 2,
+            }));
+            b->device.resetQueryPool(b->pool, 0, Slots * 2);
+            b->marks = Check(b->device.createQueryPool({
+                .queryType = vk::QueryType::eTimestamp,
+                .queryCount = Slots * Marks,
+            }));
+            b->device.resetQueryPool(b->marks, 0, Slots * Marks);
+            std::printf("GPU busy: on (timestamp period %.2f ns)\n", b->period_ns);
+            return b;
+        }();
+        return busy;
+    }
+};
+} // namespace
+
+std::mutex Scheduler::submit_mutex;
+
+extern void (*g_gpu_stall_report)();
+extern "C" void (*bbgpu_thread_stack_dump)(const char* reason); // bbgpu.cpp
+bool (*g_draw_pipe_busy)() = nullptr;
+/// bbport: runs the draws handed to the recording thread so far (set by the rasterizer).
+void (*g_drain_draw_pipe)() = nullptr;
+
+namespace {
+// bbport: the last submissions to the graphics queue (all schedulers share it), printed when a
+// GPU wait stalls: which timeline value each one signals and which semaphores it waits for.
+struct SubmitRecord {
+    const Scheduler* scheduler;
+    VkSemaphore timeline;
+    u64 signal;
+    u32 waits;
+    std::array<VkSemaphore, 4> wait_semaphore;
+    std::array<u64, 4> wait_value;
+};
+std::mutex g_recent_mutex;
+std::array<SubmitRecord, 32> g_recent;
+u64 g_recent_count;
+std::vector<std::pair<const Scheduler*, const Instance*>> g_schedulers;
+} // namespace
+
+void Scheduler::ReportStall() {
+    std::scoped_lock lk{g_recent_mutex};
+    for (const auto& [scheduler, inst] : g_schedulers) {
+        const VkSemaphore timeline = scheduler->work_semaphore.Handle();
+        const auto [result, value] = inst->GetDevice().getSemaphoreCounterValue(timeline);
+        std::printf("GPU stall: scheduler %p timeline %p: GPU reached %llu, next tick %llu\n",
+                    static_cast<const void*>(scheduler), static_cast<void*>(timeline),
+                    static_cast<unsigned long long>(value),
+                    static_cast<unsigned long long>(scheduler->work_semaphore.CurrentTick()));
+        scheduler->ReportBreadcrumbs();
+    }
+    const u64 count = std::min<u64>(g_recent_count, g_recent.size());
+    for (u64 i = g_recent_count - count; i < g_recent_count; ++i) {
+        const auto& r = g_recent[i % g_recent.size()];
+        std::printf("GPU stall: submit #%llu scheduler %p signals %p=%llu, waits",
+                    static_cast<unsigned long long>(i), static_cast<const void*>(r.scheduler),
+                    static_cast<void*>(r.timeline), static_cast<unsigned long long>(r.signal));
+        for (u32 w = 0; w < r.waits; ++w) {
+            std::printf(" %p=%llu", static_cast<void*>(r.wait_semaphore[w]),
+                        static_cast<unsigned long long>(r.wait_value[w]));
+        }
+        std::printf("\n");
+    }
+    std::fflush(stdout);
+    // bbport: a tick nobody submits means the port's threads wait for each other: their stacks
+    // name the cycle (once a session; bbgpu_thread_stack_dump, set by the host).
+    if (bbgpu_thread_stack_dump) {
+        bbgpu_thread_stack_dump("GPU stall");
+    }
+}
+
+Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
+    : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
+    {
+        std::scoped_lock lk{g_recent_mutex};
+        g_schedulers.emplace_back(this, &instance);
+        g_gpu_stall_report = &Scheduler::ReportStall;
+    }
+    // bbport: BB_VK_RECORD_THREAD=0 records on the calling thread.
+    const char* env = std::getenv("BB_VK_RECORD_THREAD");
+    if (threaded_recording && !(env && env[0] == '0')) {
+        record_chunk = AcquireChunk();
+        recorder_thread = std::jthread(std::bind_front(&Scheduler::RecorderThread, this));
+        recording_threaded = true;
+    }
+#if TRACY_GPU_ENABLED
+    profiler_scope = reinterpret_cast<tracy::VkCtxScope*>(std::malloc(sizeof(tracy::VkCtxScope)));
+#endif
+    AllocateWorkerCommandBuffers();
+    priority_pending_ops_thread =
+        std::jthread(std::bind_front(&Scheduler::PriorityPendingOpsThread, this));
+    if (BreadcrumbsOn()) {
+        CreateBreadcrumbBuffer();
+    }
+}
+
+bool Scheduler::BreadcrumbsOn() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_GPU_BREADCRUMBS");
+        return env && env[0] == '1';
+    }();
+    return on;
+}
+
+void Scheduler::CreateBreadcrumbBuffer() {
+    const vk::Device device = instance.GetDevice();
+    auto [buffer_result, buffer] = device.createBuffer(vk::BufferCreateInfo{
+        .size = 64,
+        .usage = vk::BufferUsageFlagBits::eTransferDst,
+    });
+    if (buffer_result != vk::Result::eSuccess) {
+        return;
+    }
+    const auto requirements = device.getBufferMemoryRequirements(buffer);
+    const auto properties = instance.GetPhysicalDevice().getMemoryProperties();
+    const auto wanted = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+    u32 type = ~0u;
+    for (u32 i = 0; i < properties.memoryTypeCount; ++i) {
+        if ((requirements.memoryTypeBits & (1u << i)) &&
+            (properties.memoryTypes[i].propertyFlags & wanted) == wanted) {
+            type = i;
+            break;
+        }
+    }
+    if (type == ~0u) {
+        device.destroyBuffer(buffer);
+        return;
+    }
+    auto [memory_result, memory] = device.allocateMemory(vk::MemoryAllocateInfo{
+        .allocationSize = requirements.size,
+        .memoryTypeIndex = type,
+    });
+    if (memory_result != vk::Result::eSuccess || device.bindBufferMemory(buffer, memory, 0) != vk::Result::eSuccess) {
+        device.destroyBuffer(buffer);
+        return;
+    }
+    auto [map_result, mapped] = device.mapMemory(memory, 0, 64);
+    if (map_result != vk::Result::eSuccess) {
+        device.destroyBuffer(buffer);
+        device.freeMemory(memory);
+        return;
+    }
+    std::memset(mapped, 0, 64);
+    crumb_buffer = buffer;
+    crumb_memory = memory;
+    crumb_mapped = static_cast<volatile u32*>(mapped);
+    std::printf("GPU breadcrumbs: on for scheduler %p (BB_GPU_BREADCRUMBS; a barrier after every dispatch and render "
+                "pass, slower)\n",
+                static_cast<const void*>(this));
+}
+
+u32 Scheduler::NoteBreadcrumb(u32 kind, u64 hash) {
+    if (!crumb_buffer) {
+        return 0;
+    }
+    const u32 id = crumb_count.fetch_add(1, std::memory_order_relaxed) + 1;
+    Crumb& crumb = crumbs[id % crumbs.size()];
+    if (kind == 2) {
+        crumb = pass_crumb;
+    } else {
+        crumb = Crumb{};
+        crumb.count = 1;
+        crumb.hashes[0] = hash;
+    }
+    crumb.kind = kind;
+    return id;
+}
+
+void Scheduler::NotePassShader(u64 hash) {
+    if (!crumb_buffer || !hash) {
+        return;
+    }
+    for (u32 i = 0; i < pass_crumb.count; ++i) {
+        if (pass_crumb.hashes[i] == hash) {
+            return;
+        }
+    }
+    if (pass_crumb.count < std::size(pass_crumb.hashes)) {
+        pass_crumb.hashes[pass_crumb.count++] = hash;
+    }
+}
+
+void Scheduler::WriteBreadcrumb(vk::CommandBuffer cmdbuf, u32 id, vk::PipelineStageFlags2 after) const {
+    if (!id || !crumb_buffer) {
+        return;
+    }
+    const vk::MemoryBarrier2 barrier{
+        .srcStageMask = after,
+        .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+    };
+    cmdbuf.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &barrier});
+    cmdbuf.fillBuffer(crumb_buffer, 0, 4, id);
+}
+
+void Scheduler::ReportBreadcrumbs() const {
+    if (!crumb_mapped) {
+        return;
+    }
+    const u32 done = crumb_mapped[0];
+    const u32 recorded = crumb_count.load(std::memory_order_relaxed);
+    std::printf("GPU breadcrumbs: scheduler %p: the GPU finished #%u of %u recorded; the next are where it stopped:\n",
+                static_cast<const void*>(this), done, recorded);
+    for (u32 id = std::max(done, 1u); id <= recorded && id <= done + 6; ++id) {
+        if (recorded - id >= crumbs.size()) {
+            continue;
+        }
+        const Crumb& crumb = crumbs[id % crumbs.size()];
+        std::string list;
+        for (u32 i = 0; i < crumb.count; ++i) {
+            list += fmt::format(" {:08x}", static_cast<u32>(crumb.hashes[i]));
+        }
+        std::printf("GPU breadcrumbs:   #%u %s %s:%s\n", id, id == done ? "(finished)" : "(not finished)",
+                    crumb.kind == 1 ? "dispatch, compute shader" : "render pass, shaders", list.c_str());
+    }
+    std::fflush(stdout);
+}
+
+Scheduler::~Scheduler() {
+    {
+        std::scoped_lock lk{g_recent_mutex};
+        std::erase_if(g_schedulers, [this](const auto& entry) { return entry.first == this; });
+    }
+    if (recorder_thread.joinable()) {
+        SyncRecording();
+        recorder_thread.request_stop();
+        recorder_cv.notify_all();
+        recorder_thread.join();
+    }
+#if TRACY_GPU_ENABLED
+    std::free(profiler_scope);
+#endif
+}
+
+void Scheduler::BeginRendering(const RenderState& new_state) {
+    if (is_rendering && render_state == new_state) {
+        return;
+    }
+    EndRendering();
+    is_rendering = true;
+    render_state = new_state;
+
+    std::array<vk::RenderingAttachmentInfo, 8> color_attachments;
+    for (u32 i = 0; i < render_state.num_color_attachments; ++i) {
+        const auto& cb = render_state.color_attachments[i];
+        color_attachments[i] = vk::RenderingAttachmentInfo{
+            .imageView = cb.image_view,
+            .imageLayout = cb.image_layout,
+            .loadOp = cb.is_clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .clearValue = vk::ClearValue{.color = vk::ClearColorValue{.uint32 = cb.clear_value}},
+        };
+    }
+
+    const auto& db = render_state.depth_stencil_attachment;
+    const vk::RenderingAttachmentInfo depth_attachment = {
+        .imageView = db.image_view,
+        .imageLayout = db.image_layout,
+        .loadOp = db.depth_clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+        .clearValue =
+            vk::ClearValue{.depthStencil = vk::ClearDepthStencilValue{.depth = std::bit_cast<float>(
+                                                                          db.clear_value[0])}},
+    };
+    const vk::RenderingAttachmentInfo stencil_attachment = {
+        .imageView = db.image_view,
+        .imageLayout = db.image_layout,
+        .loadOp = db.stencil_clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+        .clearValue = vk::ClearValue{.depthStencil =
+                                         vk::ClearDepthStencilValue{.stencil = db.clear_value[1]}},
+    };
+
+    const vk::RenderingInfo rendering_info = {
+        .renderArea =
+            {
+                .offset = {0, 0},
+                .extent = {render_state.width, render_state.height},
+            },
+        .layerCount = render_state.num_layers,
+        .colorAttachmentCount = render_state.num_color_attachments,
+        .pColorAttachments = color_attachments.data(),
+        .pDepthAttachment = db.has_depth ? &depth_attachment : nullptr,
+        .pStencilAttachment = db.has_stencil ? &stencil_attachment : nullptr,
+    };
+
+    if (!recording_threaded) {
+        current_cmdbuf.beginRendering(rendering_info);
+        return;
+    }
+    // The attachment infos live on this stack frame: the recorded closure keeps copies.
+    Record([info = rendering_info, color_attachments, depth_attachment,
+            stencil_attachment](vk::CommandBuffer cmdbuf) mutable {
+        info.pColorAttachments = color_attachments.data();
+        if (info.pDepthAttachment) {
+            info.pDepthAttachment = &depth_attachment;
+        }
+        if (info.pStencilAttachment) {
+            info.pStencilAttachment = &stencil_attachment;
+        }
+        cmdbuf.beginRendering(info);
+    });
+}
+
+void Scheduler::EndRendering() {
+    if (!is_rendering) {
+        return;
+    }
+    is_rendering = false;
+    if (g_pass_draws) {
+        g_pass_runs[std::min<u32>(std::bit_width(g_pass_draws) - 1, 6)] += g_pass_draws;
+        ++g_pass_count;
+        g_pass_draws = 0;
+    }
+    const u32 crumb = crumb_buffer ? NoteBreadcrumb(2, 0) : 0;
+    pass_crumb = {};
+    Record([crumb, this](vk::CommandBuffer cmdbuf) {
+        cmdbuf.endRendering();
+        WriteBreadcrumb(cmdbuf, crumb, vk::PipelineStageFlagBits2::eAllGraphics);
+    });
+}
+
+void Scheduler::TraceDirectRecording(void* caller) {
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_RECORDER_TRACE");
+        return env && env[0] == '1';
+    }();
+    if (!enabled) {
+        return;
+    }
+    static std::mutex mutex;
+    static std::unordered_map<void*, u64> callers;
+    static u64 calls;
+    std::scoped_lock lk{mutex};
+    ++callers[caller];
+    if (++calls % 2000) {
+        return;
+    }
+    std::vector<std::pair<u64, void*>> top;
+    for (const auto& [address, count] : callers) {
+        top.emplace_back(count, address);
+    }
+    std::ranges::sort(top, std::greater{});
+    for (size_t i = 0; i < std::min<size_t>(top.size(), 8); ++i) {
+#ifdef _WIN32
+        struct { const char* dli_fname; void* dli_fbase; } info{nullptr, nullptr};
+#else
+        Dl_info info{};
+        dladdr(top[i].second, &info);
+#endif
+        std::printf("Recorder sync caller: %llu x %s+0x%lx\n",
+                    static_cast<unsigned long long>(top[i].first),
+                    info.dli_fname ? info.dli_fname : "?",
+                    static_cast<unsigned long>(reinterpret_cast<uintptr_t>(top[i].second) -
+                                               reinterpret_cast<uintptr_t>(info.dli_fbase)));
+    }
+    callers.clear();
+}
+
+std::unique_ptr<RecordChunk> Scheduler::AcquireChunk() {
+    std::scoped_lock lk{recorder_mutex};
+    if (free_chunks.empty()) {
+        return std::make_unique<RecordChunk>();
+    }
+    auto chunk = std::move(free_chunks.back());
+    free_chunks.pop_back();
+    return chunk;
+}
+
+bool Scheduler::RawFencesOn() {
+    // Off by default (2026-11-03 market route ABBA): fence task 0.35 -> 0.27-0.30 us, CPU-bound +2.8% mean /
+    // +1.0% crowd, but slow CPU +3.5% mean / -4.4% crowd (both pairs): not proven, needs another slow round.
+    static const bool on = [] {
+        const char* env = std::getenv("BB_RAW_FENCE");
+        return env && env[0] == '1';
+    }();
+    return on;
+}
+
+void Scheduler::SignalRawAfterHostCopies(RawSignalFn fn, const void* bytes, u32 size,
+                                         u64 landing_seq) {
+    ASSERT(size <= RawSignalBytes);
+    struct Raw {
+        RawSignalFn fn;
+        std::array<u8, RawSignalBytes> bytes;
+    } raw{fn, {}};
+    std::memcpy(raw.bytes.data(), bytes, size);
+    if (!IsRecordingDeferred()) {
+        WaitHostCopies();
+        if (VideoCore::LandingGate::Active()) {
+            WaitDeferredSignals();
+        }
+        VideoCore::LandingGate::Wait(landing_seq);
+        raw.fn(raw.bytes.data());
+        return;
+    }
+    BbCopy::FlushBatch();
+    deferred_signals_issued.fetch_add(1, std::memory_order_relaxed);
+    Record([raw, done = deferred_signals_done.get(), keep = deferred_signals_done,
+            landing_seq](vk::CommandBuffer) {
+        // Nothing in flight ahead of it (the checks AfterCopies and the landing gate make
+        // themselves): signal now, no callbacks built.
+        if (BbCopy::IdleAfterFlush() && VideoCore::LandingGate::Clear(landing_seq)) {
+            raw.fn(raw.bytes.data());
+            done->fetch_add(1, std::memory_order_release);
+            return;
+        }
+        BbCopy::AfterCopies([raw, keep, landing_seq] {
+            VideoCore::LandingGate::Run(landing_seq, [raw, keep] {
+                raw.fn(raw.bytes.data());
+                keep->fetch_add(1, std::memory_order_release);
+            });
+        });
+    });
+    static const bool lazy = [] {
+        const char* env = std::getenv("BB_LAZY_FENCE_KICK");
+        return !(env && env[0] == '0');
+    }();
+    if (lazy && DrawPipe::OnStageB() && ++owed_fences < 16) {
+        kick_owed = true;
+        KickRecording(false);
+        return;
+    }
+    KickRecording(true);
+}
+
+void Scheduler::SignalAfterHostCopies(std::function<void()> signal, u64 landing_seq) {
+    if (!IsRecordingDeferred()) {
+        WaitHostCopies();
+        if (VideoCore::LandingGate::Active()) {
+            WaitDeferredSignals();
+        }
+        VideoCore::LandingGate::Wait(landing_seq);
+        signal();
+        return;
+    }
+    BbCopy::FlushBatch();
+    deferred_signals_issued.fetch_add(1, std::memory_order_relaxed);
+    Record([signal = std::move(signal), done = deferred_signals_done,
+            landing_seq](vk::CommandBuffer) mutable {
+        BbCopy::AfterCopies([signal = std::move(signal), done = std::move(done), landing_seq] {
+            auto fire = [signal = std::move(signal), done = std::move(done)] {
+                signal();
+                done->fetch_add(1, std::memory_order_release);
+            };
+            // A signal behind deferred raycaster copies waits for them on the landing thread:
+            // this thread must not block (submissions wait for the copy threads).
+            VideoCore::LandingGate::Run(landing_seq, std::move(fire));
+        });
+    });
+    // bbport: on the draw recording thread a fence's kick waits until that thread runs out of
+    // packets (DrawPipe idle hook) or 16 fences: U3 puts one after each of ~1,900 dispatches a
+    // frame, each a forced handoff to the Vulkan recording thread. U3 square, 2 rounds:
+    // 114.2 -> 117.6 FPS. BB_LAZY_FENCE_KICK=0: a forced kick per fence, as before.
+    static const bool lazy = [] {
+        const char* env = std::getenv("BB_LAZY_FENCE_KICK");
+        return !(env && env[0] == '0');
+    }();
+    if (lazy && DrawPipe::OnStageB() && ++owed_fences < 16) {
+        kick_owed = true;
+        KickRecording(false);
+        return;
+    }
+    KickRecording(true);
+}
+
+void Scheduler::WaitDeferredSignals() {
+    const u64 issued = deferred_signals_issued.load(std::memory_order_relaxed);
+    if (deferred_signals_done->load(std::memory_order_acquire) >= issued ||
+        BbToggle::Disabled(BbToggle::OrderedGuestWrites)) {
+        return;
+    }
+    BbStats::WaitTimer timer{BbStats::host_copies_wait_ns};
+    KickRecording(true);
+    while (deferred_signals_done->load(std::memory_order_acquire) < issued) {
+        if (VideoCore::LandingGate::Stopped()) {
+            break; // shutdown: the labels waiting on the landing thread were dropped
+        }
+        // Helps the copy threads the signals wait for.
+        BbCopy::WaitAsync();
+        std::this_thread::yield();
+    }
+}
+
+void Scheduler::WaitHostCopies() {
+    if (host_copies_done.load(std::memory_order_acquire) < host_copies_issued) {
+        BbStats::WaitTimer timer{BbStats::host_copies_wait_ns};
+        BbStats::host_copy_waits.fetch_add(1, std::memory_order_relaxed);
+        KickRecording(true);
+        while (host_copies_done.load(std::memory_order_acquire) < host_copies_issued) {
+            std::this_thread::yield();
+        }
+    }
+    BbStats::WaitTimer timer{BbStats::copy_threads_wait_ns};
+    BbCopy::WaitAsync();
+}
+
+void Scheduler::KickRecording(bool force) {
+    if (!recording_threaded) {
+        return;
+    }
+    // Callers kick where nobody holds the raw command buffer: deferral resumes.
+    direct_mode = false;
+    // Batches of tens of KiB keep the queue handoff cheap relative to the work it carries.
+    if (!force && full_chunks.empty() && record_chunk->Size() < 32 * 1024) {
+        return;
+    }
+    if (full_chunks.empty() && record_chunk->Empty()) {
+        kick_owed = false;
+        owed_fences = 0;
+        return;
+    }
+    kick_owed = false;
+    owed_fences = 0;
+    bool wake;
+    {
+        std::scoped_lock lk{recorder_mutex};
+        for (auto& chunk : full_chunks) {
+            recorder_queue.push_back(std::move(chunk));
+        }
+        if (!record_chunk->Empty()) {
+            recorder_queue.push_back(std::move(record_chunk));
+        }
+        wake = recorder_sleeping;
+        queued_chunks.store(recorder_queue.size(), std::memory_order_release);
+    }
+    full_chunks.clear();
+    // A busy recorder picks the new chunks up by itself: waking it is a syscall per draw.
+    if (wake) {
+        recorder_cv.notify_one();
+    }
+    if (!record_chunk) {
+        record_chunk = AcquireChunk();
+    }
+}
+
+void Scheduler::SyncRecording() {
+    if (!recording_threaded) {
+        return;
+    }
+    KickRecording(true);
+    BbStats::WaitTimer timer{BbStats::sync_recording_ns};
+    std::unique_lock lk{recorder_mutex};
+    recorder_idle_cv.wait(lk, [this] { return recorder_queue.empty() && !recorder_busy; });
+}
+
+static thread_local bool t_on_recorder_thread = false;
+
+bool Scheduler::OnRecorderThread() {
+    return t_on_recorder_thread;
+}
+
+void Scheduler::RecorderThread(std::stop_token stoken) {
+    Common::SetCurrentThreadName("bb:VkRecorder");
+    BbThreads::MakeRenderThread();
+    t_on_recorder_thread = true;
+    while (true) {
+        // Spin briefly before sleeping: the next chunk usually follows within microseconds,
+        // and a sleeping recorder costs the GPU thread a wake-up syscall per kick. With few
+        // hardware threads (Steam Deck: 8) the spin would take time from guest threads.
+        static const auto spin_time = std::chrono::microseconds(
+            BbThreads::Available() >= 12 ? 200 : 20);
+        const auto spin_until = std::chrono::steady_clock::now() + spin_time;
+        for (u32 spins = 1; queued_chunks.load(std::memory_order_acquire) == 0; ++spins) {
+            __builtin_ia32_pause();
+            // The clock is read every 256 pauses, not per iteration.
+            if (!(spins & 255) &&
+                (stoken.stop_requested() || std::chrono::steady_clock::now() >= spin_until)) {
+                break;
+            }
+        }
+        BbThreads::SampleCore(BbThreads::CoreVulkanRecording);
+        std::unique_ptr<RecordChunk> chunk;
+        {
+            std::unique_lock lk{recorder_mutex};
+            recorder_sleeping = true;
+            recorder_cv.wait(lk, stoken, [this] { return !recorder_queue.empty(); });
+            recorder_sleeping = false;
+            if (recorder_queue.empty()) {
+                return; // stop requested
+            }
+            chunk = std::move(recorder_queue.front());
+            recorder_queue.pop_front();
+            queued_chunks.store(recorder_queue.size(), std::memory_order_release);
+            recorder_busy = true;
+        }
+        // Diagnosis (U2 train flicker, 2026-11-02): BB_REC_DELAY_NS=<n>: the recording thread spins n ns before
+        // each chunk.
+        static const u64 rec_delay = [] {
+            const char* env = std::getenv("BB_REC_DELAY_NS");
+            return env ? std::strtoull(env, nullptr, 10) : 0ull;
+        }();
+        if (rec_delay) {
+            const auto until = std::chrono::steady_clock::now() + std::chrono::nanoseconds(rec_delay);
+            while (std::chrono::steady_clock::now() < until) {
+                __builtin_ia32_pause();
+            }
+        }
+        // current_cmdbuf only changes after SyncRecording(), which waits for this thread.
+        BbTrace::Record(BbTrace::ChunkBegin);
+        chunk->Execute(current_cmdbuf);
+        BbTrace::Record(BbTrace::ChunkEnd);
+        {
+            std::scoped_lock lk{recorder_mutex};
+            free_chunks.push_back(std::move(chunk));
+            recorder_busy = false;
+            if (recorder_queue.empty()) {
+                recorder_idle_cv.notify_all();
+            }
+        }
+    }
+}
+
+void Scheduler::Flush(SubmitInfo& info) {
+    // When flushing, we only send data to the driver; no waiting is necessary.
+    SubmitExecution(info);
+}
+
+void Scheduler::Flush() {
+    SubmitInfo info{};
+    Flush(info);
+}
+
+void Scheduler::Finish() {
+    // When finishing, we need to wait for the submission to have executed on the device.
+    const u64 presubmit_tick = CurrentTick();
+    SubmitInfo info{};
+    SubmitExecution(info);
+    Wait(presubmit_tick);
+}
+
+void Scheduler::WaitSubmitted() {
+    const u64 tick = CurrentTick();
+    if (tick > 1) {
+        Wait(tick - 1);
+    }
+}
+
+void Scheduler::Wait(u64 tick) {
+    if (tick >= work_semaphore.CurrentTick()) {
+        // Make sure we are not waiting for the current tick without signalling
+        SubmitInfo info{};
+        Flush(info);
+    }
+    BbStats::WaitTimer timer{BbStats::tick_wait_ns};
+    work_semaphore.Wait(tick);
+}
+
+void Scheduler::PopPendingOperations() {
+    if (num_pending_ops.load(std::memory_order_acquire) == 0) {
+        return; // every draw comes here
+    }
+    std::unique_lock lk(pending_ops_mutex);
+    // bbport: this runs on every draw and dispatch. Querying the timeline semaphore is an
+    // ioctl, so it is skipped when nothing waits and done once per 32 calls (~0.3 ms; reading
+    // the clock per draw instead was itself a hot spot).
+    if (pending_ops.empty()) {
+        return;
+    }
+    if (!work_semaphore.IsFree(pending_ops.front().gpu_tick)) {
+        if ((++pending_polls & 31) != 0 && !BbToggle::Disabled(BbToggle::PendingPollLimit)) {
+            return;
+        }
+        work_semaphore.Refresh();
+    }
+    while (!pending_ops.empty() && work_semaphore.IsFree(pending_ops.front().gpu_tick)) {
+        pending_ops.front().callback();
+        pending_ops.pop();
+        num_pending_ops.fetch_sub(1, std::memory_order_release);
+    }
+}
+
+bool Scheduler::SegmentsEnabled() const {
+    auto* busy = GpuBusy::Get(instance);
+    return busy && busy->owner == this;
+}
+
+void Scheduler::MarkSegment(u32 label) {
+    auto* busy = GpuBusy::Get(instance);
+    if (!busy || busy->owner != this) {
+        return;
+    }
+    busy->last_label = u8(label);
+    if (busy->open < 0) {
+        return;
+    }
+    auto& block = busy->blocks[busy->open];
+    if (block.count >= GpuBusy::Marks) {
+        ++busy->overflowed;
+        return;
+    }
+    const u32 index = block.count++;
+    block.labels[index] = u8(label);
+    const u32 query = u32(busy->open) * GpuBusy::Marks + index;
+    Record([pool = busy->marks, query](vk::CommandBuffer cmdbuf) {
+        cmdbuf.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe, pool, query);
+    });
+}
+
+void Scheduler::AllocateWorkerCommandBuffers(bool invalidate_dynamic) {
+    const vk::CommandBufferBeginInfo begin_info = {
+        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
+    };
+
+    current_cmdbuf = command_pool.Commit();
+    Check(current_cmdbuf.begin(begin_info));
+    if (auto* busy = GpuBusy::Get(instance); busy && busy->owner == this) {
+        const u32 slot = u32(busy->next++ % GpuBusy::Slots);
+        current_cmdbuf.resetQueryPool(busy->pool, slot * 2, 2);
+        current_cmdbuf.resetQueryPool(busy->marks, slot * GpuBusy::Marks, GpuBusy::Marks);
+        current_cmdbuf.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, busy->pool, slot * 2);
+        busy->open = slot;
+        busy->blocks[slot].count = 0;
+        busy->blocks[slot].initial = busy->last_label;
+    }
+
+    // Invalidate dynamic state so it gets applied to the new command buffer.
+    if (invalidate_dynamic) {
+        dynamic_state.Invalidate();
+    }
+
+#if TRACY_GPU_ENABLED
+    auto* profiler_ctx = instance.GetProfilerContext();
+    if (profiler_ctx) {
+        static const auto scope_loc =
+            GPU_SCOPE_LOCATION("Guest Frame", MarkersPalette::GpuMarkerColor);
+        new (profiler_scope) tracy::VkCtxScope{profiler_ctx, &scope_loc, current_cmdbuf, true};
+    }
+#endif
+}
+
+void Scheduler::SubmitOnRecorder(u64 signal_value) {
+    Check(current_cmdbuf.end());
+    const vk::Semaphore timeline = work_semaphore.Handle();
+    const vk::TimelineSemaphoreSubmitInfo timeline_si = {
+        .signalSemaphoreValueCount = 1U,
+        .pSignalSemaphoreValues = &signal_value,
+    };
+    const vk::SubmitInfo submit_info = {
+        .pNext = &timeline_si,
+        .commandBufferCount = 1U,
+        .pCommandBuffers = &current_cmdbuf,
+        .signalSemaphoreCount = 1U,
+        .pSignalSemaphores = &timeline,
+    };
+    {
+        std::scoped_lock lk{g_recent_mutex};
+        g_recent[g_recent_count++ % g_recent.size()] = {this, timeline, signal_value, 0, {}, {}};
+    }
+    vk::Result submit_result;
+    {
+        std::scoped_lock queue_lk{g_graphics_queue_mutex};
+        submit_result = instance.GetGraphicsQueue().submit(submit_info, nullptr);
+    }
+    if (submit_result == vk::Result::eErrorDeviceLost) {
+        std::printf("Device lost during submit\n");
+        DeviceLost(instance.GetDevice());
+    }
+    g_async_submits_done.fetch_add(1, std::memory_order_release);
+    work_semaphore.Refresh();
+    AllocateWorkerCommandBuffers(false);
+}
+
+void Scheduler::SubmitExecution(SubmitInfo& info) {
+    // bbport (hitch diagnosis, BB_HITCH_MS): a submission that waits for the submit lock longer than the hitch
+    // threshold says so (the presenter holds it through the present call).
+    static const double slow_lock_ms = [] {
+        const char* env = std::getenv("BB_HITCH_MS");
+        return env ? std::atof(env) : 0.0;
+    }();
+    const auto lock_start = std::chrono::steady_clock::now();
+    std::scoped_lock lk{submit_mutex};
+    if (slow_lock_ms > 0) {
+        const double waited =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lock_start).count();
+        if (waited > slow_lock_ms) {
+            std::printf("Submit lock: a submission (%s) waited %.1f ms\n", on_submit ? "draw scheduler" : "other",
+                        waited);
+        }
+    }
+    // bbport: BB_SUBMIT_THREADS=1 names each thread that submits through this scheduler (once).
+    static const bool submit_threads = std::getenv("BB_SUBMIT_THREADS") != nullptr;
+    if (submit_threads) {
+        static std::mutex seen_mutex;
+        static std::vector<std::pair<const Scheduler*, u32>> seen;
+        const u32 tid = static_cast<u32>(GetCurrentThreadId());
+        std::scoped_lock seen_lk{seen_mutex};
+        if (std::ranges::find(seen, std::pair<const Scheduler*, u32>{this, tid}) == seen.end()) {
+            seen.emplace_back(this, tid);
+            PWSTR description = nullptr;
+            char name[64] = "?";
+            if (SUCCEEDED(GetThreadDescription(GetCurrentThread(), &description)) && description) {
+                WideCharToMultiByte(CP_UTF8, 0, description, -1, name, sizeof(name), nullptr, nullptr);
+                LocalFree(description);
+            }
+            std::printf("Scheduler %p: first submission from thread %u '%s'%s\n",
+                        static_cast<const void*>(this), tid, name, on_submit ? " (draw scheduler)" : "");
+        }
+    }
+    // bbport: the GPU command thread must not submit while the draw recording thread still has
+    // work in this command buffer (its sparse binds would miss this submission). Reported once
+    // per caller with a stack (module offsets for llvm-symbolizer).
+    if (on_submit && g_draw_pipe_busy && g_draw_pipe_busy()) {
+        static std::mutex report_mutex;
+        static std::vector<void*> reported;
+        void* frames[24]{};
+        const u16 count = CaptureStackBackTrace(1, 24, frames, nullptr);
+        std::scoped_lock report_lk{report_mutex};
+        if (count > 2 && std::ranges::find(reported, frames[1]) == reported.end()) {
+            reported.push_back(frames[1]);
+            const auto base = reinterpret_cast<uintptr_t>(GetModuleHandleA(nullptr));
+            std::printf("Scheduler: GPU thread submits while the draw pipe is busy:");
+            for (u16 i = 0; i < count; ++i) {
+                std::printf(" %llx", static_cast<unsigned long long>(
+                                         reinterpret_cast<uintptr_t>(frames[i]) - base));
+            }
+            std::printf("\n");
+        }
+    }
+    const u64 signal_value = work_semaphore.NextTick();
+
+#if TRACY_GPU_ENABLED
+    auto* profiler_ctx = instance.GetProfilerContext();
+    if (profiler_ctx) {
+        profiler_scope->~VkCtxScope();
+        TracyVkCollect(profiler_ctx, current_cmdbuf);
+    }
+#endif
+
+    if (on_submit) {
+        on_submit(info);
+    }
+
+    EndRendering();
+    if (auto* profiler = GpuProfiler::Get(); profiler && profiler->Records(this)) {
+        // Until the next submission's first timestamp: mostly the GPU waiting for it.
+        profiler->Mark(0x5B317ull, [] { return std::string{"(between submissions: GPU idle)"}; });
+    }
+    // bbport: BB_ASYNC_SUBMIT=1: a plain flush of the draw scheduler (no semaphores, no fence)
+    // is ended and submitted by the Vulkan recording thread as its last command there, which
+    // then begins the next command buffer: the draw recording thread goes on instead of waiting
+    // for that thread to catch up and for the submission (~6% of its time in U3).
+    // =2: the recording thread also waits for the guest memory copies (the copy threads),
+    // which it reaches in order anyway. Default 2 (2026-10-27: U3 square 141.5 -> 144.5 FPS,
+    // 2 rounds, once stage B set the frame rate); BB_ASYNC_SUBMIT=0: off.
+    static const int async_submit = [] {
+        const char* env = std::getenv("BB_ASYNC_SUBMIT");
+        return env && (env[0] == '0' || env[0] == '1') ? env[0] - '0' : 2;
+    }();
+    if (async_submit && on_submit && IsRecordingDeferred() && info.num_wait_semas == 0 &&
+        info.num_signal_semas == 0 && !info.fence && !GpuBusy::Get(instance)) {
+        if (async_submit == 2) {
+            BbCopy::FlushBatch();
+        } else {
+            WaitHostCopies();
+        }
+        g_async_submits_queued.fetch_add(1, std::memory_order_release);
+        // A chunk's commands all go to the command buffer current when it starts: the submit
+        // ends its chunk (the kick right after it).
+        Record([this, signal_value, copies = async_submit == 2](vk::CommandBuffer) {
+            if (copies) {
+                BbCopy::WaitAsync();
+            }
+            SubmitOnRecorder(signal_value);
+        });
+        KickRecording(true);
+        dynamic_state.Invalidate();
+        PopPendingOperations();
+        return;
+    }
+    SyncRecording();
+    // Guest memory copies into staging read by this submission (copy threads).
+    WaitHostCopies();
+    auto* busy = GpuBusy::Get(instance);
+    if (busy && !busy->owner && on_submit) {
+        busy->owner = this; // the draw scheduler; its next command buffer starts the timing
+    }
+    const bool busy_timed = busy && busy->owner == this && busy->open >= 0;
+    if (busy_timed) {
+        current_cmdbuf.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe, busy->pool,
+                                      u32(busy->open) * 2 + 1);
+    }
+    Check(current_cmdbuf.end());
+
+    const vk::Semaphore timeline = work_semaphore.Handle();
+    info.AddSignal(timeline, signal_value);
+
+    static constexpr std::array<vk::PipelineStageFlags, 2> wait_stage_masks = {
+        vk::PipelineStageFlagBits::eAllCommands,
+        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+    };
+
+    const vk::TimelineSemaphoreSubmitInfo timeline_si = {
+        .waitSemaphoreValueCount = info.num_wait_semas,
+        .pWaitSemaphoreValues = info.wait_ticks.data(),
+        .signalSemaphoreValueCount = info.num_signal_semas,
+        .pSignalSemaphoreValues = info.signal_ticks.data(),
+    };
+
+    const vk::SubmitInfo submit_info = {
+        .pNext = &timeline_si,
+        .waitSemaphoreCount = info.num_wait_semas,
+        .pWaitSemaphores = info.wait_semas.data(),
+        .pWaitDstStageMask = wait_stage_masks.data(),
+        .commandBufferCount = 1U,
+        .pCommandBuffers = &current_cmdbuf,
+        .signalSemaphoreCount = info.num_signal_semas,
+        .pSignalSemaphores = info.signal_semas.data(),
+    };
+
+    {
+        std::scoped_lock lk{g_recent_mutex};
+        auto& record = g_recent[g_recent_count++ % g_recent.size()];
+        record = {this, timeline, signal_value, info.num_wait_semas, {}, {}};
+        for (u32 w = 0; w < info.num_wait_semas && w < 4; ++w) {
+            record.wait_semaphore[w] = info.wait_semas[w];
+            record.wait_value[w] = info.wait_ticks[w];
+        }
+    }
+    ImGui::Core::TextureManager::Submit();
+    WaitAsyncSubmits();
+    vk::Result submit_result;
+    {
+        std::scoped_lock queue_lk{g_graphics_queue_mutex};
+        submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+    }
+    if (submit_result == vk::Result::eErrorDeviceLost) {
+        std::printf("Device lost during submit\n");
+        DeviceLost(instance.GetDevice());
+    }
+
+    work_semaphore.Refresh();
+    if (busy_timed) {
+        busy->pending.push_back({u32(busy->open), signal_value, std::chrono::steady_clock::now()});
+        busy->open = -1;
+        const auto now = std::chrono::steady_clock::now();
+        std::erase_if(busy->pending, [&](const GpuBusy::Pending& p) {
+            if (!work_semaphore.IsFree(p.tick)) {
+                return false;
+            }
+            u64 stamps[2]{};
+            if (busy->device.getQueryPoolResults(busy->pool, p.slot * 2, 2, sizeof(stamps), stamps,
+                                                 sizeof(u64), vk::QueryResultFlagBits::e64) ==
+                    vk::Result::eSuccess &&
+                stamps[1] >= stamps[0]) {
+                busy->spans.emplace_back(stamps[0], stamps[1]);
+                // GPU time between segment marks, charged to the label active before each.
+                const auto& block = busy->blocks[p.slot];
+                const u32 count = std::min(block.count, GpuBusy::Marks);
+                std::array<u64, GpuBusy::Marks> marks{};
+                if (count == 0 ||
+                    busy->device.getQueryPoolResults(busy->marks, p.slot * GpuBusy::Marks, count,
+                                                     count * sizeof(u64), marks.data(), sizeof(u64),
+                                                     vk::QueryResultFlagBits::e64) ==
+                        vk::Result::eSuccess) {
+                    u64 previous = stamps[0];
+                    u8 label = block.initial;
+                    for (u32 i = 0; i < count; ++i) {
+                        const u64 at = std::clamp(marks[i], previous, stamps[1]);
+                        busy->label_ns[label % GpuBusy::Labels] += (at - previous) * busy->period_ns;
+                        previous = at;
+                        label = block.labels[i];
+                    }
+                    busy->label_ns[label % GpuBusy::Labels] += (stamps[1] - previous) * busy->period_ns;
+                }
+            }
+            busy->latency_ms += std::chrono::duration<double, std::milli>(now - p.submitted).count();
+            ++busy->latency_count;
+            return true;
+        });
+        if (now - busy->window >= std::chrono::seconds(5) && busy->spans.size() > 2) {
+            auto& spans = busy->spans;
+            std::ranges::sort(spans);
+            u64 covered = 0, cursor = spans.front().first, gaps_over_1ms = 0, gap_total = 0;
+            for (const auto& [start, end] : spans) {
+                if (start > cursor) {
+                    const u64 gap = start - cursor;
+                    gap_total += gap;
+                    gaps_over_1ms += gap * busy->period_ns >= 1e6;
+                }
+                if (end > cursor) {
+                    covered += end - std::max(start, cursor);
+                    cursor = end;
+                }
+            }
+            const double total = double(cursor - spans.front().first);
+            std::printf("GPU busy (5 s): %.1f%% of the time, %zu command buffers, idle gaps %.2f "
+                        "ms/s (%llu over 1 ms); upper bound on submit-to-done %.2f ms\n",
+                        100.0 * covered / total, spans.size(),
+                        gap_total * busy->period_ns / 1e6 / (total * busy->period_ns / 1e9),
+                        (unsigned long long)gaps_over_1ms,
+                        busy->latency_ms / std::max<u64>(busy->latency_count, 1));
+            const double seconds = total * busy->period_ns / 1e9;
+            std::printf("GPU busy by guest queue (ms/s):");
+            for (u32 l = 0; l < GpuBusy::Labels; ++l) {
+                if (busy->label_ns[l] > 0) {
+                    std::printf(" q%u %.1f", l, busy->label_ns[l] / 1e6 / seconds);
+                }
+            }
+            std::printf("%s\n", busy->overflowed ? " (some marks dropped)" : "");
+            busy->label_ns = {};
+            busy->overflowed = 0;
+            spans.clear();
+            busy->latency_ms = 0;
+            busy->latency_count = 0;
+            busy->window = now;
+        }
+    }
+    AllocateWorkerCommandBuffers();
+
+    // Apply pending operations
+    PopPendingOperations();
+}
+
+void Scheduler::PriorityPendingOpsThread(std::stop_token stoken) {
+    Common::SetCurrentThreadName("shadPS4:GpuSchedPriorityPendingOpsRunner");
+
+    while (!stoken.stop_requested()) {
+        PendingOp op;
+        {
+            std::unique_lock lk(priority_pending_ops_mutex);
+            priority_pending_ops_cv.wait(lk, stoken,
+                                         [this] { return !priority_pending_ops.empty(); });
+            if (stoken.stop_requested()) {
+                break;
+            }
+
+            op = std::move(priority_pending_ops.front());
+            priority_pending_ops.pop();
+        }
+
+        work_semaphore.Wait(op.gpu_tick);
+        if (stoken.stop_requested()) {
+            break;
+        }
+
+        op.callback();
+    }
+}
+
+void DynamicState::Commit(const Instance& instance, const vk::CommandBuffer& cmdbuf) {
+    // A null command buffer only updates the dirty flags, exactly as recording would.
+    CommitWith(instance.IsDepthBoundsSupported(), instance.IsDynamicColorWriteMaskSupported(),
+               instance.IsAttachmentFeedbackLoopLayoutSupported(), [&](auto&& command) {
+                   if (cmdbuf) {
+                       command(cmdbuf);
+                   }
+               });
+}
+
+} // namespace Vulkan

@@ -1,0 +1,152 @@
+# Builds the engine with MSYS2 CLANG64 and packages Uncharted-windows (launcher, Python, runtime and
+# DLLs; no game files) on a self-hosted Windows runner. Actions -> Build Windows -> Run workflow asks
+# for the version (X.Y.Z): the package carries it (its VERSION, which the launcher's updates compare)
+# and, with "Publish" ticked, it is released as tag vX.Y.Z with tools/release-notes/vX.Y.Z.md (else
+# the newest section of CHANGELOG.md).
+#
+# The runner's PC needs MSYS2 with the CLANG64 packages of gow3_pc/packaging/windows/README.md
+# (MSYS2_ROOT, default C:\msys64) and a Windows Python 3.10+ with Pillow (PYTHON_HOME). The
+# repository variable ELDORADO_AA_FROM may name an installed package folder to take the DLAA and
+# FSR 4 files from (tools/copy_aa_files.sh); without it tools/fetch_aa_files.sh downloads them.
+name: Build Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (X.Y.Z, e.g. 1.0.0)'
+        required: true
+        type: string
+      publish:
+        description: 'Publish it as release vX.Y.Z'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write  # the release of a tag
+
+concurrency:
+  group: build-windows
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 150
+    env:
+      MSYSTEM: CLANG64
+      CHERE_INVOKING: '1'  # the login shell stays in the checkout
+      MSYS2_ROOT: ${{ vars.MSYS2_ROOT || 'C:/msys64' }}
+      ELDORADO_AA_FROM: ${{ vars.ELDORADO_AA_FROM }}
+    defaults:
+      run:
+        shell: C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"
+    steps:
+      # Sources, patches and submodules keep the LF endings they are committed with (git apply);
+      # long paths: FidelityFX's shader files pass Windows' 260-character limit.
+      - name: Git settings
+        shell: pwsh
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # The Windows Python that the package carries (Tkinter and Pillow for the launcher).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install Pillow
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check pillow iced-x86
+
+      - name: MSYS2 packages
+        run: |
+          pacman -S --needed --noconfirm git patch curl \
+            mingw-w64-clang-x86_64-{toolchain,cmake,ninja,pkgconf,python} \
+            mingw-w64-clang-x86_64-{vulkan-headers,vulkan-loader,vulkan-memory-allocator,glslang} \
+            mingw-w64-clang-x86_64-{sdl3,fmt,boost,robin-map,xxhash,ffmpeg,zydis} \
+            mingw-w64-clang-x86_64-{spirv-tools,spirv-headers,spirv-cross} \n            mingw-w64-clang-x86_64-{protobuf,openssl,zlib,miniupnpc,nlohmann-json}
+
+      - name: Build the engine
+        run: |
+          git config --global --add safe.directory '*'
+          export MSYS2_ROOT=$(cygpath -u "$MSYS2_ROOT")
+          BB_PGO=use gow3_pc/build.sh  # the profile in gow3_pc/pgo (about 20% faster)
+
+      # NVIDIA DLAA (the DLSS DLL and its bridge) and the FSR 4 native model; without them the
+      # package simply offers TAA and FSR 3.1.
+      - name: Anti-aliasing files (DLAA, FSR 4)
+        continue-on-error: true
+        run: |
+          export MSYS2_ROOT=$(cygpath -u "$MSYS2_ROOT")
+          if [[ -n ${ELDORADO_AA_FROM:-} ]]; then
+            tools/copy_aa_files.sh "$(cygpath -u "$ELDORADO_AA_FROM")"
+          else
+            tools/fetch_aa_files.sh
+          fi
+
+      # The version typed in "Run workflow": checked, then written where the package takes it from.
+      - name: Version
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = $env:VERSION.Trim().TrimStart('v')
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Version '$env:VERSION' is not X.Y.Z" }
+          if ('${{ inputs.publish }}' -eq 'true') {
+            gh release view "v$version" -R $env:GITHUB_REPOSITORY 2>$null
+            if ($LASTEXITCODE -eq 0) { throw "Release v$version exists already" }
+          }
+          [IO.File]::WriteAllText("tools/VERSION", "$version`n")
+          "VERSION=$version" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          Write-Output "Version $version"
+          $global:LASTEXITCODE = 0
+
+      - name: Package
+        run: |
+          export MSYS2_ROOT=$(cygpath -u "$MSYS2_ROOT")
+          export PYTHON_HOME=$(cygpath -u "$pythonLocation")
+          tools/package_windows.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Uncharted-windows
+          path: dist/Uncharted-windows/
+          if-no-files-found: error
+
+      # Tag vX.Y.Z on the commit built, and the release with the zip. GitHub records the zip's SHA-256,
+      # which the launcher checks before installing it. Notes: tools/release-notes/vX.Y.Z.md, else the
+      # newest section of CHANGELOG.md.
+      - name: Publish the release
+        if: inputs.publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:VERSION"
+          $notes = "tools/release-notes/$tag.md"
+          if (-not (Test-Path $notes)) {
+            $notes = "dist/release-notes.md"
+            $lines = Get-Content CHANGELOG.md -Encoding utf8
+            $start = [Array]::FindIndex($lines, [Predicate[string]]{ param($l) $l -like '## *' })
+            if ($start -lt 0) { throw "No release notes: add tools/release-notes/$tag.md" }
+            $end = [Array]::FindIndex($lines, $start + 1, [Predicate[string]]{ param($l) $l -like '## *' })
+            if ($end -lt 0) { $end = $lines.Length }
+            $lines[($start + 1)..($end - 1)] | Out-File -Encoding utf8 $notes
+          }
+          gh release create $tag dist/Uncharted-windows.zip --target $env:GITHUB_SHA `
+            --title "El Dorado Launcher $env:VERSION" --notes-file $notes --latest
+
+      - name: Upload the build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: gow3_pc/out/gpu-build.log
+          if-no-files-found: ignore
