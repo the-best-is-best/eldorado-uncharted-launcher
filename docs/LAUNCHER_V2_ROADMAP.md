@@ -1,0 +1,225 @@
+# El Dorado Launcher v2 — roadmap
+
+Branch: `launcher-v2`. Goal: a new launcher written from scratch for El Dorado, in **Python + PySide6 (Qt Quick /
+QML)**, with no code from the legacy launcher, and at least every feature the released launcher has.
+
+Only the launcher (the window outside the game) changes. The engine (`gow3_pc/`, `bb-probe.exe`), the game start
+script (`tools/probe_uncharted.py`) and the update installer (`tools/apply_update.py`) are kept and called the same way.
+
+The released launcher (Tkinter) stays on `main` and keeps shipping until v2 reaches parity. On this branch it lives
+in `legacy/launcher-tk/` as a reference only (see its README).
+
+---
+
+## 1. Decisions
+
+| Topic | Decision | Why |
+|---|---|---|
+| UI toolkit | PySide6 6.x (Qt Quick + QML, Qt Quick Controls Basic style) | GPU-drawn UI, animations, scaling and controller/keyboard focus without drawing by hand; LGPL, official Qt binding |
+| Language | Python 3.12+ (the packaged Windows Python, as today) | The start script, saves, trophies, Steam, updater logic is Python already |
+| Layout | `launcher/` = new code; `legacy/launcher-tk/` = old code (read only) | One place for the new launcher; the old one is not run on this branch |
+| Package growth | About +30 MB zipped, +80 MB unpacked (PySide6 Essentials trimmed to QtCore, QtGui, QtQml, QtQuick, Controls Basic, the Windows platform plugin) | Measured: the full PySide6 Essentials wheel is 208 MB unpacked |
+| Settings file | Same `%APPDATA%\El Dorado Launcher\launcher.json` and per-game `analysis\uncharted-user\probe-uN.ini` | Players keep their settings across the switch |
+| Engine contract | Unchanged (section 3) | The game starts exactly as today |
+
+## 2. Target structure
+
+```
+launcher/
+  main.py                 entry point: single instance, Qt app, loads the QML
+  core/                   no Qt imports; unit-tested
+    paths.py              ROOT, USER_DIR, config locations
+    config.py             launcher.json + probe-uN.ini read/write, migrations (versions)
+    games.py              the three games, executables, edition (Arabic/original from param.sfo), version 1.02 check
+    gpu.py                GPU/VRAM detection for the Recommended preset
+    presets.py            presets and the Recommended choice
+    saves.py              list, delete (to savedata-deleted), restore, delete for good, backups list/restore
+    trophies.py           wraps gow3_pc/scripts/trophies.py (cache, unlocks, progress)
+    gallery.py            screenshots per game, delete to Recycle Bin
+    stats.py              eldorado-stats.json (play time, last played, average FPS)
+    launch.py             builds the UNCHARTED_* environment, starts/stops tools/probe_uncharted.py, reads its output
+    updater.py            GitHub releases check, download, stage, hand-off to tools/apply_update.py
+    shortcuts.py          desktop shortcuts per game (icons from the player's trophy packs)
+    steam.py              non-Steam shortcuts (ported from legacy steam_library.py logic, rewritten)
+    input_map.py          key/mouse/pad bindings model for probe-uN.ini (key_map, mouse_map, pad_map)
+  ui/
+    bridge.py             QObject models exposed to QML (games, saves, trophies, settings, status)
+    gamepad.py            controller input for the UI (SDL3 via ctypes, as the engine ships SDL3.dll)
+    qml/                  Main.qml, screens (Games, Saves, Trophies, Gallery, Settings, Loading), components
+    assets/               El Dorado's own art only (no game or Sony files)
+tests/
+  test_core_*.py          one file per core module, run in CI
+```
+
+Rules: `core/` never imports Qt (testable without a display); QML holds no logic beyond presentation; every file
+written by the launcher is written through a temporary file and renamed (as today).
+
+## 3. Engine contract (must stay identical)
+
+The launcher starts the game with:
+
+```
+python\python.exe -u tools\probe_uncharted.py --boot --seconds 0 --executable <eboot.bin|big2-ps4_Shipping.elf|big3-ps4_Shipping.elf> --game <game folder>
+```
+
+and reads its output line by line (`Log:`, `Collection: switching to <exe>`, `Discord:`, engine errors). It writes
+before each start:
+
+- `analysis\uncharted-user\probe-u1.ini`, `-u2`, `-u3`: display_mode, vsync, fps_limit, frames_queued, upscaler, fsr1,
+  rcas, rcas_strength, frame_gen, show_fps and the overlay_* keys, prompts, menu_shortcut, key_map, mouse_map, pad_map,
+  mouse_sens, mouse_aim_sens.
+- Environment: `UNCHARTED_RESOLUTION_<G>`, `UNCHARTED_OUTPUT_RES_<G>`, `UNCHARTED_MULTITHREADED_<G>`,
+  `UNCHARTED_SAVE_PROFILE_<G>`, `UNCHARTED_LANGUAGE`, `UNCHARTED_ANISOTROPY`, `UNCHARTED_NO_DOF`, `UNCHARTED_UNLOCK`,
+  `UNCHARTED_CHEATS` (skipintro, invincible, ammo, grenades, treasures, rewards), `UNCHARTED_JOB_SLEEP`,
+  `UNCHARTED_DIAGNOSTICS`; `UNCHARTED_DISCORD=0` turns Discord presence off.
+
+Not carried over (no effect with the current engine; verified 5 Nov 2026): `UNCHARTED_SPEAKERS`,
+`UNCHARTED_TORCH_FORWARD`, `UNCHARTED_HIRES_SHADOWS`, `UNCHARTED_FULL_RES_TEXTURES`, `UNCHARTED_UNLOCK_REWARDS`
+(the rewards cheat replaced it), the `UNCHARTED_NET_*` LAN settings, and the Multiplayer page. Before phase 4, each
+remaining Performance and Display setting is checked the same way (does `probe_uncharted.py` or the engine read it);
+whatever is read by nobody is dropped, not copied.
+
+Stopping a game: terminate the start script; it owns a Windows job that ends the game with it.
+
+## 4. Phases
+
+Each phase ends with its acceptance checks passing; nothing ships from this branch before phase 6.
+
+### Phase 0 — Skeleton (1 day)
+- `launcher/main.py`, an empty QML window in El Dorado's colors, single instance (named mutex, bring the open window
+  to the front), DPI scaling, the app icon, the taskbar identity `ElDorado.Uncharted.Launcher`.
+- Packaging proof: `tools/package_windows.sh` builds a zip with the trimmed PySide6; measure size and cold start time.
+- Accept: the zip starts on a clean Windows 10/11 PC without Python installed; cold start < 2 s; size within the +35 MB budget.
+
+### Phase 1 — Core (3 days)
+- Write every `core/` module listed in section 2 from the behavior of the legacy launcher (read, not copied), with
+  tests: config read/write and migrations (an existing launcher.json from 1.0.0 loads unchanged), presets and
+  Recommended, edition detection, saves (delete/restore/purge/backups on a temp copy), trophies progress, stats,
+  launch environment (compare the built environment and ini files against what the legacy launcher writes for the
+  same settings), updater version compare and staging, shortcuts and Steam (VDF round trip tests exist in
+  `tools/test_steam_library.py`; port them).
+- Accept: `python -m pytest tests` green; the launch environment and ini output match the legacy launcher's for the
+  three games and all presets.
+
+### Phase 2 — Home screen (3 days)
+- Games: the three games, the background from the latest save picture or the edition's art, Continue (latest save,
+  chapter, play time, treasures), play stats, trophies %, PLAY/STOP, the expedition log (latest saves).
+- Loading overlay after PLAY until the game window opens (the engine shows its own loading screen inside the game).
+- Status line from the start script's output; crash/exit messages.
+- Keyboard, mouse and controller navigation everywhere, with key hints for the device in use.
+- Accept: a game starts, stops and restarts from the hub; switching games from the Collection menu is reported.
+
+### Phase 3 — Saves, Trophies, Gallery (2 days)
+- Saves: list with pictures; delete (twice), Deleted saves (restore, delete for good), Backups (restore twice; only
+  backups of saves that exist).
+- Trophies: progress, per-grade counts, the list with icons from the player's own trophy pack.
+- Gallery: F12 screenshots per game, open, open folder, delete to the Recycle Bin.
+- Accept: every action works on a copy of a real save folder; nothing is ever deleted outright except "delete for good".
+
+### Phase 4 — Settings (4 days)
+- Quick setup (presets with Recommended), Display, Performance, Controls (key, mouse and controller binding capture,
+  prompt style, sensitivity, invert, vibration), Cheats (as listed in section 3, all off by default, "made for update
+  1.02"), Advanced (save profile, language, texture filtering, depth of field, in-game menu shortcut, updates,
+  performance log, shortcuts, Steam, game folder, game update folder/.pkg, check game files, clear shader cache, reset).
+- Settings are per game where they are today; changes are saved at once.
+- Accept: every setting written by v2 produces the same probe-uN.ini / environment as the legacy launcher (tests from
+  phase 1 extended); binding capture works for keyboard, mouse buttons/wheel and controller.
+
+### Phase 5 — Updates and first start (2 days)
+- Update check at start (optional), download with progress, staging, hand-off to `tools/apply_update.py`, restart.
+- First start: choose the game folder, apply Recommended to all games, desktop shortcuts offer.
+- Settings migration from the legacy launcher's launcher.json (same file, version bump only).
+- Accept: an installed 1.0.x package updates to a v2 build and back to the release channel without losing settings or saves.
+
+### Phase 6 — Parity, switch, release (2 days)
+- Go through the parity checklist (section 5) on the user's PC with both game editions.
+- Package and workflow: `package_windows.sh` copies `launcher/` (new) and PySide6; `updater.py` REQUIRED lists the
+  new entry point; `tools/windows_starter` starts `launcher\main.py`.
+- Delete `legacy/launcher-tk/`; merge `launcher-v2` into `main`; release as 2.0.0.
+
+Estimate: about 17 working days including testing.
+
+## 5. Parity checklist (from the released launcher, 5 Nov 2026)
+
+Home: game list (I/II/III) · background (save picture / edition art) · Continue info · play stats line · trophies % ·
+PLAY/STOP · expedition log · loading overlay · status line · rail: Saves, Trophies, Gallery, Settings, Update (when
+available), Logs, Quit · controller/keyboard/mouse navigation · key hints per device.
+
+Saves: list · delete twice · Deleted saves: restore, delete for good · Backups: restore twice, only for existing saves.
+
+Trophies: % and grade counts · list with earned dates and locked/hidden entries · icons from the trophy pack.
+
+Gallery: grid per game · open · open folder · delete to Recycle Bin.
+
+Settings → Quick setup: Recommended (GPU-based), iGPU, Low, Medium, High, Ultra; per-game note.
+Settings → Display: aspect ratio, resolution, upscaling (off/FSR 1/FSR 3.1/FSR 4/DLSS, by GPU), upscaling quality,
+anti-aliasing, display mode, VSync, frame generation, sharpening, performance counter (items, corner, layout, size,
+background).
+Settings → Performance: frame rate limit, frames queued, multithreaded rendering (on by default), idle game threads
+(plus any other setting confirmed read by the engine).
+Settings → Controls: key/mouse bindings by group, controller bindings, button prompt style, mouse sensitivity, aim
+sensitivity, vertical sensitivity, invert, vibration, reset.
+Settings → Cheats: skip intro, invincible, infinite ammo, infinite grenades, give all treasures, unlock all rewards,
+unlock all chapters.
+Settings → Advanced: save profile, language (+voices), texture filtering, no depth of field, in-game menu shortcut,
+check for updates, performance log, desktop/game shortcuts, add to Steam (collection / per game), open log/save
+folders, change game folder, install game from .pkg, check game files, game update folder / .pkg, check for updates,
+clear shader cache, reset all settings, credits.
+
+App: single instance · El Dorado icon and taskbar identity · settings migration · update flow · Discord presence
+(started by the start script, nothing in the launcher) · no game or Sony files shipped.
+
+## 6. Risks
+
+- **PySide6 size or start time** over budget → trim plugins/QML modules further; measured in phase 0 before anything else.
+- **Controller input in Qt** (Qt has no gamepad module in Qt 6) → SDL3 via ctypes, as the engine already ships SDL3.dll.
+- **Behavior drift** from the legacy launcher (a setting written differently) → phase 1 comparison tests against the
+  legacy output for every preset and game.
+- **Engine changes on `main`** during the work → merge `main` into `launcher-v2` weekly; only `tools/probe_uncharted.py`
+  and the engine are shared, the contract in section 3 is updated with them.
+
+---
+
+## 7. Engine performance track (separate from the launcher; done on `main`)
+
+The launcher rewrite does not change game FPS. Game speed is the engine's (`gow3_pc/`). This track runs on `main`
+next to the launcher work. Rule: **only changes with a measured gain ship; no feature is removed or turned off**
+(save pictures, backups, screenshots, trophies, cheats, prompts, multithreaded rendering, mouse on guns, Discord
+all stay as they are).
+
+### 7.1 Where the time goes (measured)
+- Heavy scenes (Uncharted 1 jungle): 3,700–4,000 draws per frame at about 8 µs each on one GPU command thread →
+  28–35 FPS on an i3-class CPU; the GPU is not the limit there.
+- Multithreaded rendering (`BB_DRAW_PIPE`, stage A/B/C) is already on by default for all games (launcher config 9).
+
+### 7.2 Step 1 — new PGO profile for our code (guaranteed; do first)
+- Why: Mevlock measured LTO + PGO at −4.8% GPU-thread time per draw (7.72 → 7.35 µs, 73.2 → 76.3 FPS, three runs,
+  >800 draws/frame; `mevlock-src/docs/parallel_gpu.md`). Our `pgo/merged.profdata` (4 Nov 2026) was made from
+  Mevlock's 0.3.6.43 code; our ports changed many functions, and builds report them as "changed / new since the
+  profile" — those get no PGO at all now.
+- How:
+  1. `BB_PGO=generate ./build.sh` (instrumented build; writes `pgo/*.profraw` every 30 s while the game runs).
+  2. Play with that build: each game, about 5 minutes of real play (U1 jungle, U2 convoy/streets, U3 desert or
+     chateau), plus the save list, a save, the in-game menu. The instrumented build is slower; that is expected.
+  3. `llvm-profdata merge -o pgo/merged.profdata pgo/*.profraw`.
+  4. `BB_PGO=use ./build.sh`; the build log must show (almost) no "changed / new since the profile" functions.
+- Accept: same spot, same settings (1080p, DLSS Quality, 60 FPS limit off for the test), U1 jungle `Frame stats`
+  in boot.log: µs/draw and FPS not worse than before; normally 3–5% better.
+- Time: about 30–40 min build + 20–30 min play + 30–40 min build → **about 2 hours**, half of it the player's.
+- Redo it after any large engine change (a merge from Mevlock, a big port).
+
+### 7.3 Step 2 — LTO on, A/B tested (likely, not guaranteed)
+- Mevlock: LTO alone −1.8% µs/draw once (`parallel_gpu.md`), "no gain" another time (`PERFORMANCE_2026-10-18.md`).
+- How: `BB_LTO=ON BB_PGO=use ./build.sh`; compare against step 1's build in the same spot (three runs each).
+  Keep it only if it wins in all three runs.
+- Time: about 1 hour build + 15 min test.
+
+### 7.4 Not now (no measured gain, or risk)
+- `-O3` (`BB_OPT=3`): not measured; can grow code and lose. Only as an A/B like step 2, after it.
+- A different memory allocator (mimalloc): not measured in this engine; touches every allocation. Later, A/B only.
+- Lower settings or turning features off: not part of this track (the player chooses settings in the launcher).
+- Frame generation: already in the engine and the launcher (Display); it adds frames, not CPU speed.
+
+### 7.5 Order
+1. Step 1 (PGO for our code). 2. Step 2 (LTO A/B). 3. Commit the new profile with the engine change it was made for.
+4. Later, one item of 7.4 at a time, each with the same A/B.
