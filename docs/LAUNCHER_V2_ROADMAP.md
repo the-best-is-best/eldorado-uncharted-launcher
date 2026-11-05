@@ -54,6 +54,24 @@ tests/
 Rules: `core/` never imports Qt (testable without a display); QML holds no logic beyond presentation; every file
 written by the launcher is written through a temporary file and renamed (as today).
 
+### 2.1 Code rules (clean code, no copy-paste)
+- **Written new, not copied.** The legacy launcher is read to learn *what* a feature does; the code is written again
+  in the new structure. No function, class or block is pasted from `legacy/launcher-tk/`.
+- **One job per module and per class.** A module owns one topic (saves, trophies, launch...). The UI never
+  touches files or processes itself; it calls `core/`.
+- **Layers, one direction only:** QML → `ui/bridge.py` → `core/*` → files / processes. `core/` modules do not
+  import `ui/`; `core/` modules depend on each other only through clear functions (no shared globals).
+- **No duplicated code.** Something needed twice becomes one function (for example one safe-write helper, one
+  path helper, one game table). QML repeats become components (Button, Card, Toggle, KeyHint, Page).
+- **Data in one place.** The three games (names, executables, ids, keys) are one table in `core/games.py`;
+  settings defaults and their limits are one table in `core/config.py`; colors and fonts are one QML theme file.
+- **Small functions, clear names, type hints** on every public function; dataclasses for records (Game, Save,
+  Trophy, Backup, Settings) instead of loose dicts.
+- **Errors are handled where they can be shown:** `core/` raises clear exceptions; the bridge turns them into a
+  message for the player. No silent `except: pass`.
+- **Checks in CI:** `ruff` (lint + format), `mypy` on `core/`, `pytest`; a pull request does not merge with them red.
+- **Short comments** that say why, not what; one README per folder (`core/`, `ui/`, `qml/`) that says what lives there.
+
 ## 3. Engine contract (must stay identical)
 
 The launcher starts the game with:
