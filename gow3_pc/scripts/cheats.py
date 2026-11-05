@@ -80,6 +80,16 @@ for _code, _patches in REWARDS.items():
 # game's own "Infinite Grenades" switch, kept set by run.py (BB_POKE_U3).
 PATCHES[US['eboot.bin']]['grenades'] = (0x734a78, 'e8c319c1ff', NOP * 5)
 PATCHES[US['big2-ps4_Shipping.elf']]['grenades'] = (0x802273, 'e8a87d2e00', NOP * 5)
+# text<n> (El Dorado's "Arabic" language, 1.02 code): the games load text1/ps4/<n>.common whatever the console language.
+# The text loader (text.cpp, "%s/%s%i.%s" with "build/main/text1/ps4/") reads the file number from the language's
+# table entry: "mov eax, esi; imul rax, rax, 0x38; lea rdx, [table]; mov r9d, [rdx+rax+0x14]" becomes
+# "mov r9d, <n>" (rdx and rax are set again right after). Fan translations replace one file (Arabic: file 2).
+TEXT_FILE_LOADS = {US['eboot.bin']: (0x5ca861, '89f0486bc038488d15eaccab00448b4c0214'),
+                   US['big2-ps4_Shipping.elf']: (0xcdd9d1, '89f0486bc038488d153a337700448b4c0214'),
+                   US['big3-ps4_Shipping.elf']: (0xf328b1, '89f0486bc038488d15daa8b900448b4c0214')}
+for _code, (_address, _original) in TEXT_FILE_LOADS.items():
+    for _number in range(2, 24):
+        PATCHES[_code][f'text{_number}'] = (_address, _original, f'41b9{_number:02x}000000' + NOP * 12)
 
 
 def code_hash(data):

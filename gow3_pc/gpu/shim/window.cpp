@@ -7,6 +7,8 @@
 #include "common/logging/log.h"
 #include "sdl_window.h"
 #include "bbport_overlay.h"
+#include "bbport_png.h"
+#include "bbport_loading_icon.h"
 #include "bbport_screenshot.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "video_core/texture_cache/button_prompts.h"
@@ -125,6 +127,9 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
     ASSERT_MSG(window, "Failed to create window: {}", SDL_GetError());
+    // El Dorado: the game's loading icon on the window and its taskbar button, once taken from a loading screen
+    // (bbport_loading_icon.h); until then the executable's icon.
+    SetLoadingIcon();
     // bbport: a game started from the collection menu (run.py sets BB_RAISE_WINDOW) opened behind
     // other windows, as the menu's process had ended: no input until the window was clicked.
     if (const char* raise = std::getenv("BB_RAISE_WINDOW"); raise && raise[0] == '1') {
@@ -183,7 +188,25 @@ void WindowSDL::UpdateTextTitle() {
     BbOverlay::SetTextEntry(text_active, text_prompt, text);
 }
 
+void WindowSDL::SetLoadingIcon() {
+    // The one taken from this player's game, else El Dorado's drawn one (BB_LOADING_ICON_DEFAULT).
+    const char* path = BbLoadingIcon::Path();
+    const char* drawn = std::getenv("BB_LOADING_ICON_DEFAULT");
+    BbPng::Image icon;
+    if (!(path && BbPng::LoadRgba(path, icon, 256, 256)) && !(drawn && BbPng::LoadRgba(drawn, icon, 256, 256))) {
+        return;
+    }
+    if (SDL_Surface* surface =
+            SDL_CreateSurfaceFrom(icon.width, icon.height, SDL_PIXELFORMAT_RGBA32, icon.rgba.data(), icon.width * 4)) {
+        SDL_SetWindowIcon(window, surface); // SDL keeps its own copy
+        SDL_DestroySurface(surface);
+    }
+}
+
 bool WindowSDL::PollEvents() {
+    if (BbLoadingIcon::TakeNew()) { // taken from this start's first loading screen
+        SetLoadingIcon();
+    }
     {
         std::scoped_lock lock{text_mutex};
         if (text_requested) { // SDL text input must be toggled from the window thread

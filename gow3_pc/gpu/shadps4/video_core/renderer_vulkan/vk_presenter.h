@@ -182,6 +182,7 @@ private:
         vk::Fence pending{}; ///< present_done of the frame that copied it; null: nothing to read
         bool failed = false; ///< not supported or not created: no pictures
         bool probe_only = false; ///< the pending picture is only a look for the loading screen
+        bool icon_only = false;  ///< El Dorado: only a look for the game's loading icon (bbport_loading_icon.h)
     } thumbnail;
     void CaptureThumbnail(vk::CommandBuffer cmdbuf, const Frame* frame);
     void ReadThumbnail();

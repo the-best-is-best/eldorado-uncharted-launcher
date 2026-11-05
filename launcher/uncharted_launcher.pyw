@@ -269,7 +269,10 @@ LANGUAGES = [("1", "English (US)"), ("18", "English (UK)"), ("2", "Français"), 
              ("7", "Português (Portugal)"), ("17", "Português (Brasil)"), ("6", "Nederlands"),
              ("14", "Dansk"), ("15", "Norsk"), ("13", "Svenska"), ("12", "Suomi"), ("16", "Polski"),
              ("23", "Čeština"), ("25", "Ελληνικά"), ("8", "Русский"), ("19", "Türkçe"),
-             ("0", "日本語"), ("9", "한국어"), ("10", "中文 (繁體)")]
+             ("0", "日本語"), ("9", "한국어"), ("10", "中文 (繁體)"),
+             # Not a language of the game: an Arabic translation (a fan update) in place of one of the above;
+             # tools/arabic_language.py finds which one at each start.
+             ("ar", "Arabic (translation)")]
 SPEECH_PACKS = {"english": ("1", "18"), "french": ("2",), "german": ("4",), "italian": ("5",),
                 "spanish": ("3", "20"), "portuguese": ("7", "17"), "dutch": ("6",), "danish": ("14",),
                 "norwegian": ("15",), "swedish": ("13",), "finnish": ("12",), "polish": ("16",),
@@ -286,7 +289,7 @@ def voice_languages(game_dir):
             ids.update(SPEECH_PACKS.get(pack.name.removesuffix("_ps4.psarc").lower(), ()))
     return ids
 GAME_KEYS = ("u1", "u2", "u3")
-GAME_SETTING_DEFAULTS = {"preset": "medium", "resolution": "1920x1080", "aspect": "16:9", "multithreaded": True, "save_profile": "1",
+GAME_SETTING_DEFAULTS = {"preset": "medium", "resolution": "1920x1080", "aspect": "16:9", "multithreaded": True, "save_profile": "1", "language": "1",
                          "async_readback": False, "controls": None, "mouse": True, "mouse_sens": "1.0",
                          "mouse_invert": False, "prompts": "auto", "mouse_aim_sens": "1.0",
                          "mouse_vertical": "1.0", "mouse_invert_x": False, "vibration": True}
@@ -1965,6 +1968,8 @@ class Launcher:
             self.widgets["multithreaded"].set(settings["multithreaded"])
         if isinstance(self.widgets.get("save_profile"), Segmented):
             self.widgets["save_profile"].set(str(settings.get("save_profile", "1")))
+        if isinstance(self.widgets.get("language"), Dropdown):  # each game its own language
+            self.widgets["language"].set(str(settings.get("language", "1")))
         if isinstance(self.widgets.get("mouse"), Toggle):
             self.widgets["mouse"].set(settings.get("mouse", True))
             self.widgets["mouse_sens"].set(settings.get("mouse_sens", "1.0"))
@@ -2840,11 +2845,12 @@ class Launcher:
         def language(parent):
             voices = voice_languages(self.game_dir())
             options = [(code, label + ("  (+ voices)" if code in voices else "")) for code, label in LANGUAGES]
-            return Dropdown(parent, options, self.config.get("language", "1"),
-                            lambda v: self.change_config("language", v), self.f_small)
+            return Dropdown(parent, options, str(self.game_settings().get("language", "1")),
+                            lambda v: self.change_game_setting("language", v), self.f_small)
         self.widgets["language"] = self.row(game, "Language",
-            "Menus and subtitles in another language: pick it here, then press Square in a game's main "
-            "menu to switch. Languages marked + voices are also spoken in your copy of the game.", language)
+            "Menus and subtitles of this game in another language (each game has its own): pick it here, then "
+            "press Square in the game's main menu to switch. Languages marked + voices are also spoken in your "
+            "copy of the game.", language)
 
 
 
@@ -3474,7 +3480,7 @@ class Launcher:
         env["UNCHARTED_JOB_SLEEP"] = {"off": "0", "on": "1"}.get(str(self.config.get("job_sleep", "auto")), "auto")
         # renderer_vulkan/vk_instance.cpp: 1 on, auto (cards of 4.5 GiB or less), anything else off
         env["GOW3_LOW_VRAM"] = {"on": "1", "auto": "auto"}.get(str(self.config.get("low_vram", "off")), "0")
-        env["UNCHARTED_LANGUAGE"] = str(self.config.get("language", "1"))
+        env["UNCHARTED_LANGUAGE"] = str(self.game_settings().get("language", "1"))
         env["UNCHARTED_SPEAKERS"] = str(self.config.get("speakers", "auto"))
         env["UNCHARTED_U3_EXPOSURE"] = str(self.config.get("u3_exposure", "0"))
         env["UNCHARTED_ANISOTROPY"] = str(self.config.get("anisotropy", "0"))
@@ -3504,6 +3510,7 @@ class Launcher:
                 env.pop(f"UNCHARTED_OUTPUT_RES_{key.upper()}", None)
             env[f"UNCHARTED_MULTITHREADED_{key.upper()}"] = "1" if settings["multithreaded"] else "0"
             env[f"UNCHARTED_SAVE_PROFILE_{key.upper()}"] = str(settings.get("save_profile", "1"))
+            env[f"UNCHARTED_LANGUAGE_{key.upper()}"] = str(settings.get("language", "1"))
             # Controls: in each game's settings file (save_controls), where its menu changes them.
         python = Path(sys.executable)
         if python.name.lower() == "pythonw.exe" and python.with_name("python.exe").exists():
