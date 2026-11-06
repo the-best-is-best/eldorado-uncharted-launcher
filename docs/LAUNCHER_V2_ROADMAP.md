@@ -87,9 +87,14 @@ before each start:
   rcas, rcas_strength, frame_gen, show_fps and the overlay_* keys, prompts, menu_shortcut, key_map, mouse_map, pad_map,
   mouse_sens, mouse_aim_sens.
 - Environment: `UNCHARTED_RESOLUTION_<G>`, `UNCHARTED_OUTPUT_RES_<G>`, `UNCHARTED_MULTITHREADED_<G>`,
-  `UNCHARTED_SAVE_PROFILE_<G>`, `UNCHARTED_LANGUAGE`, `UNCHARTED_ANISOTROPY`, `UNCHARTED_NO_DOF`, `UNCHARTED_UNLOCK`,
+  `UNCHARTED_SAVE_PROFILE_<G>`, `UNCHARTED_LANGUAGE_<G>` (each game its own: a PS4 language id, or `ar` = the
+  Arabic translation, found by `tools/arabic_language.py`), `UNCHARTED_LANGUAGE` (the selected game's, kept for old
+  scripts), `UNCHARTED_ANISOTROPY`, `UNCHARTED_NO_DOF`, `UNCHARTED_UNLOCK`,
   `UNCHARTED_CHEATS` (skipintro, invincible, ammo, grenades, treasures, rewards), `UNCHARTED_JOB_SLEEP`,
-  `UNCHARTED_DIAGNOSTICS`; `UNCHARTED_DISCORD=0` turns Discord presence off.
+  `UNCHARTED_DIAGNOSTICS`, `UNCHARTED_UPDATE` (a chosen update folder; else a `<game folder>-patch` next to the game
+  is found and laid over it by `tools/game_update_view.py`); `UNCHARTED_DISCORD=0` turns Discord presence off.
+- The start script writes the first line of every boot.log as before, then `# language (launcher -> engine): ...`
+  with what each game got (the quickest check that a setting arrived).
 
 Not carried over (no effect with the current engine; verified 5 Nov 2026): `UNCHARTED_SPEAKERS`,
 `UNCHARTED_TORCH_FORWARD`, `UNCHARTED_HIRES_SHADOWS`, `UNCHARTED_FULL_RES_TEXTURES`, `UNCHARTED_UNLOCK_REWARDS`
@@ -98,6 +103,12 @@ remaining Performance and Display setting is checked the same way (does `probe_u
 whatever is read by nobody is dropped, not copied.
 
 Stopping a game: terminate the start script; it owns a Windows job that ends the game with it.
+
+While a game runs the launcher steps aside: its window is hidden once the game's window is up (title ending in
+" — El Dorado"), it draws nothing and only checks twice a second whether the start script still runs, and it comes
+back by itself however the game ends (its menus, the close question, a crash, STOP). Closing is asked inside the
+game, not by the launcher: the engine shows "Close the game?" for the window's close button, Alt+F4, the menus'
+Quit and the back button on the main menu (`BB_CONFIRM_CLOSE=0` turns it off).
 
 ## 4. Phases
 
@@ -122,7 +133,8 @@ Each phase ends with its acceptance checks passing; nothing ships from this bran
 ### Phase 2 — Home screen (3 days)
 - Games: the three games, the background from the latest save picture or the edition's art, Continue (latest save,
   chapter, play time, treasures), play stats, trophies %, PLAY/STOP, the expedition log (latest saves).
-- Loading overlay after PLAY until the game window opens (the engine shows its own loading screen inside the game).
+- Loading overlay after PLAY until the game window opens (the engine shows its own loading screen inside the game);
+  then the window hides and comes back when the game ends (section 3).
 - Status line from the start script's output; crash/exit messages.
 - Keyboard, mouse and controller navigation everywhere, with key hints for the device in use.
 - Accept: a game starts, stops and restarts from the hub; switching games from the Collection menu is reported.
@@ -137,7 +149,8 @@ Each phase ends with its acceptance checks passing; nothing ships from this bran
 ### Phase 4 — Settings (4 days)
 - Quick setup (presets with Recommended), Display, Performance, Controls (key, mouse and controller binding capture,
   prompt style, sensitivity, invert, vibration), Cheats (as listed in section 3, all off by default, "made for update
-  1.02"), Advanced (save profile, language, texture filtering, depth of field, in-game menu shortcut, updates,
+  1.02"), Advanced (save profile, language per game with "Arabic (translation)", texture filtering, depth of field,
+  in-game menu shortcut, updates,
   performance log, shortcuts, Steam, game folder, game update folder/.pkg, check game files, clear shader cache, reset).
 - Settings are per game where they are today; changes are saved at once.
 - Accept: every setting written by v2 produces the same probe-uN.ini / environment as the legacy launcher (tests from
@@ -155,7 +168,8 @@ Each phase ends with its acceptance checks passing; nothing ships from this bran
   new entry point; `tools/windows_starter` starts `launcher\main.py`.
 - Delete `legacy/launcher-tk/`; merge `launcher-v2` into `main`; release as 2.0.0.
 
-Estimate: about 17 working days including testing.
+Estimate: about 17 working days for one developer working by hand; the code of most phases takes a working
+session or two here, and the time that counts is the player's testing on a real PC after each phase.
 
 ## 5. Parity checklist (from the released launcher, 5 Nov 2026)
 
@@ -179,13 +193,20 @@ Settings → Controls: key/mouse bindings by group, controller bindings, button 
 sensitivity, vertical sensitivity, invert, vibration, reset.
 Settings → Cheats: skip intro, invincible, infinite ammo, infinite grenades, give all treasures, unlock all rewards,
 unlock all chapters.
-Settings → Advanced: save profile, language (+voices), texture filtering, no depth of field, in-game menu shortcut,
+Settings → Advanced: save profile, language per game (+voices; "Arabic (translation)" when the copy has one; the box
+shows the selected game's own), texture filtering, no depth of field, in-game menu shortcut,
 check for updates, performance log, desktop/game shortcuts, add to Steam (collection / per game), open log/save
 folders, change game folder, install game from .pkg, check game files, game update folder / .pkg, check for updates,
 clear shader cache, reset all settings, credits.
 
 App: single instance · El Dorado icon and taskbar identity · settings migration · update flow · Discord presence
-(started by the start script, nothing in the launcher) · no game or Sony files shipped.
+(started by the start script, nothing in the launcher) · no game or Sony files shipped · hidden while a game runs,
+back when it ends · game update (.pkg, e.g. the Arabic translation) installed and laid over the game.
+
+In the engine/start script (nothing to rebuild in the launcher, only keep passing the same settings): each game's
+loading icon on its window and taskbar button (`launcher/assets/loading/u1-3.png` drawn by
+`tools/draw_loading_icons.py` until the player's own is taken from the first loading screen) · the close question ·
+the Arabic text patch · per-game language.
 
 ## 6. Risks
 
@@ -210,7 +231,10 @@ all stay as they are).
   28–35 FPS on an i3-class CPU; the GPU is not the limit there.
 - Multithreaded rendering (`BB_DRAW_PIPE`, stage A/B/C) is already on by default for all games (launcher config 9).
 
-### 7.2 Step 1 — new PGO profile for our code (guaranteed; do first)
+Status (6 Nov 2026): steps 1 and 2 done and pushed (new profile recorded on all three games; LTO on by default in
+`gow3_pc/build.sh`). The Uncharted 1 jungle went from dips to about 55 FPS to a steady 59-60 (57 at worst).
+
+### 7.2 Step 1 — new PGO profile for our code (guaranteed; do first) — DONE
 - Why: Mevlock measured LTO + PGO at −4.8% GPU-thread time per draw (7.72 → 7.35 µs, 73.2 → 76.3 FPS, three runs,
   >800 draws/frame; `mevlock-src/docs/parallel_gpu.md`). Our `pgo/merged.profdata` (4 Nov 2026) was made from
   Mevlock's 0.3.6.43 code; our ports changed many functions, and builds report them as "changed / new since the
@@ -226,7 +250,7 @@ all stay as they are).
 - Time: about 30–40 min build + 20–30 min play + 30–40 min build → **about 2 hours**, half of it the player's.
 - Redo it after any large engine change (a merge from Mevlock, a big port).
 
-### 7.3 Step 2 — LTO on, A/B tested (likely, not guaranteed)
+### 7.3 Step 2 — LTO on, A/B tested (likely, not guaranteed) — DONE, kept
 - Mevlock: LTO alone −1.8% µs/draw once (`parallel_gpu.md`), "no gain" another time (`PERFORMANCE_2026-10-18.md`).
 - How: `BB_LTO=ON BB_PGO=use ./build.sh`; compare against step 1's build in the same spot (three runs each).
   Keep it only if it wins in all three runs.
