@@ -41,6 +41,7 @@ private:
     std::atomic<bool> is_open{true};
     std::mutex text_mutex;
     bool text_requested{}, text_active{};
+    bool close_asked{}; ///< El Dorado: the "Close the game?" question is on screen (window.cpp)
     int text_state{};
     std::string text, text_prompt, base_title;
     void UpdateTextTitle();

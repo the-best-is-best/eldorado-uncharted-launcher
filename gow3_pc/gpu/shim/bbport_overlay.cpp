@@ -937,7 +937,10 @@ void ChoiceBox() {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
                      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
     ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "%s",
-                       choice_kind == 1 ? T("Save game") : choice_kind == 2 ? T("Load game") : T("Delete save"));
+                       choice_kind == 1   ? T("Save game")
+                       : choice_kind == 2 ? T("Load game")
+                       : choice_kind == 4 ? T("Close the game? Progress since the last save is lost.")
+                                          : T("Delete save"));
     ImGui::Separator();
     // Save pictures are 228x128 (the games' icon0.png); rows without one keep the text aligned when others have
     // one.
@@ -2032,6 +2035,10 @@ void BeginChoice(int kind, std::vector<std::string> items, std::vector<BbPng::Im
 
 int PollChoice() {
     return choice_result;
+}
+
+bool ChoiceOpen() {
+    return choice_active;
 }
 
 void EndChoice() {

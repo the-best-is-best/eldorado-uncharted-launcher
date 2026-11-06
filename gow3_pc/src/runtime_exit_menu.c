@@ -68,6 +68,10 @@ static U1Spot u1_spots[]={
 };
 static int adding;
 
+/* The games' menu hosts, for runtime_menu_watch.c (back from the main menu). */
+const unsigned char *volatile runtime_menu_host[3];
+
+
 static void u1_add_to_page(const U1Build *b, uint64_t image, unsigned char *page, unsigned char *item) {
     if (adding) return;  /* our own AddToPage call below */
     for (size_t s=0;s<sizeof(u1_spots)/sizeof(*u1_spots);++s) {
@@ -102,12 +106,23 @@ static void u1_add_to_page(const U1Build *b, uint64_t image, unsigned char *page
         if (spot->added || spot->page || id!=spot->after_id || text!=spot->after_text) continue;
         spot->page=page;
         memcpy(&spot->owner,item+0xa0,sizeof(spot->owner));
+        if (spot->owner) runtime_menu_host[0]=spot->owner;  /* the menu probe: U1's items belong to its menu host */
         memcpy(spot->label,label,0x18);
     }
 }
 
-/* Ends the game from its menu: a save being written finishes first (at most 5 s). */
+void bbgpu_ask_close(void); /* gpu/shim/window.cpp */
+
+/* The menus' Quit: El Dorado's "Close the game?" question (the window's, as for its close button); "Close the
+ * game" there closes it. BB_CONFIRM_CLOSE=0: closes at once, as before (a save being written finishes first). */
 static void quit_from_menu(const char *game) {
+    const char *confirm=getenv("BB_CONFIRM_CLOSE");
+    if (!(confirm && confirm[0]=='0')) {
+        printf("Exit menu: %s: Quit picked, asking whether to close the game\n",game);
+        fflush(stdout);
+        bbgpu_ask_close();
+        return;
+    }
     printf("Exit menu: %s: Quit picked, closing the game\n",game);
     fflush(stdout);
     for (int i=0;i<100 && runtime_savedata_mounted();++i) {
@@ -119,6 +134,7 @@ static void quit_from_menu(const char *game) {
 
 /* The pause menu's Quit: the game's Yes/No (title "Quit"), Yes sends the main menu Quit's id. */
 static void u1_handler(const U1Build *b, uint64_t image, unsigned char *host, uint32_t id) {
+    if (host) runtime_menu_host[0]=host;
     if (id==QUIT_ID) quit_from_menu("Uncharted 1");
     if (id!=PAUSE_QUIT_ID || !host) return;
     int32_t toggle;
@@ -263,11 +279,14 @@ static void dc_handler(const DcLayout *l, unsigned char *host, uint32_t id) {
 void __attribute__((ms_abi)) runtime_exit_menu_u2_data(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
                                                        const uint64_t *regs) {
     (void)rdi; (void)rsi; (void)image; (void)r14;
+    runtime_menu_host[1]=(const unsigned char *)(uintptr_t)regs[0];  /* 1.02: mov [rbx+0x17a8], rax */
     dc_add_quit(&dc_u2,(unsigned char *)(uintptr_t)regs[7]);
 }
 void __attribute__((ms_abi)) runtime_exit_menu_u3_data(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
                                                        const uint64_t *regs) {
-    (void)rdi; (void)rsi; (void)image; (void)r14;
+    (void)rdi; (void)rsi; (void)image;
+    runtime_menu_host[2]=(const unsigned char *)(uintptr_t)r14;  /* 1.02: mov [r14+0x1400], rax */
+    (void)regs;
     dc_add_quit(&dc_u3,(unsigned char *)(uintptr_t)regs[7]);
 }
 void __attribute__((ms_abi)) runtime_exit_menu_u2_handler(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,

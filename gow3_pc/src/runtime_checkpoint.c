@@ -144,6 +144,7 @@ void __attribute__((ms_abi)) runtime_checkpoint_frame_us(uint64_t rdi, uint64_t 
                                                         const uint64_t *regs) {
     (void)rdi; (void)rsi; (void)r14; (void)regs;
     give_treasures(image,0x4ba500,"55 48 89 e5 83 fe 04 75 0c 48 8d 3d","Uncharted 3 1.02");
+    runtime_menu_watch(2,runtime_menu_host[2]);
     frame(&builds[1],image);
 }
 
@@ -273,6 +274,7 @@ void __attribute__((ms_abi)) runtime_checkpoint_frame_u1_us(uint64_t rdi, uint64
                                                            const uint64_t *regs) {
     (void)rdi; (void)rsi; (void)r14; (void)regs;
     give_treasures(image,0x9fc60,"55 48 89 e5 83 fe 04 75 0c 48 8d 3d","Uncharted 1 1.02");
+    runtime_menu_watch(0,runtime_menu_host[0]);
     old_frame(&old_builds[1],image);
 }
 OLD_FRAME(runtime_checkpoint_frame_u2_eu,2)
@@ -280,5 +282,6 @@ void __attribute__((ms_abi)) runtime_checkpoint_frame_u2_us(uint64_t rdi, uint64
                                                            const uint64_t *regs) {
     (void)rdi; (void)rsi; (void)r14; (void)regs;
     give_treasures(image,0x3fea90,"55 48 89 e5 41 57 41 56 53 50 83 fe 04 75","Uncharted 2 1.02");
+    runtime_menu_watch(1,runtime_menu_host[1]);
     old_frame(&old_builds[3],image);
 }

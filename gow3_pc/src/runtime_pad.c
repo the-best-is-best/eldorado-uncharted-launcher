@@ -1979,6 +1979,21 @@ static void sample(PadData *d) {
     replay_sample(d);
     d->buttons|=injected.buttons;
     {
+        /* El Dorado: Circle (back, whatever key or button it is bound to) on the main menu asks "Close the game?"
+         * instead of going back to the title page, which never sees the press (runtime_menu_watch.c). */
+        static int circle_held;
+        const int circle=(d->buttons & BTN_CIRCLE)!=0;
+        if (runtime_menu_at_main()) {
+            if (circle && !circle_held) {
+                printf("Menu: back on the main menu, asking whether to close the game\n");
+                fflush(stdout);
+                bbgpu_ask_close();
+            }
+            d->buttons&=~(uint32_t)BTN_CIRCLE;
+        }
+        circle_held=circle;
+    }
+    {
         const int held=(d->buttons & BTN_L2)!=0 || turret_held(now_us()); /* a mounted gun aims without the button */
         if (mouse_debug() && held!=aim_held) printf("Mouse: L2 %s (t=%.4f)\n",held ? "held" : "released",now_us()*1e-6);
         if (held && !aim_held) aim_press_us=now_us();
