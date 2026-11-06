@@ -83,5 +83,7 @@ void BeginChoice(int kind, std::vector<std::string> items, std::vector<BbPng::Im
 int PollChoice();
 /// Takes the list off the screen (the game closed the dialog): PollChoice then says cancelled.
 void EndChoice();
+/// A list is on screen (the game's save dialog or the window's close question).
+bool ChoiceOpen();
 
 } // namespace BbOverlay

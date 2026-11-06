@@ -112,6 +112,13 @@ int runtime_savedata_mounted(void);
 /* "Quit" in the games' main menus (runtime_exit_menu.c). */
 void __attribute__((ms_abi)) runtime_exit_menu_u1_eu_add(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
                                                          const uint64_t *regs);
+/* runtime_menu_watch.c: back from the main menu asks whether to close the game (game 0 U1, 1 U2, 2 U3). */
+void runtime_menu_watch(int game, const unsigned char *host);
+/* True while a game's main menu is on screen (its back button then asks to close the game, runtime_pad.c). */
+int runtime_menu_at_main(void);
+/* gpu/shim/window.cpp: puts the "Close the game?" question on screen (from the game's thread). */
+void bbgpu_ask_close(void);
+extern const unsigned char *volatile runtime_menu_host[3]; /* runtime_exit_menu.c: U1, U2, U3 menu hosts */
 void __attribute__((ms_abi)) runtime_exit_menu_u1_us_add(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
                                                          const uint64_t *regs);
 void __attribute__((ms_abi)) runtime_exit_menu_u1_eu_handler(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,

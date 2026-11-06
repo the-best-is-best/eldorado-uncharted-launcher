@@ -53,6 +53,11 @@ cp launcher/*.py launcher/*.pyw launcher/*.json "$stage/launcher/"
 cp tools/VERSION "$stage/VERSION"
 cp launcher/assets/uncharted.ico launcher/assets/icon.png launcher/assets/eldorado.ico launcher/assets/eldorado.png \
     "$stage/launcher/assets/"
+# El Dorado's own loading icons (tools/draw_loading_icons.py): each game's taskbar icon until the engine has taken
+# the game's own from the player's first loading screen.
+mkdir -p "$stage/launcher/assets/loading"
+cp launcher/assets/loading/u1.png launcher/assets/loading/u2.png launcher/assets/loading/u3.png \
+    "$stage/launcher/assets/loading/"
 cp tools/README-Windows.txt "$stage/README.txt"
 cp gow3_pc/LICENSE "$stage/LICENSE.txt"
 cp CHANGELOG.md "$stage/CHANGELOG.md"

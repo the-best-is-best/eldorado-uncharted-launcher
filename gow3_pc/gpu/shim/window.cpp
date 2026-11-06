@@ -1,5 +1,6 @@
 // bbport: SDL3 window for the Vulkan swapchain (X11 or Wayland).
 #include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <SDL3/SDL.h>
@@ -7,6 +8,9 @@
 #include "common/logging/log.h"
 #include "sdl_window.h"
 #include "bbport_overlay.h"
+#include "bbport_png.h"
+#include "bbport_i18n.h"
+#include "bbport_loading_icon.h"
 #include "bbport_screenshot.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "video_core/texture_cache/button_prompts.h"
@@ -99,6 +103,13 @@ extern "C" int bbgpu_window_foreground(void) {
     return window_foreground.load(std::memory_order_relaxed) ? 1 : 0;
 }
 
+// El Dorado: the game's thread asks the window to put the close question on screen (the menus' Quit, back from
+// the main menu: runtime_exit_menu.c, runtime_menu_watch.c); the window thread shows it at its next events.
+static std::atomic<bool> close_question_wanted{false};
+extern "C" void bbgpu_ask_close(void) {
+    close_question_wanted.store(true, std::memory_order_release);
+}
+
 namespace Frontend {
 
 WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}, height{height_} {
@@ -125,6 +136,9 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
     ASSERT_MSG(window, "Failed to create window: {}", SDL_GetError());
+    // El Dorado: the game's loading icon on the window and its taskbar button, once taken from a loading screen
+    // (bbport_loading_icon.h); until then the executable's icon.
+    SetLoadingIcon();
     // bbport: a game started from the collection menu (run.py sets BB_RAISE_WINDOW) opened behind
     // other windows, as the menu's process had ended: no input until the window was clicked.
     if (const char* raise = std::getenv("BB_RAISE_WINDOW"); raise && raise[0] == '1') {
@@ -183,7 +197,43 @@ void WindowSDL::UpdateTextTitle() {
     BbOverlay::SetTextEntry(text_active, text_prompt, text);
 }
 
+void WindowSDL::SetLoadingIcon() {
+    // The one taken from this player's game, else El Dorado's drawn one (BB_LOADING_ICON_DEFAULT).
+    const char* path = BbLoadingIcon::Path();
+    const char* drawn = std::getenv("BB_LOADING_ICON_DEFAULT");
+    BbPng::Image icon;
+    if (!(path && BbPng::LoadRgba(path, icon, 256, 256)) && !(drawn && BbPng::LoadRgba(drawn, icon, 256, 256))) {
+        return;
+    }
+    if (SDL_Surface* surface =
+            SDL_CreateSurfaceFrom(icon.width, icon.height, SDL_PIXELFORMAT_RGBA32, icon.rgba.data(), icon.width * 4)) {
+        SDL_SetWindowIcon(window, surface); // SDL keeps its own copy
+        SDL_DestroySurface(surface);
+    }
+}
+
 bool WindowSDL::PollEvents() {
+    if (BbLoadingIcon::TakeNew()) { // taken from this start's first loading screen
+        SetLoadingIcon();
+    }
+    if (close_question_wanted.exchange(false, std::memory_order_acq_rel) && !close_asked &&
+        !BbOverlay::ChoiceOpen()) {
+        BbOverlay::BeginChoice(4, {BbI18n::T("Keep playing"), BbI18n::T("Close the game")}, {}, 0, -1);
+        close_asked = true;
+    }
+    if (close_asked) { // the close question: entry 1 closes, Keep playing or Esc goes back to the game
+        const int answer = BbOverlay::PollChoice();
+        if (answer != -1) {
+            close_asked = false;
+            BbOverlay::EndChoice();
+            if (answer == 1) {
+                std::printf("Window closed (the player confirmed closing the game)\n");
+                std::fflush(stdout);
+                is_open = false;
+                return false;
+            }
+        }
+    }
     {
         std::scoped_lock lock{text_mutex};
         if (text_requested) { // SDL text input must be toggled from the window thread
@@ -312,8 +362,19 @@ bool WindowSDL::PollEvents() {
             height = h;
             break;
         }
-        case SDL_EVENT_QUIT:
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+            // El Dorado: the close button or Alt+F4 asks first (kind 4: "Close the game?"), so a slip of the
+            // hand does not lose the play since the last save; a second press while asked closes at once.
+            // BB_CONFIRM_CLOSE=0: closes at once, as before.
+            if (const char* confirm = std::getenv("BB_CONFIRM_CLOSE"); !(confirm && confirm[0] == '0') &&
+                                                                      !close_asked && !BbOverlay::ChoiceOpen()) {
+                BbOverlay::BeginChoice(4, {BbI18n::T("Keep playing"), BbI18n::T("Close the game")}, {}, 0, -1);
+                close_asked = true;
+                break;
+            }
+            is_open = false;
+            break;
+        case SDL_EVENT_QUIT: // Windows shutting down, or the launcher's STOP: no question
             is_open = false;
             break;
         default:

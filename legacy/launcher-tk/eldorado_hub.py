@@ -520,6 +520,7 @@ class Hub:
         self.saves_cache = {}
         self.trophy_cache = {}
         self.loading = None  # {"key", "since", "checked"} from PLAY until the game's window is up
+        self.hidden = False  # out of sight while the game's window is up (no drawing, a slow tick)
         self.trophy_lib = None
         self.grid_columns = 1
         self.photos = {}
@@ -770,6 +771,21 @@ class Hub:
     def tick(self):
         """Controller input (edges of the held buttons) while this window has the focus and no
         game runs, and the status from the classic launcher."""
+        if self.hidden:
+            # The launcher is out of sight while the game plays: nothing drawn, only a look twice a second
+            # whether the game has ended (closed in any way: its menu, the close question, a crash, STOP).
+            if not self.running():
+                self.hidden = False
+                self.root.deiconify()
+                self.root.lift()
+                try:
+                    self.root.focus_force()
+                except tk.TclError:
+                    pass
+                self.shown_state = None  # redraw with what the game left (saves, pictures, stats)
+            else:
+                self.root.after(500, self.tick)
+                return
         try:
             focused = self.root.focus_displayof() is not None
         except (KeyError, tk.TclError):
@@ -793,7 +809,13 @@ class Hub:
             elif now - self.loading["checked"] > 0.4:
                 self.loading["checked"] = now
                 if game_window_open():
+                    # The game's window is up: the launcher steps aside until it ends (no CPU, GPU or
+                    # drawing while the game runs).
                     self.loading = None
+                    self.hidden = True
+                    self.root.withdraw()
+                    self.root.after(500, self.tick)
+                    return
                 self.draw()
             elif int(now * 8) != self.loading.get("frame"):
                 self.loading["frame"] = int(now * 8)

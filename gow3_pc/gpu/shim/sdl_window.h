@@ -30,6 +30,7 @@ public:
     bool IsOpen() const { return is_open.load(std::memory_order_relaxed); }
     /// Processes pending window events. Returns false once the user closed the window.
     bool PollEvents();
+    void SetLoadingIcon(); ///< El Dorado: the game's loading icon on the window, when one was taken
     /// Keyboard text entry for the system IME dialog; typed text shows in the title bar.
     void BeginTextInput(const std::string& initial, const std::string& prompt);
     /// 0 while typing, 1 confirmed (Enter), 2 cancelled (Escape); text is UTF-8.
@@ -40,6 +41,7 @@ private:
     std::atomic<bool> is_open{true};
     std::mutex text_mutex;
     bool text_requested{}, text_active{};
+    bool close_asked{}; ///< El Dorado: the "Close the game?" question is on screen (window.cpp)
     int text_state{};
     std::string text, text_prompt, base_title;
     void UpdateTextTitle();

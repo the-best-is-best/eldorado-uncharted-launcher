@@ -3,7 +3,9 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")"
 mkdir -p out
 # Windows: MSYS2 CLANG64 (packages in packaging/windows/README.md). The GPU library is static
-# there and CMake links bb-probe.exe as well; clang PGO with pgo/merged.profdata, LTO off by default.
+# there and CMake links bb-probe.exe as well; clang PGO with pgo/merged.profdata, and LTO by default
+# (El Dorado, 6 Nov 2026: with LTO the U1 jungle held 59-60 FPS where it dropped to 55; BB_LTO=OFF
+# builds without).
 case $(uname -s) in
 MINGW*|MSYS*)
     # shellcheck source=msys2-env.sh
@@ -61,9 +63,9 @@ MINGW*|MSYS*)
     # perf7: BB_OPT=2|3: optimization level of the RelWithDebInfo build (CMake's default is -O2).
     opt="-O${BB_OPT:-2} -g -DNDEBUG"
     cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO="$pgo" \
-        -DBB_PGO_DIR="$pgo_dir" -DBB_LTO="${BB_LTO:-OFF}" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+        -DBB_PGO_DIR="$pgo_dir" -DBB_LTO="${BB_LTO:-ON}" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
         -DCMAKE_C_FLAGS_RELWITHDEBINFO="$opt" -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="$opt" >/dev/null
-    echo "GPU library and loader: LTO ${BB_LTO:-OFF}, PGO $pgo, -O${BB_OPT:-2}"
+    echo "GPU library and loader: LTO ${BB_LTO:-ON}, PGO $pgo, -O${BB_OPT:-2}"
     if ! ninja -C out/gpu bb-probe bb-gpu-capabilities bb-play > out/gpu-build.log 2>&1; then
         awk 'substr($0, 1, 1) != "["' out/gpu-build.log | tail -40 >&2 || true
         echo 'Build failed (full log: out/gpu-build.log)' >&2; exit 1

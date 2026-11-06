@@ -14,6 +14,7 @@
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "bbport_overlay.h"
 #include "bbport_thumbnail.h"
+#include "bbport_loading_icon.h"
 #include "bbport_screenshot.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
@@ -1008,7 +1009,9 @@ void Presenter::ReadThumbnail() {
     }
     thumbnail.pending = vk::Fence{};
     vmaInvalidateAllocation(instance.GetAllocator(), thumbnail.buffer_allocation, 0, VK_WHOLE_SIZE);
-    if (thumbnail.probe_only) {
+    if (thumbnail.icon_only) {
+        BbLoadingIcon::Look(static_cast<const unsigned char*>(thumbnail.mapped));
+    } else if (thumbnail.probe_only) {
         BbThumbnail::LoadingProbe(static_cast<const unsigned char*>(thumbnail.mapped));
     } else {
         BbThumbnail::Store(static_cast<const unsigned char*>(thumbnail.mapped));
@@ -1281,8 +1284,10 @@ bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last, bool game
             // frame for the loading screen (bbport_thumbnail.h).
             const bool wanted = BbThumbnail::Wanted();
             const bool probe = !wanted && BbThumbnail::LoadingProbeWanted();
-            if (wanted || probe) {
+            const bool icon = !wanted && !probe && BbLoadingIcon::Wanted();
+            if (wanted || probe || icon) {
                 thumbnail.probe_only = probe;
+                thumbnail.icon_only = icon;
                 CaptureThumbnail(cmdbuf, frame);
             }
         }

@@ -36,6 +36,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import discord_presence  # noqa: E402
+from game_update_view import game_with_update  # noqa: E402
+from arabic_language import find_arabic_language  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE = ROOT / "gow3_pc"
@@ -301,6 +303,20 @@ def shader_environment(env, game, game_dir, executable):
             env[variable] = str(lists.with_name(name))
 
 
+def arabic_text_file(game_dir, game):
+    """The launcher's "Arabic": the number of the game's text file that holds the translation, or None (English)."""
+    try:
+        found = find_arabic_language(game_dir, game, USER / "arabic-language.json")
+    except Exception as error:  # a damaged archive never keeps the game from starting
+        print(f"Arabic: {game}: the texts could not be read ({error}); English is used")
+        return None
+    if not found:
+        print(f"Arabic: {game}: no Arabic translation in this copy (install it with Install from .pkg); English is used")
+        return None
+    print(f"Arabic: {game}: the translation is text file {found}")
+    return found
+
+
 def game_environment(args, game, executable, game_dir):
     """The engine's environment from the launcher's: BB_* from UNCHARTED_*/GOW3_* and probe-u<N>.ini."""
     ini = read_ini(USER / f"probe-{game}.ini")
@@ -313,6 +329,10 @@ def game_environment(args, game, executable, game_dir):
     env["BB_USER_DIR"] = str(USER)
     env.setdefault("BB_GPU_CACHE_DIR", str(USER / "cache"))
     env["BB_CONFIG"] = str(USER / f"bbport-{game}.ini")
+    # A profiling build (BB_PGO=generate) rewrites its counts every 30 s: one file per game process (%p), each
+    # write replacing the last. Without it clang's default name (default_%m) adds every write to the file again
+    # and the counts overflow. Read by nothing else.
+    env.setdefault("LLVM_PROFILE_FILE", str(ENGINE / "pgo-runs" / "run-%p.profraw"))
     env["BB_INPUT_CONFIG"] = str(USER / f"input-{game}.ini")
     if executable == "eboot.bin" and not args.collection_menu:
         env["BB_SKIP_COLLECTION_MENU"] = "1"
@@ -372,7 +392,25 @@ def game_environment(args, game, executable, game_dir):
     merge_ini(USER / f"bbport-{game}.ini", {"show_fps": "1" if ini.get("show_fps", "1") != "0" else "0"},
               "# El Dorado: this game's in-game menu settings (in-game menu: Insert / L3+R3)")
     # Game options.
-    env["BB_LANGUAGE"] = os.environ.get("UNCHARTED_LANGUAGE", "1")
+    # Each game its own language (the launcher's UNCHARTED_LANGUAGE_U1/U2/U3; run.py picks the one of the game it
+    # starts, also after a switch from the Collection menu), else the shared UNCHARTED_LANGUAGE.
+    shared = os.environ.get("UNCHARTED_LANGUAGE", "1")
+    arabic_cheats = []  # games set to Arabic: the patch that loads the translation's text file (cheats.py text<n>)
+    for key in GAME_KEYS.values():
+        language = os.environ.get(f"UNCHARTED_LANGUAGE_{key.upper()}", shared)
+        if language == "ar":
+            text_file = arabic_text_file(game_dir, key)
+            if text_file:
+                arabic_cheats.append(f"{key}:text{text_file}")
+        env[f"BB_LANGUAGE_{key.upper()}"] = language if language.isdigit() else "1"
+    env["BB_LANGUAGE"] = env[f"BB_LANGUAGE_{game.upper()}"]
+    # Each game's loading icon for its window and taskbar button: taken by the engine from the game's first loading
+    # screen into this file, used from then on (bbport_loading_icon.h; run.py picks the started game's).
+    for key in GAME_KEYS.values():
+        env[f"BB_LOADING_ICON_{key.upper()}"] = str(USER / "icons" / f"loading-{key}.png")
+        # Until then El Dorado's own drawing of it (tools/draw_loading_icons.py).
+        env[f"BB_LOADING_ICON_DEFAULT_{key.upper()}"] = str(ROOT / "launcher" / "assets" / "loading" / f"{key}.png")
+    (USER / "icons").mkdir(parents=True, exist_ok=True)
     anisotropy = os.environ.get("UNCHARTED_ANISOTROPY", "0")
     if anisotropy in ("2", "4", "8", "16"):
         env["BB_ANISO"] = anisotropy
@@ -391,7 +429,8 @@ def game_environment(args, game, executable, game_dir):
     except ValueError:
         pass
     cheats = [c.strip() for c in os.environ.get("UNCHARTED_CHEATS", "").split(",") if c.strip()]
-    env["BB_CHEATS"] = ",".join(f"{g}:{CHEAT_NAMES[c]}" for g in ("u1", "u2", "u3") for c in cheats if c in CHEAT_NAMES)
+    env["BB_CHEATS"] = ",".join([f"{g}:{CHEAT_NAMES[c]}" for g in ("u1", "u2", "u3") for c in cheats if c in CHEAT_NAMES]
+                                + arabic_cheats)
     if "devmode" in cheats:
         env["BB_DEV_MENU"] = "1"
     if "treasures" in cheats:  # the games' own Dev Menu "Give all Treasures", once a start (runtime_checkpoint.c)
@@ -653,7 +692,11 @@ def run(args, game, executable, game_dir):
     job = GameJob()
     with log_path.open("wb") as log:
         header = (f"# {time.strftime('%Y-%m-%d %H:%M:%S')} {executable} ({game}) from {game_dir}\n"
-                  f"# settings: {USER / ('probe-' + game + '.ini')}\n# engine: {ENGINE}\n").encode("utf-8")
+                  f"# settings: {USER / ('probe-' + game + '.ini')}\n# engine: {ENGINE}\n"
+                  "# language (launcher -> engine): " + ", ".join(
+                      f"{key} {os.environ.get('UNCHARTED_LANGUAGE_' + key.upper(), '-')} -> "
+                      f"{env.get('BB_LANGUAGE_' + key.upper(), '-')}" for key in GAME_KEYS.values())
+                  + f"; cheats {env.get('BB_CHEATS', '') or 'none'}\n").encode("utf-8")
         log.write(header)
         try:
             process = subprocess.Popen(command, cwd=str(ENGINE), env=env, stdin=subprocess.DEVNULL,
@@ -756,6 +799,10 @@ def main():
         back_up_saves()
     except Exception as error:  # a backup problem never keeps the game from starting
         print(f"Save backup: skipped ({error})")
+    try:
+        game_dir = game_with_update(game_dir, ROOT / "analysis" / "views")
+    except Exception as error:  # the game still starts, without its update
+        print(f"Update: not used ({error})")
     result = run(args, game, args.executable, game_dir)
     return 124 if result["timed_out"] else result["exit_code"]
 

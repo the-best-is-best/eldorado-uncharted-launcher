@@ -233,8 +233,6 @@ constexpr Color cap_top{0.250f, 0.180f, 0.110f};
 constexpr Color cap_bottom{0.100f, 0.068f, 0.040f};
 constexpr Color rim{0.870f, 0.690f, 0.345f};
 constexpr Color text_color{0.965f, 0.900f, 0.760f};
-constexpr Color lit_text{0.110f, 0.075f, 0.040f}; ///< labels on a lit (gold) key
-constexpr Color dim_text{0.520f, 0.460f, 0.370f}; ///< labels on the keys a prompt is not about
 constexpr Color highlight{0.950f, 0.700f, 0.300f}; ///< the d-pad's lit direction
 
 /// A straight-alpha RGBA float canvas the size of the sheet.
@@ -981,20 +979,7 @@ void DrawArrows(Canvas& c, const Font& font, const Slot& s, const Bindings& b) {
             c, key.x, key.y, key.x + k, key.y + k,
             [&](float x, float y) { return CutRect(x, y, kx, ky, k * 0.5f, k * 0.5f, k * 0.22f); },
             (s.icon & key.lit) ? &highlight : nullptr);
-        // A lit key is gold: its label in dark ink, or it would not read (parchment on gold).
-        // The keys the prompt is about (lit) stand out: gold with dark labels; the others are dimmed, so the
-        // lit ones read as the ones to press.
-        const bool lit = (s.icon & key.lit) != 0;
-        if (!lit && (s.icon & (LitUp | LitDown | LitLeft | LitRight))) {
-            for (int y = int(key.y) - 1; y < int(key.y + k) + 2; ++y) {
-                for (int x = int(key.x) - 1; x < int(key.x + k) + 2; ++x) {
-                    c.Blend(x, y, {0.05f, 0.035f, 0.02f},
-                            0.55f * Coverage(CutRect(x + 0.5f, y + 0.5f, kx, ky, k * 0.5f, k * 0.5f, k * 0.22f)));
-                }
-            }
-        }
-        font.Draw(c, KeyLabel(b.dpad[key.binding]), kx, ky, k - 4.0f, k * 0.62f,
-                  lit ? lit_text : (s.icon & (LitUp | LitDown | LitLeft | LitRight)) ? dim_text : text_color);
+        font.Draw(c, KeyLabel(b.dpad[key.binding]), kx, ky, k - 4.0f, k * 0.62f);
     }
 }
 

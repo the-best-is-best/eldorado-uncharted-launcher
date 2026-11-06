@@ -246,6 +246,14 @@ def main():
         # The trophy set of this game (its texts in the console language, the icons) for the runtime.
         trophy_dir = out / 'trophy'
         key = next((k for k, v in EXECUTABLES.items() if v == exe), '')
+        # El Dorado: each game its own language (BB_LANGUAGE_U1/U2/U3), else the shared BB_LANGUAGE.
+        if key and env.get(f'BB_LANGUAGE_{key.upper()}'):
+            env['BB_LANGUAGE'] = env[f'BB_LANGUAGE_{key.upper()}']
+        # El Dorado: each game's own loading icon on its taskbar button (BB_LOADING_ICON_U1/U2/U3).
+        if key and env.get(f'BB_LOADING_ICON_{key.upper()}'):
+            env['BB_LOADING_ICON'] = env[f'BB_LOADING_ICON_{key.upper()}']
+        if key and env.get(f'BB_LOADING_ICON_DEFAULT_{key.upper()}'):
+            env['BB_LOADING_ICON_DEFAULT'] = env[f'BB_LOADING_ICON_DEFAULT_{key.upper()}']
         if key:
             language = env.get('BB_LANGUAGE', '1')
             run_script('trophies.py', game, '--out', trophy_dir, '--exe', key,
