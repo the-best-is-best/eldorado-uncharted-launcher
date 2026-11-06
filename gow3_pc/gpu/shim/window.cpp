@@ -119,6 +119,10 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     if (const char* env = std::getenv("BB_PAD_BACKGROUND"); !(env && env[0] == '0')) {
         SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     }
+    // El Dorado: the close button and Alt+F4 ask first (SDL_EVENT_WINDOW_CLOSE_REQUESTED below). SDL also sends
+    // SDL_EVENT_QUIT when the last window is asked to close, which closed the game at once; with this hint
+    // SDL_EVENT_QUIT comes only from Windows (shutting down) and the like.
+    SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0");
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         UNREACHABLE_MSG("Failed to initialize SDL video: {}", SDL_GetError());
     }
