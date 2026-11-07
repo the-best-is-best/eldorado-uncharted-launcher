@@ -29,11 +29,18 @@ def release_entry(tag: str, digest: str | None = "sha256:" + "ab" * 32, draft: b
 
 class VersionTests(unittest.TestCase):
     def test_parse(self) -> None:
-        self.assertEqual(updater.parse_version("v1.2.3"), (1, 2, 3))
-        self.assertEqual(updater.parse_version(" 2.0.10\n"), (2, 0, 10))
-        for bad in ("1.2", "v1.2.3-beta", "", None, "latest"):
+        self.assertEqual(updater.parse_version("v1.2.3"), (1, 2, 3, 3, 0))
+        self.assertEqual(updater.parse_version(" 2.0.10\n"), (2, 0, 10, 3, 0))
+        self.assertEqual(updater.parse_version("1.0.0-beta1"), (1, 0, 0, 1, 1))
+        for bad in ("1.2", "v1.2.3-gamma1", "1.2.3-", "", None, "latest"):
             self.assertIsNone(updater.parse_version(bad))
-        self.assertEqual(updater.version_text((2, 0, 10)), "2.0.10")
+        self.assertEqual(updater.version_text((2, 0, 10, 3, 0)), "2.0.10")
+        for text in ("1.0.0-beta1", "1.0.0-rc2", "1.0.0-alpha", "3.1.4"):
+            self.assertEqual(updater.version_text(updater.parse_version(text)), text)
+
+    def test_pre_releases_come_before_the_release(self) -> None:
+        order = ["1.0.0-alpha1", "1.0.0-beta1", "1.0.0-beta2", "1.0.0-rc1", "1.0.0", "1.0.1-beta1", "1.0.1"]
+        self.assertEqual(sorted(order, key=updater.parse_version), order)
 
     def test_compare_is_numeric(self) -> None:
         self.assertLess(updater.parse_version("1.9.0"), updater.parse_version("1.10.0"))
@@ -43,7 +50,7 @@ class VersionTests(unittest.TestCase):
             root = Path(temp)
             self.assertIsNone(updater.installed_version(root))
             (root / "VERSION").write_text("1.0.0\n", encoding="ascii")
-            self.assertEqual(updater.installed_version(root), (1, 0, 0))
+            self.assertEqual(updater.installed_version(root), (1, 0, 0, 3, 0))
 
     def test_the_repository_version_file_parses(self) -> None:
         self.assertIsNotNone(updater.installed_version(Path(__file__).resolve().parents[1] / "tools"))
@@ -52,12 +59,12 @@ class VersionTests(unittest.TestCase):
         releases = [release_entry("v1.1.0"), release_entry("v2.0.0", draft=True), release_entry("v1.3.0", digest=None),
                     release_entry("v1.2.0"), release_entry("v1.4.0", asset="Other.zip"), release_entry("nightly"),
                     release_entry("v0.9.0")]
-        found = updater.pick_release(releases, (1, 0, 0))
+        found = updater.pick_release(releases, (1, 0, 0, 3, 0))
         self.assertIsNotNone(found)
-        self.assertEqual((found.version, found.tag, found.size, found.sha256), ((1, 2, 0), "v1.2.0", 10, "ab" * 32))
+        self.assertEqual((found.version, found.tag, found.size, found.sha256), ((1, 2, 0, 3, 0), "v1.2.0", 10, "ab" * 32))
         self.assertEqual(found.text, "1.2.0")
-        self.assertIsNone(updater.pick_release(releases, (1, 2, 0)))
-        self.assertIsNone(updater.pick_release([], (1, 0, 0)))
+        self.assertIsNone(updater.pick_release(releases, (1, 2, 0, 3, 0)))
+        self.assertIsNone(updater.pick_release([], (1, 0, 0, 3, 0)))
 
     def test_only_https_unless_a_local_test_server(self) -> None:
         self.assertTrue(updater.allowed_url("https://api.github.com/x"))
@@ -87,32 +94,32 @@ class TempRoot(unittest.TestCase):
 
 class StageTests(TempRoot):
     def test_a_package_in_one_folder_is_staged(self) -> None:
-        staged = updater.stage(self.package(), self.root, (1, 2, 0))
+        staged = updater.stage(self.package(), self.root, (1, 2, 0, 3, 0))
         self.assertEqual(staged, self.root / "update" / "staged")
         self.assertTrue((staged / "launcher" / "main.py").is_file())
-        self.assertEqual(updater.installed_version(staged), (1, 2, 0))
+        self.assertEqual(updater.installed_version(staged), (1, 2, 0, 3, 0))
 
     def test_a_package_without_a_top_folder_is_staged(self) -> None:
-        staged = updater.stage(self.package(prefix=""), self.root, (1, 2, 0))
+        staged = updater.stage(self.package(prefix=""), self.root, (1, 2, 0, 3, 0))
         self.assertTrue((staged / "Uncharted Launcher.exe").is_file())
 
     def test_the_new_entry_point_is_required(self) -> None:
         self.assertIn("launcher/main.py", updater.REQUIRED)
         self.assertNotIn("launcher/uncharted_launcher.pyw", updater.REQUIRED)
         with self.assertRaisesRegex(updater.UpdateError, "launcher/main.py"):
-            updater.stage(self.package(skip="launcher/main.py"), self.root, (1, 2, 0))
+            updater.stage(self.package(skip="launcher/main.py"), self.root, (1, 2, 0, 3, 0))
 
     def test_a_wrong_version_is_refused(self) -> None:
         with self.assertRaisesRegex(updater.UpdateError, "VERSION"):
-            updater.stage(self.package(version="1.1.0"), self.root, (1, 2, 0))
+            updater.stage(self.package(version="1.1.0"), self.root, (1, 2, 0, 3, 0))
 
     def test_a_path_outside_the_folder_is_refused(self) -> None:
         with self.assertRaisesRegex(updater.UpdateError, "outside"):
-            updater.stage(self.package(prefix="", extra={"../evil.txt": "x"}), self.root, (1, 2, 0))
+            updater.stage(self.package(prefix="", extra={"../evil.txt": "x"}), self.root, (1, 2, 0, 3, 0))
         self.assertFalse((self.root.parent / "evil.txt").exists())
 
     def test_cleanup_removes_the_update_folder(self) -> None:
-        updater.stage(self.package(), self.root, (1, 2, 0))
+        updater.stage(self.package(), self.root, (1, 2, 0, 3, 0))
         (self.root / "update" / updater.ASSET).write_bytes(b"zip")
         self.assertEqual(updater.cleanup(self.root), [])
         self.assertFalse((self.root / "update").exists())
@@ -165,7 +172,7 @@ class DownloadTests(TempRoot):
     def test_releases_list_from_the_test_server(self) -> None:
         (self.files / "releases").write_text('[{"tag_name": "v9.0.0", "assets": []}]', encoding="utf-8")
         self.assertEqual(updater.fetch_releases()[0]["tag_name"], "v9.0.0")
-        self.assertIsNone(updater.newest_release((1, 0, 0)))
+        self.assertIsNone(updater.newest_release((1, 0, 0, 3, 0)))
 
     def test_a_server_that_is_not_there_is_an_update_error(self) -> None:
         with mock.patch.dict(os.environ, {"UNCHARTED_UPDATE_API": "http://127.0.0.1:1/releases"}):

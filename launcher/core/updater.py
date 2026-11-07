@@ -47,7 +47,11 @@ CHUNK = 1 << 16
 # A try that brought at least this much counts as progress: the failure count starts again.
 PROGRESS_BYTES = 1 << 20
 
-Version = tuple[int, int, int]
+# (major, minor, patch, stage, number): a pre-release stage (alpha 0, beta 1, rc 2) sorts below the release (3),
+# so 1.0.0-beta1 < 1.0.0-beta2 < 1.0.0-rc1 < 1.0.0 < 1.0.1.
+Version = tuple[int, int, int, int, int]
+STAGES = ("alpha", "beta", "rc")
+RELEASE_STAGE = len(STAGES)
 
 
 class UpdateError(Exception):
@@ -74,16 +78,23 @@ class Release:
 
 
 def parse_version(text: str | None) -> Version | None:
-    """'v1.2.3' or '1.2.3' -> (1, 2, 3); None for anything else."""
-    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", (text or "").strip())
+    """'v1.2.3', '1.2.3' or '1.2.3-beta1' (alpha, beta, rc; the number may be left out) -> a Version; None for anything
+    else."""
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)(\d*))?", (text or "").strip())
     if not match:
         return None
-    major, minor, patch = (int(part) for part in match.groups())
-    return major, minor, patch
+    major, minor, patch = (int(part) for part in match.groups()[:3])
+    stage, number = match.group(4), match.group(5)
+    if stage is None:
+        return major, minor, patch, RELEASE_STAGE, 0
+    return major, minor, patch, STAGES.index(stage), int(number or 0)
 
 
 def version_text(version: Version) -> str:
-    return ".".join(str(part) for part in version)
+    text = ".".join(str(part) for part in version[:3])
+    if len(version) > 3 and version[3] < RELEASE_STAGE:
+        text += f"-{STAGES[version[3]]}{version[4] or ''}"
+    return text
 
 
 def installed_version(root: Path) -> Version | None:
