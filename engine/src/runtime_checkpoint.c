@@ -78,13 +78,19 @@ static void test_request(void) {
 /* El Dorado: "Give all treasures" (the launcher's cheat, BB_GIVE_TREASURES=1, 1.02 code): the games' own Dev Menu item
  * of that name, its callback called as the menu does (message 4), once a session, after 5 s of play (a campaign is
  * loaded then; the treasures are its own and go into its next save). Uncharted 1 0x9fc60, Uncharted 2 0x3fea90,
- * Uncharted 3 0x4ba500, each checked against its first bytes first. */
+ * Uncharted 3 0x4ba500, each checked against its first bytes first. BB_GIVE_TREASURES: "1" for every game, or the
+ * games still to be given ("u1,u3"): the start script gives each game and player once (the game shows its "all
+ * treasures found" message each time it is given). */
 typedef unsigned char (__attribute__((sysv_abi)) *MenuCallback)(void *item, int message);
 static void give_treasures(uint64_t image, uint64_t at, const char *pattern, const char *name) {
     static int state=-1; /* -1 unread, 0 off or done, 1 waiting */
     static unsigned last_calls;
     static double playing_since;
-    if (state<0) { const char *e=getenv("BB_GIVE_TREASURES"); state=e && e[0]=='1'; }
+    if (state<0) {
+        const char *e=getenv("BB_GIVE_TREASURES"), *exe=getenv("BB_EXE");
+        const char *key=exe && strstr(exe,"big2") ? "u2" : exe && strstr(exe,"big3") ? "u3" : "u1";
+        state=e && (!strcmp(e,"1") || strstr(e,key));
+    }
     if (state!=1) return;
     struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
     const double t=now.tv_sec+now.tv_nsec*1e-9;

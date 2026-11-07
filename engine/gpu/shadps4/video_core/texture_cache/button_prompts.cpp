@@ -231,12 +231,29 @@ std::string KeyLabel(const std::string& name) {
 struct Color {
     float r, g, b;
 };
-// El Dorado's keys: tanned leather caps with a treasure-gold rim and parchment letters.
-constexpr Color cap_top{0.250f, 0.180f, 0.110f};
-constexpr Color cap_bottom{0.100f, 0.068f, 0.040f};
-constexpr Color rim{0.870f, 0.690f, 0.345f};
-constexpr Color text_color{0.965f, 0.900f, 0.760f};
-constexpr Color highlight{0.950f, 0.700f, 0.300f}; ///< the d-pad's lit direction
+// El Dorado's keys, in the games' own prompt look: a dark charcoal cap like the PlayStation buttons' face, a thin
+// edge in the game's own color and white letters; no gold, no glow of its own; the d-pad's lit direction in the HUD's orange.
+constexpr Color cap_top{0.165f, 0.176f, 0.196f};
+constexpr Color cap_bottom{0.071f, 0.078f, 0.090f};
+/// The thin edge (and the mouse's seams): the color of the game being played, as the launcher shows it
+/// (launcher/ui/qml/Theme.qml: Uncharted 1 jungle green, 2 ice blue, 3 desert orange). Each game is its own run.
+Color GameColor() {
+    const char* exe = std::getenv("BB_EXE");
+    const std::string name = exe ? exe : "";
+    if (name.find("big2") != std::string::npos) {
+        return {0.353f, 0.682f, 1.000f};
+    }
+    if (name.find("big3") != std::string::npos) {
+        return {1.000f, 0.580f, 0.278f};
+    }
+    return {0.204f, 0.788f, 0.541f};
+}
+const Color rim = GameColor();
+constexpr Color text_color{0.961f, 0.965f, 0.973f};
+constexpr Color highlight{0.969f, 0.694f, 0.396f};  ///< the d-pad's lit direction (the games' HUD orange)
+constexpr Color lit_text{0.075f, 0.082f, 0.098f};   ///< letters on a lit (orange) key
+constexpr Color side_dark{0.020f, 0.022f, 0.026f};  ///< a raised button's side, its shadowed edge
+constexpr Color side_light{0.110f, 0.118f, 0.133f}; ///< ... and its middle
 
 /// A straight-alpha RGBA float canvas the size of the sheet.
 struct Canvas {
@@ -267,17 +284,11 @@ float RoundedRect(float x, float y, float cx, float cy, float hw, float hh, floa
     return std::sqrt(ox * ox + oy * oy) + std::min(std::max(qx, qy), 0.0f) - r;
 }
 
-/// Signed distance from a rectangle with its corners cut off at `c` (El Dorado's plates; negative inside).
-float CutRect(float x, float y, float cx, float cy, float hw, float hh, float c) {
-    const float ax = std::fabs(x - cx), ay = std::fabs(y - cy);
-    return std::max({ax - hw, ay - hh, (ax + ay - (hw + hh - c)) * 0.70710678f});
-}
-
 float Coverage(float distance) {
     return std::clamp(0.5f - distance, 0.0f, 1.0f);
 }
 
-/// A shape given by a distance function: soft dark halo, rim, gradient body.
+/// A shape given by a distance function: soft dark halo, thin dark edge, light gradient face.
 template <typename Distance>
 void DrawCap(Canvas& c, float x0, float y0, float x1, float y1, Distance distance,
              const Color* face = nullptr) {
@@ -285,7 +296,7 @@ void DrawCap(Canvas& c, float x0, float y0, float x1, float y1, Distance distanc
         for (int x = int(x0) - 3; x < int(std::ceil(x1)) + 3; ++x) {
             const float d = distance(x + 0.5f, y + 0.5f);
             // A halo like the PlayStation pictures' glow, so the key reads on bright scenes.
-            c.Blend(x, y, {0.0f, 0.0f, 0.0f}, 0.45f * std::clamp(1.0f - d / 3.0f, 0.0f, 1.0f) *
+            c.Blend(x, y, {0.0f, 0.0f, 0.0f}, 0.30f * std::clamp(1.0f - d / 3.0f, 0.0f, 1.0f) *
                                                   (d > -1.0f ? 1.0f : 0.0f));
             const float rim_a = Coverage(d);
             if (rim_a <= 0.0f) {
@@ -296,7 +307,7 @@ void DrawCap(Canvas& c, float x0, float y0, float x1, float y1, Distance distanc
             const Color body{cap_top.r + (cap_bottom.r - cap_top.r) * t,
                              cap_top.g + (cap_bottom.g - cap_top.g) * t,
                              cap_top.b + (cap_bottom.b - cap_top.b) * t};
-            c.Blend(x, y, face ? *face : body, Coverage(d + 1.6f));
+            c.Blend(x, y, face ? *face : body, Coverage(d + 1.2f));
         }
     }
 }
@@ -422,7 +433,7 @@ void DrawKey(Canvas& c, const Font& font, const Slot& s, const std::string& labe
     const float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f;
     const float radius = std::min(x1 - x0, y1 - y0) * 0.22f;
     DrawCap(c, x0, y0, x1, y1, [&](float x, float y) {
-        return CutRect(x, y, cx, cy, (x1 - x0) * 0.5f, (y1 - y0) * 0.5f, radius);
+        return RoundedRect(x, y, cx, cy, (x1 - x0) * 0.5f, (y1 - y0) * 0.5f, radius);
     });
     font.Draw(c, label, cx, cy, (x1 - x0) - 8.0f, (y1 - y0) * 0.5f);
 }
@@ -754,7 +765,7 @@ void DrawLabel(Canvas& c, const Font& font, const std::string& key, float cx, fl
     }
 }
 
-/// A round prompt button as a key: dark face, light rim, the bound key.
+/// A round prompt button as a key: light face in a thin dark outline, the bound key in dark letters.
 void DrawRoundButton(Canvas& up, const Font& font, const std::string& key, int xbox = -1) {
     const float cx = 128.5f, cy = 256.0f - 126.5f, radius = 70.0f;
     for (u32 y = 0; y < up.height; ++y) {
@@ -762,8 +773,8 @@ void DrawRoundButton(Canvas& up, const Font& font, const std::string& key, int x
             const float d = std::hypot(x + 0.5f - cx, y + 0.5f - cy) - radius;
             up.Blend(x, y, {0.03f, 0.03f, 0.03f}, Coverage(d));
             const float t = std::clamp((y + 0.5f - (cy - radius)) / (2 * radius), 0.0f, 1.0f);
-            up.Blend(x, y, Mix(cap_top, cap_bottom, t), Coverage(d + 5.0f));
-            up.Blend(x, y, rim, 0.8f * std::min(Coverage(d + 9.0f), 1.0f - Coverage(d + 12.0f)));
+            up.Blend(x, y, rim, Coverage(d + 1.0f));
+            up.Blend(x, y, Mix(cap_top, cap_bottom, t), Coverage(d + 4.0f));
         }
     }
     if (xbox >= 0) {
@@ -797,18 +808,15 @@ void DrawPuck(Canvas& up, const Font& font, const std::string& key, bool pressed
                      Supersample(x, y, [&](float px, float py) { return in_side(px, py, 1.5f); }));
             if (!pressed) {
                 const float shade = 1.0f - std::fabs(x + 0.5f - cx) / rx;
-                up.Blend(x, y, Mix({0.04f, 0.04f, 0.04f}, {0.16f, 0.15f, 0.14f}, shade),
+                up.Blend(x, y, Mix(side_dark, side_light, shade),
                          Supersample(x, y, [&](float px, float py) { return in_side(px, py, 0.0f); }));
             }
             const float t = std::clamp((y + 0.5f - (face - ry)) / (2 * ry), 0.0f, 1.0f);
-            up.Blend(x, y, {0.02f, 0.02f, 0.02f}, Supersample(x, y, [&](float px, float py) {
+            up.Blend(x, y, rim, Supersample(x, y, [&](float px, float py) { // the face's edge: the game's color
                          return in_ellipse(px, py, face, 0.0f);
                      }));
             up.Blend(x, y, Mix(cap_top, cap_bottom, t), Supersample(x, y, [&](float px, float py) {
                          return in_ellipse(px, py, face, -3.0f);
-                     }));
-            up.Blend(x, y, rim, 0.8f * Supersample(x, y, [&](float px, float py) {
-                         return in_ellipse(px, py, face, -7.0f) && !in_ellipse(px, py, face, -10.0f);
                      }));
         }
     }
@@ -821,7 +829,7 @@ void DrawPuck(Canvas& up, const Font& font, const std::string& key, bool pressed
 
 /// The weapon switch d-pad as the four keys bound to it, the lit ones orange.
 void DrawHudDPad(Canvas& up, const Font& font, const Bindings& b, u8 lit) {
-    constexpr Color hud_orange{0.969f, 0.694f, 0.396f};
+    constexpr Color hud_orange = highlight;
     struct Key {
         float cx, cy;
         int binding;
@@ -836,7 +844,8 @@ void DrawHudDPad(Canvas& up, const Font& font, const Bindings& b, u8 lit) {
             up, k.cx - half, k.cy - half, k.cx + half, k.cy + half,
             [&](float x, float y) { return RoundedRect(x, y, k.cx, k.cy, half, half, 9.0f); },
             (lit & k.lit) ? &hud_orange : nullptr);
-        font.Draw(up, KeyLabel(b.dpad[k.binding]), k.cx, k.cy, 2 * half - 8.0f, 34.0f);
+        font.Draw(up, KeyLabel(b.dpad[k.binding]), k.cx, k.cy, 2 * half - 8.0f, 34.0f,
+                  (lit & k.lit) ? lit_text : text_color);
     }
 }
 
@@ -980,9 +989,10 @@ void DrawArrows(Canvas& c, const Font& font, const Slot& s, const Bindings& b) {
         const float kx = key.x + k * 0.5f, ky = key.y + k * 0.5f;
         DrawCap(
             c, key.x, key.y, key.x + k, key.y + k,
-            [&](float x, float y) { return CutRect(x, y, kx, ky, k * 0.5f, k * 0.5f, k * 0.22f); },
+            [&](float x, float y) { return RoundedRect(x, y, kx, ky, k * 0.5f, k * 0.5f, k * 0.22f); },
             (s.icon & key.lit) ? &highlight : nullptr);
-        font.Draw(c, KeyLabel(b.dpad[key.binding]), kx, ky, k - 4.0f, k * 0.62f);
+        font.Draw(c, KeyLabel(b.dpad[key.binding]), kx, ky, k - 4.0f, k * 0.62f,
+                  (s.icon & key.lit) ? lit_text : text_color);
     }
 }
 

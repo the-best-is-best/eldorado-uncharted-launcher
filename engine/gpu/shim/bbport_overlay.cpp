@@ -996,7 +996,7 @@ void TextEntryBox() {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing);
-    ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "%s", text_entry_prompt.c_str());
+    ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_CheckMark] /* the game's color */, "%s", text_entry_prompt.c_str());
     ImGui::Separator();
     ImGui::SetWindowFontScale(1.4f);
     ImGui::Text("%s_", text_entry_text.c_str());
@@ -1024,7 +1024,7 @@ void ChoiceBox() {
     ImGui::Begin("##choice", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
                      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
-    ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "%s",
+    ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_CheckMark] /* the game's color */, "%s",
                        choice_kind == 1   ? T("Save game")
                        : choice_kind == 2 ? T("Load game")
                        : choice_kind == 4 ? T("Close the game? Progress since the last save is lost.")
@@ -1087,7 +1087,7 @@ void ChoiceBox() {
         ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s",
                            T("Press Delete or Triangle (Y) AGAIN to delete this save (it goes to savedata-deleted)"));
     } else if (choice_deletable >= 0 && choice_index >= choice_deletable) {
-        ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.45f, 1.0f), "%s", T("Delete or Triangle (Y): delete this save"));
+        ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_CheckMark], "%s", T("Delete or Triangle (Y): delete this save"));
     } else if (choice_deletable >= 0) {
         TextGrey(T("Select a save, then Delete or Triangle (Y) to delete it"));
     }
@@ -1611,63 +1611,72 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
 
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
-    // El Dorado's look (the launcher's): dark leather, parchment text and treasure gold, square-ish
-    // plates with a thin gold edge.
-    style.WindowRounding = 2.0f;
-    style.FrameRounding = 2.0f;
-    style.GrabRounding = 2.0f;
-    style.TabRounding = 2.0f;
+    // El Dorado's look, the launcher's (launcher/ui/qml/Theme.qml): dark slate panels, light text, rounded corners,
+    // and the game's own color for what is chosen (Uncharted 1 jungle green, 2 ice blue, 3 desert orange).
+    style.WindowRounding = 10.0f;
+    style.FrameRounding = 6.0f;
+    style.GrabRounding = 6.0f;
+    style.TabRounding = 6.0f;
+    style.PopupRounding = 8.0f;
+    style.ScrollbarRounding = 6.0f;
     style.WindowBorderSize = 1.0f;
     style.FrameBorderSize = 0.0f;
     {
         auto rgb = [](int r, int g, int b, float a = 1.0f) {
             return ImVec4(r / 255.0f, g / 255.0f, b / 255.0f, a);
         };
-        const ImVec4 gold = rgb(222, 176, 88), gold_dim = rgb(150, 116, 58), ink = rgb(241, 230, 207);
+        const char* exe = std::getenv("BB_EXE");
+        const std::string game = exe ? exe : "";
+        const ImVec4 accent = game.find("big2") != std::string::npos   ? rgb(0x5a, 0xae, 0xff)
+                              : game.find("big3") != std::string::npos ? rgb(0xff, 0x94, 0x47)
+                                                                        : rgb(0x34, 0xc9, 0x8a);
+        const auto soft = [&](float a) { return ImVec4(accent.x, accent.y, accent.z, a); };
+        const ImVec4 ink = rgb(0xee, 0xf1, 0xf6), line = rgb(0x2c, 0x32, 0x3d), panel = rgb(0x1a, 0x1e, 0x26),
+                     panel_high = rgb(0x23, 0x28, 0x33);
         ImVec4* c = style.Colors;
         c[ImGuiCol_Text] = ink;
-        c[ImGuiCol_TextDisabled] = rgb(160, 144, 116);
-        c[ImGuiCol_WindowBg] = rgb(20, 14, 9, 0.94f);
+        c[ImGuiCol_TextDisabled] = rgb(0x8f, 0x98, 0xa6);
+        c[ImGuiCol_WindowBg] = rgb(0x12, 0x15, 0x1b, 0.95f);
         c[ImGuiCol_ChildBg] = rgb(0, 0, 0, 0.0f);
-        c[ImGuiCol_PopupBg] = rgb(24, 17, 11, 0.97f);
-        c[ImGuiCol_Border] = rgb(150, 116, 58, 0.55f);
-        c[ImGuiCol_FrameBg] = rgb(44, 32, 21);
-        c[ImGuiCol_FrameBgHovered] = rgb(66, 49, 31);
-        c[ImGuiCol_FrameBgActive] = rgb(84, 62, 38);
-        c[ImGuiCol_TitleBg] = rgb(28, 20, 13);
-        c[ImGuiCol_TitleBgActive] = rgb(40, 29, 18);
-        c[ImGuiCol_TitleBgCollapsed] = rgb(20, 14, 9, 0.8f);
-        c[ImGuiCol_MenuBarBg] = rgb(28, 20, 13);
-        c[ImGuiCol_ScrollbarBg] = rgb(20, 14, 9, 0.6f);
-        c[ImGuiCol_ScrollbarGrab] = gold_dim;
-        c[ImGuiCol_ScrollbarGrabHovered] = gold;
-        c[ImGuiCol_ScrollbarGrabActive] = gold;
-        c[ImGuiCol_CheckMark] = gold;
-        c[ImGuiCol_SliderGrab] = gold_dim;
-        c[ImGuiCol_SliderGrabActive] = gold;
-        c[ImGuiCol_Button] = rgb(58, 43, 27);
-        c[ImGuiCol_ButtonHovered] = rgb(110, 84, 46);
-        c[ImGuiCol_ButtonActive] = gold_dim;
-        c[ImGuiCol_Header] = rgb(150, 116, 58, 0.35f);
-        c[ImGuiCol_HeaderHovered] = rgb(222, 176, 88, 0.40f);
-        c[ImGuiCol_HeaderActive] = rgb(222, 176, 88, 0.55f);
-        c[ImGuiCol_Separator] = rgb(150, 116, 58, 0.5f);
-        c[ImGuiCol_SeparatorHovered] = gold;
-        c[ImGuiCol_SeparatorActive] = gold;
-        c[ImGuiCol_ResizeGrip] = rgb(150, 116, 58, 0.25f);
-        c[ImGuiCol_ResizeGripHovered] = rgb(222, 176, 88, 0.6f);
-        c[ImGuiCol_ResizeGripActive] = gold;
-        c[ImGuiCol_Tab] = rgb(40, 29, 18);
-        c[ImGuiCol_TabHovered] = rgb(110, 84, 46);
-        c[ImGuiCol_TabSelected] = rgb(84, 62, 38);
-        c[ImGuiCol_TabSelectedOverline] = gold;
-        c[ImGuiCol_TabDimmed] = rgb(30, 22, 14);
-        c[ImGuiCol_TabDimmedSelected] = rgb(58, 43, 27);
-        c[ImGuiCol_PlotLines] = gold;
+        c[ImGuiCol_PopupBg] = rgb(0x16, 0x1a, 0x21, 0.98f);
+        c[ImGuiCol_Border] = rgb(0xff, 0xff, 0xff, 0.10f);
+        c[ImGuiCol_FrameBg] = panel;
+        c[ImGuiCol_FrameBgHovered] = panel_high;
+        c[ImGuiCol_FrameBgActive] = line;
+        c[ImGuiCol_TitleBg] = rgb(0x0c, 0x0e, 0x12);
+        c[ImGuiCol_TitleBgActive] = rgb(0x15, 0x19, 0x20);
+        c[ImGuiCol_TitleBgCollapsed] = rgb(0x0c, 0x0e, 0x12, 0.8f);
+        c[ImGuiCol_MenuBarBg] = rgb(0x15, 0x19, 0x20);
+        c[ImGuiCol_ScrollbarBg] = rgb(0x0c, 0x0e, 0x12, 0.6f);
+        c[ImGuiCol_ScrollbarGrab] = line;
+        c[ImGuiCol_ScrollbarGrabHovered] = soft(0.7f);
+        c[ImGuiCol_ScrollbarGrabActive] = accent;
+        c[ImGuiCol_CheckMark] = accent;
+        c[ImGuiCol_SliderGrab] = soft(0.75f);
+        c[ImGuiCol_SliderGrabActive] = accent;
+        c[ImGuiCol_Button] = panel_high;
+        c[ImGuiCol_ButtonHovered] = line;
+        c[ImGuiCol_ButtonActive] = soft(0.55f);
+        c[ImGuiCol_Header] = soft(0.18f);
+        c[ImGuiCol_HeaderHovered] = soft(0.28f);
+        c[ImGuiCol_HeaderActive] = soft(0.40f);
+        c[ImGuiCol_Separator] = line;
+        c[ImGuiCol_SeparatorHovered] = soft(0.7f);
+        c[ImGuiCol_SeparatorActive] = accent;
+        c[ImGuiCol_ResizeGrip] = rgb(0xff, 0xff, 0xff, 0.08f);
+        c[ImGuiCol_ResizeGripHovered] = soft(0.6f);
+        c[ImGuiCol_ResizeGripActive] = accent;
+        c[ImGuiCol_Tab] = panel;
+        c[ImGuiCol_TabHovered] = panel_high;
+        c[ImGuiCol_TabSelected] = line;
+        c[ImGuiCol_TabSelectedOverline] = accent;
+        c[ImGuiCol_TabDimmed] = panel;
+        c[ImGuiCol_TabDimmedSelected] = panel_high;
+        c[ImGuiCol_PlotLines] = accent;
         c[ImGuiCol_PlotLinesHovered] = ink;
-        c[ImGuiCol_PlotHistogram] = gold;
-        c[ImGuiCol_TextSelectedBg] = rgb(222, 176, 88, 0.35f);
-        c[ImGuiCol_NavCursor] = gold;
+        c[ImGuiCol_PlotHistogram] = accent;
+        c[ImGuiCol_TextSelectedBg] = soft(0.35f);
+        c[ImGuiCol_NavCursor] = accent;
     }
 
     ImFontConfig font_config;
@@ -2170,6 +2179,9 @@ void BeginChoice(int kind, std::vector<std::string> items, std::vector<BbPng::Im
     choice_result = -1;
     choice_active = true;
     choice_opened_at = std::chrono::steady_clock::now();
+    if (kind == 4) {
+        SetOpen(false); // the close question is drawn only without the in-game menu: it closes (settings kept)
+    }
 }
 
 int PollChoice() {

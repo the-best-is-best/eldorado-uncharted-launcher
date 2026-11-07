@@ -250,6 +250,7 @@ bool WindowSDL::PollEvents() {
         const int answer = BbOverlay::PollChoice();
         if (answer != -1) {
             close_asked = false;
+            close_request_ms = 0;
             BbOverlay::EndChoice();
             if (answer == 1) {
                 std::printf("Window closed (the player confirmed closing the game)\n");
@@ -387,18 +388,35 @@ bool WindowSDL::PollEvents() {
             height = h;
             break;
         }
-        case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-            // El Dorado: the close button or Alt+F4 asks first (kind 4: "Close the game?"), so a slip of the
-            // hand does not lose the play since the last save; a second press while asked closes at once.
+        case SDL_EVENT_WINDOW_CLOSE_REQUESTED: {
+            // El Dorado: the close button or Alt+F4 asks first (kind 4: "Close the game?", over the in-game menu
+            // too), so a slip of the hand does not lose the play since the last save. A second request closes at
+            // once, but only a second later: Alt+F4 held down repeats, and its repeats are one press.
             // BB_CONFIRM_CLOSE=0: closes at once, as before.
-            if (const char* confirm = std::getenv("BB_CONFIRM_CLOSE"); !(confirm && confirm[0] == '0') &&
-                                                                      !close_asked && !BbOverlay::ChoiceOpen()) {
-                BbOverlay::BeginChoice(4, {BbI18n::T("Keep playing"), BbI18n::T("Close the game")}, {}, 0, -1);
-                close_asked = true;
+            const char* confirm = std::getenv("BB_CONFIRM_CLOSE");
+            if (confirm && confirm[0] == '0') {
+                is_open = false;
                 break;
             }
+            const u64 now = SDL_GetTicks();
+            if (close_request_ms == 0) {
+                close_request_ms = now;
+                if (!close_asked && !BbOverlay::ChoiceOpen()) { // another dialog up: the next request closes
+                    BbOverlay::BeginChoice(4, {BbI18n::T("Keep playing"), BbI18n::T("Close the game")}, {}, 0, -1);
+                    close_asked = true;
+                    std::printf("Close: the question is on screen (close button or Alt+F4)\n");
+                    std::fflush(stdout);
+                }
+                break;
+            }
+            if (now - close_request_ms < 1000) {
+                break; // the same press repeating
+            }
+            std::printf("Window closed (a second close request)\n");
+            std::fflush(stdout);
             is_open = false;
             break;
+        }
         case SDL_EVENT_QUIT: // Windows shutting down, or the launcher's STOP: no question
             is_open = false;
             break;

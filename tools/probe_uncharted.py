@@ -328,6 +328,33 @@ def language_text_file(game_dir, game, language):
     return found
 
 
+TREASURES_FILE = USER / "treasures-given.json"  # "u1:<player>" -> when the Give all treasures cheat gave them
+
+
+def treasure_key(game):
+    profile = os.environ.get(f"UNCHARTED_SAVE_PROFILE_{game.upper()}", "1")
+    return f"{game}:{profile}"
+
+
+def treasures_given():
+    try:
+        return json.loads(TREASURES_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def note_treasures_given(game):
+    """The engine gave this game's treasures to the current player: not again (treasure_key)."""
+    if not game:
+        return
+    given = treasures_given()
+    given[treasure_key(game)] = time.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        TREASURES_FILE.write_text(json.dumps(given, indent=2), encoding="utf-8")
+    except OSError as error:
+        print(f"Treasures: could not note the gift ({error})")
+
+
 def game_environment(args, game, executable, game_dir):
     """The engine's environment from the launcher's: BB_* from UNCHARTED_*/GOW3_* and probe-u<N>.ini."""
     ini = read_ini(USER / f"probe-{game}.ini")
@@ -457,8 +484,14 @@ def game_environment(args, game, executable, game_dir):
                                 + option_cheats + arabic_cheats)
     if "devmode" in cheats:
         env["BB_DEV_MENU"] = "1"
-    if "treasures" in cheats:  # the games' own Dev Menu "Give all Treasures", once a start (runtime_checkpoint.c)
-        env["BB_GIVE_TREASURES"] = "1"
+    if "treasures" in cheats:  # the games' own Dev Menu "Give all Treasures" (runtime_checkpoint.c)
+        # Once per game and player: given, the treasures are in that player's saves; given again, the game showed
+        # its "all treasures found" message at every start.
+        due = [key for key in GAME_KEYS.values() if treasure_key(key) not in treasures_given()]
+        if due:
+            env["BB_GIVE_TREASURES"] = ",".join(due)
+        else:
+            env.pop("BB_GIVE_TREASURES", None)
     pokes = {}
     for name, table in CHEAT_POKES.items():
         if name in cheats:
@@ -822,6 +855,9 @@ def run(args, game, executable, game_dir):
             log.flush()
             print(line, flush=True)
             stats.line(line)
+            if line.startswith("Treasures: Uncharted ") and line.rstrip().endswith("Give all Treasures"):
+                note_treasures_given(GAME_KEYS.get({"1": "eboot.bin", "2": "big2-ps4_Shipping.elf",
+                                                    "3": "big3-ps4_Shipping.elf"}.get(line[21:22], "")))
             if line.startswith("Switching to "):
                 target = line[len("Switching to "):].strip()
                 # The launcher's message, and the log of the game started next.

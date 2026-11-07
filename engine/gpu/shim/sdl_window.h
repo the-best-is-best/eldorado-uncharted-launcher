@@ -42,6 +42,7 @@ private:
     std::mutex text_mutex;
     bool text_requested{}, text_active{};
     bool close_asked{}; ///< El Dorado: the "Close the game?" question is on screen (window.cpp)
+    u64 close_request_ms{}; ///< El Dorado: when the first close request of a pair came (0: none waiting)
     int text_state{};
     std::string text, text_prompt, base_title;
     void UpdateTextTitle();
