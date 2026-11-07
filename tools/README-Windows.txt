@@ -33,7 +33,10 @@ Notes
 - The first start of each game prepares files and compiles shaders: expect a slow first load
   and some stutter until the shader cache has filled.
 - Settings are kept per game (controls are shared). Saves and logs are kept in analysis\ next to the launcher.
-- Logs for troubleshooting: LOGS in the launcher's left bar, or Advanced -> Open log folder (boot.log).
+- Logs for troubleshooting: Settings -> LAUNCHER -> Log folder (boot.log), or Problem report (one zip on the
+  Desktop to attach to a report).
+- Check El Dorado.bat: checks the install (files, Qt, the game folder, its languages, the shader preparation)
+  and the logs of the last runs (crashes, how each game was closed, FPS, the shader cache), as one page.
 - Render resolutions above 1080p are new: if a game crashes there, choose Medium (1080p).
 - Low-end PCs and laptops: keep Idle game threads (Performance tab) on Sleep (the default): with
   Spin the games' six job threads keep their cores busy while waiting for work and take a 4-6

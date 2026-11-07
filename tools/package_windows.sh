@@ -43,7 +43,9 @@ cp engine/scripts/prepare.py engine/scripts/link_modules.py engine/scripts/link_
 cp -r engine/shaders "$stage/engine/"
 cp tools/probe_uncharted.py tools/discord_presence.py tools/hang_report.py tools/apply_update.py tools/install_update.py \
     tools/check_game_files.py tools/game_files_102.json.gz \
-    tools/game_update_view.py tools/arabic_language.py tools/text_languages.py "$stage/tools/"
+    tools/game_update_view.py tools/arabic_language.py tools/text_languages.py tools/health_check.py "$stage/tools/"
+# The health check, beside the launcher (tools/health_check.py: the install and the logs, as one page).
+cp "tools/Check El Dorado.bat" "$stage/"
 # PkgTool (LibOrbisPkg, LGPL-3.0): Advanced -> Install game update unpacks the player's own update PKG.
 mkdir -p "$stage/tools/pkgtool"
 cp tools/pkgtool/PkgTool.exe tools/pkgtool/LibOrbisPkg.dll "$stage/tools/pkgtool/"
