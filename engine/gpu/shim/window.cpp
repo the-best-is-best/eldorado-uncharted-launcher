@@ -1,4 +1,5 @@
 // bbport: SDL3 window for the Vulkan swapchain (X11 or Wayland).
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -148,6 +149,9 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     // El Dorado: the game's loading icon on the window and its taskbar button, once taken from a loading screen
     // (bbport_loading_icon.h); until then the executable's icon.
     SetLoadingIcon();
+    if (!(fullscreen && fullscreen[0] == '1')) {
+        FitWindowToScreen();
+    }
     // bbport: a game started from the collection menu (run.py sets BB_RAISE_WINDOW) opened behind
     // other windows, as the menu's process had ended: no input until the window was clicked.
     if (const char* raise = std::getenv("BB_RAISE_WINDOW"); raise && raise[0] == '1') {
@@ -179,6 +183,30 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     width = w;
     height = h;
     LOG_INFO(Frontend, "Window {}x{} on {}", w, h, driver);
+}
+
+// El Dorado: a window (not fullscreen) that would not fit the screen's usable area with its frame (the screen's own
+// size went past the screen and under the taskbar) is made smaller, keeping its shape, and centred in that area.
+void WindowSDL::FitWindowToScreen() {
+    SDL_Rect area{};
+    const SDL_DisplayID display = SDL_GetDisplayForWindow(window);
+    if (!display || !SDL_GetDisplayUsableBounds(display, &area) || area.w <= 0 || area.h <= 0) {
+        return;
+    }
+    int top = 0, left = 0, bottom = 0, right = 0;
+    SDL_GetWindowBordersSize(window, &top, &left, &bottom, &right); // 0 when the system does not say
+    int w = 0, h = 0;
+    SDL_GetWindowSize(window, &w, &h);
+    const int room_w = area.w - left - right, room_h = area.h - top - bottom;
+    if (w <= 0 || h <= 0 || room_w <= 0 || room_h <= 0 || (w <= room_w && h <= room_h)) {
+        return;
+    }
+    const double scale = std::min(double(room_w) / w, double(room_h) / h);
+    const int fit_w = std::max(1, int(w * scale)), fit_h = std::max(1, int(h * scale));
+    SDL_SetWindowSize(window, fit_w, fit_h);
+    SDL_SetWindowPosition(window, area.x + left + (room_w - fit_w) / 2, area.y + top + (room_h - fit_h) / 2);
+    std::printf("Window: %dx%d made %dx%d to fit the screen (usable %dx%d)\n", w, h, fit_w, fit_h, area.w, area.h);
+    std::fflush(stdout);
 }
 
 WindowSDL::~WindowSDL() {
@@ -324,6 +352,24 @@ bool WindowSDL::PollEvents() {
         // BB_TEXTURE_DUMP=1: F10 saves the textures of the next frame (user/texture_dump).
         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F10 && !event.key.repeat) {
             Vulkan::FrameCapture::ArmTextureDump();
+        }
+        // El Dorado: F11 switches between a window and fullscreen while playing (for this run; the launcher's Display
+        // setting is the start's). Not with BB_DEV_MENU=1, where F11 opens Naughty Dog's developer menu.
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F11 && !event.key.repeat) {
+            static const bool dev_menu = [] {
+                const char* env = std::getenv("BB_DEV_MENU");
+                return env && env[0] == '1';
+            }();
+            if (!dev_menu) {
+                const bool now_fullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
+                SDL_SetWindowFullscreen(window, !now_fullscreen);
+                if (now_fullscreen) {
+                    FitWindowToScreen();
+                }
+                std::printf("Window: F11, %s\n", now_fullscreen ? "windowed" : "fullscreen");
+                std::fflush(stdout);
+                continue;
+            }
         }
         // The controller finishes the text dialog too: Cross (A) accepts, Circle (B) cancels.
         if (text_active && event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN &&

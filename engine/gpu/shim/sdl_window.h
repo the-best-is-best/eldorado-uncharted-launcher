@@ -41,6 +41,7 @@ private:
     std::atomic<bool> is_open{true};
     std::mutex text_mutex;
     bool text_requested{}, text_active{};
+    void FitWindowToScreen(); ///< El Dorado: a window larger than the screen's usable area is made to fit
     bool close_asked{}; ///< El Dorado: the "Close the game?" question is on screen (window.cpp)
     u64 close_request_ms{}; ///< El Dorado: when the first close request of a pair came (0: none waiting)
     int text_state{};
