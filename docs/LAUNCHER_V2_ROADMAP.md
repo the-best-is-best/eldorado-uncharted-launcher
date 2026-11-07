@@ -18,7 +18,7 @@ in `legacy/launcher-tk/` as a reference only (see its README).
 | UI toolkit | PySide6 6.x (Qt Quick + QML, Qt Quick Controls Basic style) | GPU-drawn UI, animations, scaling and controller/keyboard focus without drawing by hand; LGPL, official Qt binding |
 | Language | Python 3.12+ (the packaged Windows Python, as today) | The start script, saves, trophies, Steam, updater logic is Python already |
 | Layout | `launcher/` = new code; `legacy/launcher-tk/` = old code (read only) | One place for the new launcher; the old one is not run on this branch |
-| Package growth | About +30 MB zipped, +80 MB unpacked (PySide6 Essentials trimmed to QtCore, QtGui, QtQml, QtQuick, Controls Basic, the Windows platform plugin) | Measured: the full PySide6 Essentials wheel is 208 MB unpacked |
+| Package growth | Measured 7 Nov 2026: +23 MB zipped, +63 MB unpacked (PySide6 Essentials 6.12.0 trimmed by `tools/copy_pyside.py` to QtCore, QtGui, QtNetwork, QtQml, QtQuick, Controls Basic, Layouts, Dialogs, the Windows platform plugin) | The full PySide6 Essentials wheel is 214 MB unpacked |
 | Settings file | Same `%APPDATA%\El Dorado Launcher\launcher.json` and per-game `analysis\uncharted-user\probe-uN.ini` | Players keep their settings across the switch |
 | Engine contract | Unchanged (section 3) | The game starts exactly as today |
 
@@ -119,6 +119,11 @@ Each phase ends with its acceptance checks passing; nothing ships from this bran
   to the front), DPI scaling, the app icon, the taskbar identity `ElDorado.Uncharted.Launcher`.
 - Packaging proof: `tools/package_windows.sh` builds a zip with the trimmed PySide6; measure size and cold start time.
 - Accept: the zip starts on a clean Windows 10/11 PC without Python installed; cold start < 2 s; size within the +35 MB budget.
+- DONE 7 Nov 2026 (measured on the RTX 3060 laptop): PySide6 Essentials 6.12.0, trimmed by `tools/copy_pyside.py`
+  from 214 MB to 60 MB unpacked, **23 MB zipped**. Cold start (process start to the first frame,
+  `main.py --measure`) from the package's own Python with no Python on PATH: **0.91 s** the first time, 0.53–0.56 s
+  after. A second start opens no second window (it brings the open one to the front). The open window uses 103 MB
+  of RAM. Not yet tried on a second PC without Python.
 
 ### Phase 1 — Core (3 days)
 - Write every `core/` module listed in section 2 from the behavior of the legacy launcher (read, not copied), with
@@ -129,6 +134,18 @@ Each phase ends with its acceptance checks passing; nothing ships from this bran
   `tools/test_steam_library.py`; port them).
 - Accept: `python -m pytest tests` green; the launch environment and ini output match the legacy launcher's for the
   three games and all presets.
+- DONE 7 Nov 2026: every `core/` module of section 2 exists (`core/README.md`), `pytest tests` green (76 tests).
+  `tests/test_core_settings.py` runs the legacy launcher itself (through the packaged Python, which has Pillow) and
+  compares the environment, the three ini files and the launcher.json game entries for every preset, every card class
+  and a set of control changes: identical in all 96 cases. The resolution/upscaling sizes match in 560 cases.
+  Controls are **one set for the three games (ALL GAMES)** with a game's own items on top, item by item (a key's two
+  slots, a controller button, or a mouse/controller setting; `core/controls.py`, launcher.json `shared_controls` +
+  per game `own_controls`): a key changed in a game's tab is that game's own (marked ●, "↺ ALL GAMES" gives it
+  back), everything else keeps following ALL GAMES; the in-game menu's changes go to ALL GAMES unless the game owns
+  that item. An existing launcher.json keeps every game's controls: the games' most common set becomes ALL GAMES
+  and what differs becomes that game's own (the user's copy: Uncharted 2 and 3 alike, Uncharted 1 with 12 own
+  items). Dropped because nothing reads them (section 3): async_shaders, mouse_vertical, mouse_invert_x, low_vram,
+  XeSS.
 
 ### Phase 2 — Home screen (3 days)
 - Games: the three games, the background from the latest save picture or the edition's art, Continue (latest save,
@@ -138,6 +155,13 @@ Each phase ends with its acceptance checks passing; nothing ships from this bran
 - Status line from the start script's output; crash/exit messages.
 - Keyboard, mouse and controller navigation everywhere, with key hints for the device in use.
 - Accept: a game starts, stops and restarts from the hub; switching games from the Collection menu is reported.
+- DONE 7 Nov 2026 (code): the selected game's latest save picture behind the home screen (else the player's own
+  art from the game folder at runtime, else El Dorado's drawn map: `core/art.py`, `ui/background.py`), CONTINUE
+  (the latest save, when it was saved), the expedition log (the latest saves of all games), the loading overlay
+  after PLAY (Enter twice stops), the reason a run ended from the engine's log (`core/launch.py`), key hints for the
+  device in use on every screen, the rail's UPDATE (when a release is ready), LOGS and QUIT, `--play` from a game's
+  shortcut. A Collection switch keeps the launcher hidden and names the next game. The drop-downs, toggles and
+  buttons are drawn in El Dorado's colors (`components/DropDown.qml`). Not yet tried by hand with a running game.
 
 ### Phase 3 — Saves, Trophies, Gallery (2 days)
 - Saves: list with pictures; delete (twice), Deleted saves (restore, delete for good), Backups (restore twice; only
@@ -145,6 +169,10 @@ Each phase ends with its acceptance checks passing; nothing ships from this bran
 - Trophies: progress, per-grade counts, the list with icons from the player's own trophy pack.
 - Gallery: F12 screenshots per game, open, open folder, delete to the Recycle Bin.
 - Accept: every action works on a copy of a real save folder; nothing is ever deleted outright except "delete for good".
+- DONE 7 Nov 2026: `core/saves.py`, `core/trophies.py`, `core/gallery.py` with their screens; moves are rename-only
+  with rollback; save titles from `<dir>.sce_sys/param.bin` (what the saves actually have); the trophy list uses the
+  player's own pack through `gow3_pc/scripts/trophies.py`. Tested on temporary copies; not yet tried by hand on the
+  real saves (delete, restore, Recycle Bin).
 
 ### Phase 4 — Settings (4 days)
 - Quick setup (presets with Recommended), Display, Performance, Controls (key, mouse and controller binding capture,
@@ -152,20 +180,33 @@ Each phase ends with its acceptance checks passing; nothing ships from this bran
   1.02"), Advanced (save profile, language per game with "Arabic (translation)", texture filtering, depth of field,
   in-game menu shortcut, updates,
   performance log, shortcuts, Steam, game folder, game update folder/.pkg, check game files, clear shader cache, reset).
-- Settings are per game where they are today; changes are saved at once.
+- Settings are per game where they are today, except the controls: one set for the three games (ALL GAMES) and a
+  game's own items on top, item by item (decided 7 Nov 2026); changes are saved at once.
 - Accept: every setting written by v2 produces the same probe-uN.ini / environment as the legacy launcher (tests from
   phase 1 extended); binding capture works for keyboard, mouse buttons/wheel and controller.
+- DONE 7 Nov 2026: `core/settings.py` (one table of every setting and the editor that saves each change at once),
+  `core/presets.py`, `core/gpu.py`, `core/input_map.py`, the Settings screen with its six tabs. Key capture binds
+  letters and digits by scancode (an Arabic layout binds the right key); Insert and Left Alt are refused. Controller
+  buttons are chosen from a list (no capture by pressing). "Arabic (translation)" is listed only when the player's
+  copy has the translation (checked in the background with `tools/arabic_language.py`, as the start script does).
 
 ### Phase 5 — Updates and first start (2 days)
 - Update check at start (optional), download with progress, staging, hand-off to `tools/apply_update.py`, restart.
 - First start: choose the game folder, apply Recommended to all games, desktop shortcuts offer.
 - Settings migration from the legacy launcher's launcher.json (same file, version bump only).
 - Accept: an installed 1.0.x package updates to a v2 build and back to the release channel without losing settings or saves.
+- DONE 7 Nov 2026 (code): `core/updater.py`, `core/shortcuts.py`, `core/steam.py`, `core/game_files.py` (game and
+  update folders, update .pkg and game .pkg install, file check, shader cache, reset), `ui/app_model.py`, the first
+  start page, `--play u1|u2|u3` from a game's shortcut (no window, the launcher ends with the game). The pickers are
+  Qt Quick Dialogs (Windows' own dialogs, no QtWidgets). NOT yet tried: a real release download and the hand-off to
+  `apply_update.py`, real desktop shortcuts, the real Steam library (they write outside the repo).
 
 ### Phase 6 — Parity, switch, release (2 days)
 - Go through the parity checklist (section 5) on the user's PC with both game editions.
 - Package and workflow: `package_windows.sh` copies `launcher/` (new) and PySide6; `updater.py` REQUIRED lists the
-  new entry point; `tools/windows_starter` starts `launcher\main.py`.
+  new entry point; `tools/windows_starter` starts `launcher\main.py`. DONE 7 Nov 2026 (the GitHub workflow downloads
+  PySide6 Essentials 6.12.0 into `downloads/pyside6`; `tools/copy_pyside.py` trims it into the package). Pillow stays
+  for the shortcut and Steam icons, Tkinter for the update installer's window (a later trim: both through Qt).
 - Delete `legacy/launcher-tk/`; merge `launcher-v2` into `main`; release as 2.0.0.
 
 Estimate: about 17 working days for one developer working by hand; the code of most phases takes a working
@@ -190,7 +231,9 @@ background).
 Settings → Performance: frame rate limit, frames queued, multithreaded rendering (on by default), idle game threads
 (plus any other setting confirmed read by the engine).
 Settings → Controls: key/mouse bindings by group, controller bindings, button prompt style, mouse sensitivity, aim
-sensitivity, vertical sensitivity, invert, vibration, reset.
+sensitivity, invert, vibration, reset; ALL GAMES | Uncharted 1 | 2 | 3 at the top: one set for the three games, a
+game's own items on top (the legacy launcher's vertical sensitivity and invert-X are dropped: the engine reads
+neither).
 Settings → Cheats: skip intro, invincible, infinite ammo, infinite grenades, give all treasures, unlock all rewards,
 unlock all chapters.
 Settings → Advanced: save profile, language per game (+voices; "Arabic (translation)" when the copy has one; the box

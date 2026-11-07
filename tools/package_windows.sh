@@ -3,7 +3,7 @@
 # 10/11 x64 PC with a Vulkan GPU, without Python or MSYS2 installed.
 #   Uncharted Launcher.exe   starter (tools/windows_starter) -> python\pythonw.exe launcher\...
 #   python\                  Windows Python with Tkinter and Pillow (tools/copy_python.py)
-#   launcher\ tools\         the launcher and the start script (tools/probe_uncharted.py)
+#   launcher\ tools\         the launcher (Qt Quick, PySide6) and the start script (tools/probe_uncharted.py)
 #   gow3_pc\                 run.py, scripts\ (game preparation), shaders\ (shader lists) and
 #                            out\ (bb-probe.exe, the engine, with its DLLs)
 # No game files ship: each player selects their own copy of the game in the launcher.
@@ -42,17 +42,16 @@ cp gow3_pc/scripts/prepare.py gow3_pc/scripts/link_modules.py gow3_pc/scripts/li
     gow3_pc/scripts/cheats.py gow3_pc/scripts/patches.py gow3_pc/scripts/mods.py "$stage/gow3_pc/scripts/"
 cp -r gow3_pc/shaders "$stage/gow3_pc/"
 cp tools/probe_uncharted.py tools/discord_presence.py tools/hang_report.py tools/apply_update.py tools/install_update.py \
-    tools/check_game_files.py tools/game_files_102.json.gz "$stage/tools/"
+    tools/check_game_files.py tools/game_files_102.json.gz \
+    tools/game_update_view.py tools/arabic_language.py "$stage/tools/"
 # PkgTool (LibOrbisPkg, LGPL-3.0): Advanced -> Install game update unpacks the player's own update PKG.
 mkdir -p "$stage/tools/pkgtool"
 cp tools/pkgtool/PkgTool.exe tools/pkgtool/LibOrbisPkg.dll "$stage/tools/pkgtool/"
-# Every launcher module and data file (0.6.1 shipped without net_lan.py, which the launcher
-# imported at start: it did not open, GitHub #208).
-cp launcher/*.py launcher/*.pyw launcher/*.json "$stage/launcher/"
+# The launcher: launcher/main.py with core/ (logic) and ui/ (the Qt Quick window and El Dorado's art).
+cp launcher/main.py "$stage/launcher/"
+cp -r launcher/core launcher/ui "$stage/launcher/"
 # The package's version (tools/VERSION; the launcher's updates compare it with the releases).
 cp tools/VERSION "$stage/VERSION"
-cp launcher/assets/uncharted.ico launcher/assets/icon.png launcher/assets/eldorado.ico launcher/assets/eldorado.png \
-    "$stage/launcher/assets/"
 # El Dorado's own loading icons (tools/draw_loading_icons.py): each game's taskbar icon until the engine has taken
 # the game's own from the player's first loading screen.
 mkdir -p "$stage/launcher/assets/loading"
@@ -131,6 +130,9 @@ if [[ -f gow3_pc/fsr4_shaders/fsr4_model_v07_i8_native_1080_pre.spv ]]; then
 fi
 
 "$python_home/python.exe" tools/copy_python.py "$python_home" "$stage/python"
+# Qt for the launcher's window, trimmed to what it uses (tools/copy_pyside.py). PYSIDE_SITE holds PySide6
+# Essentials: pip install --target downloads/pyside6 PySide6-Essentials
+"$python_home/python.exe" tools/copy_pyside.py "${PYSIDE_SITE:-downloads/pyside6}" "$stage/python/Lib/site-packages"
 # Python's own license is python\LICENSE.txt; Pillow's goes with the others.
 for file in "$python_home"/Lib/site-packages/pillow-*.dist-info/licenses/* \
     "$python_home"/Lib/site-packages/pillow-*.dist-info/LICENSE*; do

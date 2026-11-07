@@ -1,4 +1,4 @@
-/* Uncharted Launcher.exe: starts the launcher (launcher\uncharted_launcher.pyw) with the Python that
+/* Uncharted Launcher.exe: starts the launcher (launcher\main.py) with the Python that
  * ships next to it (python\pythonw.exe), without a console window. Built by tools/package_windows.sh. */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -16,7 +16,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
         *slash = 0;
     swprintf(python, 32768, L"%ls\\python\\pythonw.exe", dir);
     /* Its own arguments go to the launcher: "Uncharted Launcher.exe" --play u2 starts that game. */
-    swprintf(line, 32768, L"\"%ls\" \"%ls\\launcher\\uncharted_launcher.pyw\" %ls", python, dir,
+    swprintf(line, 32768, L"\"%ls\" \"%ls\\launcher\\main.py\" %ls", python, dir,
              arguments ? arguments : L"");
 
     STARTUPINFOW startup = {.cb = sizeof(startup)};

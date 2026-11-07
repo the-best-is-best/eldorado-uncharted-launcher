@@ -22,13 +22,14 @@ How to play
    In game, Insert or LT + R3 opens the menu (display, anti-aliasing, frame rate, overlay,
    controls); both shortcuts can be changed in its Controls tab.
 5. Keyboard and mouse work out of the box (WASD move, mouse look, right mouse aim, left mouse
-   fire, Space jump, Left Ctrl cover, F melee, R reload). Change them per game in the launcher's
-   CONTROLS tab. Alt+Tab or Insert frees the mouse.
+   fire, Space jump, Left Ctrl cover, F melee, R reload). Change them in the launcher's CONTROLS
+   tab: the three games share them, unless "Own controls for this game" is on for a game.
+   Alt+Tab or Insert frees the mouse.
 
 Notes
 - The first start of each game prepares files and compiles shaders: expect a slow first load
   and some stutter until the shader cache has filled.
-- Settings are kept per game. Saves and logs are kept in analysis\ next to the launcher.
+- Settings are kept per game (controls are shared). Saves and logs are kept in analysis\ next to the launcher.
 - Logs for troubleshooting: Advanced tab -> Open log folder (boot.log).
 - Render resolutions above 1080p are new: if a game crashes there, choose Medium (1080p).
 - Low-end PCs and laptops: keep Idle game threads (Performance tab) on Sleep (the default): with
