@@ -51,12 +51,6 @@ Page {
         else if (row.kind === "choice") settings.set(row.key, nextValue(row))
         else if (row.kind === "button") run(row.action, row.arg)
         else if (row.kind === "binding") startCapture(row.action, 0)
-        else if (row.kind === "scope") settings.setControlsScope(nextScope(row))
-    }
-    function nextScope(row) {
-        var order = ["all"]
-        for (var i = 0; i < row.games.length; i++) order.push(row.games[i].key)
-        return order[(order.indexOf(row.scope) + 1) % order.length]
     }
     function nextValue(row) {
         for (var i = 0; i < row.options.length; i++)
@@ -76,6 +70,7 @@ Page {
 
     function run(action, argument) {
         if (action === "resetControls") { settings.resetControls(); return }
+        if (action === "useAllGamesKeys") { settings.dropOwn(); return }
         if (typeof app === "undefined") return
         if (action === "openFolder") app.openFolder(argument)
         else if (action === "chooseGameFolder") app.chooseGameFolder()
@@ -213,7 +208,6 @@ Page {
                                        : line.row.kind === "choice" ? choiceRow
                                        : line.row.kind === "button" ? buttonRow
                                        : line.row.kind === "binding" ? bindingRow
-                                       : line.row.kind === "scope" ? scopeRow
                                        : line.row.kind === "section" ? sectionRow : noteRow
                     }
                 }
@@ -237,15 +231,6 @@ Page {
             label: row.title; hint: row.hint; options: row.options; current: row.value; own: row.own === true
             onChosen: (value) => { page.cursor = parent.parent.rowIndex; settings.set(row.key, value) }
             onReset: settings.clearOwnSetting(row.key)
-        }
-    }
-    Component {
-        id: scopeRow
-        ControlsScope {
-            row: parent.parent.row
-            onPick: (scope) => { page.cursor = 0; settings.setControlsScope(scope) }
-            onDropOwn: settings.dropOwn()
-            onMakeShared: settings.makeShared()
         }
     }
     Component {

@@ -15,6 +15,7 @@ from core import config as cfg
 from core import controls, games, gpu, input_map, presets, resolution, settings
 
 CAPTURE_SECONDS = 6
+SCOPE_KEY = "controls_scope"  # the Controls tab's top row: whose keys it shows
 CHEATS_NOTE = "Applied when a game starts. Made for update 1.02 of the game."
 CREDITS = ("DLSS and DLAA use NVIDIA DLSS technology; NVIDIA, RTX and DLSS are trademarks of NVIDIA Corporation. "
            "FSR 3.1 and FSR 4 are AMD FidelityFX Super Resolution.")
@@ -239,7 +240,9 @@ class SettingsModel(QObject):
 
     @Slot(str, "QVariant")
     def set(self, name: str, value: Any) -> None:
-        if name in controls.SETTING_NAMES:
+        if name == SCOPE_KEY:
+            self.setControlsScope(str(value))
+        elif name in controls.SETTING_NAMES:
             self._do(lambda: self._editor.set_control(self._scope, name, value))
         else:
             self._do(lambda: self._editor.set(self._game, name, value))
@@ -321,7 +324,7 @@ class SettingsModel(QObject):
         self._capture_timer.stop()
         try:
             self._editor.bind(self._scope, action, slot, binding)
-            where = "all games" if self._scope == controls.ALL else f"{self.controlsScopeName} (its own key)"
+            where = "all games" if self._scope == controls.ALL else self.controlsScopeName
             self._hint = f"Saved for {where}. " + CAPTURE_HINT
         except (ValueError, OSError) as error:
             self._hint = str(error)
@@ -416,27 +419,26 @@ class SettingsModel(QObject):
         return rows
 
     def _controls_rows(self, config: cfg.Config, values: dict[str, Any]) -> list[dict[str, Any]]:
-        """The scope row (ALL GAMES or a game), then the settings and bindings of that scope; in a game's scope
-        the items it owns are marked."""
+        """One choice at the top says whose keys the tab shows (ALL GAMES, or one game); a game that has keys of
+        its own gets one button to take the ALL GAMES keys again. Then the settings and the bindings."""
         scope = self._scope
-        summary = self._editor.own_summary(config)
-        mine = next((game for game in summary if game["key"] == scope), None)
-        others = [f"{game['name']} has {game['ownCount']} of its own" for game in summary if game["ownCount"]]
-        rows: list[dict[str, Any]] = [{
-            "kind": "scope", "scope": scope, "games": summary, "ownText": mine["ownText"] if mine else "",
-            "ownNote": ("; ".join(others) + ".") if others and scope == controls.ALL else ""}]
-        owned = set(controls.own_items(config, scope)) if scope != controls.ALL else set()
+        scope_options = [{"value": controls.ALL, "label": "All games"}] + [
+            {"value": game.key, "label": f"Uncharted {game.number} only"} for game in games.GAMES]
+        rows: list[dict[str, Any]] = [{"kind": "choice", "key": SCOPE_KEY, "title": "These keys are for",
+                                       "hint": "", "enabled": True, "value": scope, "options": scope_options}]
+        if scope != controls.ALL and controls.own_items(config, scope):
+            rows.append({"kind": "button", "title": f"{self.controlsScopeName} has keys of its own",
+                         "hint": "The other games use the ALL GAMES keys.", "action": "useAllGamesKeys", "arg": "",
+                         "label": "USE THE ALL GAMES KEYS", "danger": False})
         scope_values = {**values, **self._editor.control_values(scope, config)}
         for setting in settings.in_tab("controls"):
             row = self._row(setting.key, config, scope_values)
             if row["kind"] == "choice":
                 row["options"] = _options(self._editor.control_options(scope, setting.key, config))
-            row["own"] = controls.Item("setting", setting.key) in owned
             rows.append(row)
         if scope == controls.ALL:
             rows.append({"kind": "button", "title": "Reset controls",
-                         "hint": "Every key, button and setting back to the defaults, for all games (a game's own "
-                                 "items stay its own).",
+                         "hint": "Every key, button and setting back to the defaults.",
                          "action": "resetControls", "arg": "",
                          "label": "PRESS AGAIN" if self._reset_armed else "RESET", "danger": self._reset_armed})
         rows.append({"kind": "note", "text": self._hint})
@@ -455,8 +457,7 @@ class SettingsModel(QObject):
                                       for slot in range(input_map.SLOTS)],
                              "capture": [self._capture == (action, slot) for slot in range(input_map.SLOTS)],
                              "pad": input_map.pad_label(button, style, action), "padValue": button or "",
-                             "padFixed": fixed, "padOptions": pad_options,
-                             "own": controls.Item("binding", action) in owned or controls.Item("pad", action) in owned})
+                             "padFixed": fixed, "padOptions": pad_options})
         return rows
 
     def _advanced_rows(self, config: cfg.Config, values: dict[str, Any]) -> list[dict[str, Any]]:

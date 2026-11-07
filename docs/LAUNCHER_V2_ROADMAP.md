@@ -140,9 +140,10 @@ Each phase ends with its acceptance checks passing; nothing ships from this bran
   and a set of control changes: identical in all 96 cases. The resolution/upscaling sizes match in 560 cases.
   Controls are **one set for the three games (ALL GAMES)** with a game's own items on top, item by item (a key's two
   slots, a controller button, or a mouse/controller setting; `core/controls.py`, launcher.json `shared_controls` +
-  per game `own_controls`): a key changed in a game's tab is that game's own (marked ●, "↺ ALL GAMES" gives it
-  back), everything else keeps following ALL GAMES; the in-game menu's changes go to ALL GAMES unless the game owns
-  that item. An existing launcher.json keeps every game's controls: the games' most common set becomes ALL GAMES
+  per game `own_controls`): a key changed with "These keys are for: Uncharted 1 only" is that game's own,
+  everything else keeps following ALL GAMES, and one button ("USE THE ALL GAMES KEYS") gives the game's own keys
+  back; the in-game menu's changes go to ALL GAMES unless the game owns that item. The screen shows nothing more
+  than that one choice and that one button (a first version with per-key marks was too much). An existing launcher.json keeps every game's controls: the games' most common set becomes ALL GAMES
   and what differs becomes that game's own (the user's copy: Uncharted 2 and 3 alike, Uncharted 1 with 12 own
   items). Dropped because nothing reads them (section 3): async_shaders, mouse_vertical, mouse_invert_x, low_vram,
   XeSS.
