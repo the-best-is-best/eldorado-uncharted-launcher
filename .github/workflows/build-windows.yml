@@ -73,7 +73,8 @@ jobs:
             mingw-w64-clang-x86_64-{toolchain,cmake,ninja,pkgconf,python} \
             mingw-w64-clang-x86_64-{vulkan-headers,vulkan-loader,vulkan-memory-allocator,glslang} \
             mingw-w64-clang-x86_64-{sdl3,fmt,boost,robin-map,xxhash,ffmpeg,zydis} \
-            mingw-w64-clang-x86_64-{spirv-tools,spirv-headers,spirv-cross} \n            mingw-w64-clang-x86_64-{protobuf,openssl,zlib,miniupnpc,nlohmann-json}
+            mingw-w64-clang-x86_64-{spirv-tools,spirv-headers,spirv-cross} \
+            mingw-w64-clang-x86_64-{protobuf,openssl,zlib,miniupnpc,nlohmann-json}
 
       - name: Build the engine
         run: |
