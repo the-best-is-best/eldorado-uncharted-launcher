@@ -82,10 +82,14 @@ REWARD_POKES = {"u2": "1114178:b=1,1114179:b=1", "u3": "17b2a94:b=1,17b2a95:b=1"
 # Uncharted 1 and 2 have no such switch: their throw's ammo use is patched out (engine/scripts/cheats.py).
 GRENADE_POKES = {"u3": "17faa92:b=1"}
 # The games' other debug switches the launcher offers (1.02 image offsets, kept set the same way): "No Reload"
-# (Uncharted 2 and 3), "One Hit Kills" (Uncharted 3; Uncharted 1 and 2 have no such switch) and the render setting
-# "hi-res local (lamp / torch) shadow buffer" (Uncharted 2 and 3, PS4 default off, ~0% FPS; U1 not mapped).
+# (Uncharted 2 and 3), "One Hit Kills" (Uncharted 3) and the render setting "hi-res local (lamp / torch) shadow
+# buffer" (Uncharted 2 and 3, PS4 default off, ~0% FPS; U1 not mapped).
 CHEAT_POKES = {"rewards": REWARD_POKES, "grenades": GRENADE_POKES,
                "noreload": {"u2": "104f84b:b=1", "u3": "17faa93:b=1"}, "onehit": {"u3": "17fab94:b=1"}}
+# The same cheats where a game has no such switch: code patches of engine/scripts/cheats.py (its names), per game.
+# No reload in Uncharted 1 (the player's shot no longer takes a round from the magazine), one hit kills in
+# Uncharted 1 and 2 (Nate's hit on an NPC does 100000 damage).
+CHEAT_PATCHES = {"noreload": ("u1",), "onehit": ("u1", "u2")}
 HIRES_SHADOW_POKES = {"u2": "1247d04:b=1", "u3": "18c6444:b=1"}
 # Mouse button names: the settings file's (GOW3_MOUSE_MAP) to the engine's input.ini names.
 MOUSE_NAMES = {"left": "Mouse Left", "right": "Mouse Right", "middle": "Mouse Middle", "x1": "Mouse 4",
@@ -480,7 +484,12 @@ def game_environment(args, game, executable, game_dir):
         exposure = 0.0
     if abs(exposure) >= 0.05:
         option_cheats.append(f"u3:exposure{exposure:+.2f}")
+    # Damage to Nate as on difficulty 0 Explorer / 1 Easy / 2 Normal / 3 Hard (cheats.py nathealth<L>); unset: the chosen one's.
+    nate = os.environ.get("UNCHARTED_NATE_DAMAGE", "").strip()
+    if nate in ("0", "1", "2", "3"):
+        option_cheats += [f"{g}:nathealth{nate}" for g in ("u1", "u2", "u3")]
     env["BB_CHEATS"] = ",".join([f"{g}:{CHEAT_NAMES[c]}" for g in ("u1", "u2", "u3") for c in cheats if c in CHEAT_NAMES]
+                                + [f"{g}:{c}" for c in cheats for g in CHEAT_PATCHES.get(c, ())]
                                 + option_cheats + arabic_cheats)
     if "devmode" in cheats:
         env["BB_DEV_MENU"] = "1"

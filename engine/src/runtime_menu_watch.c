@@ -30,9 +30,16 @@ static void probe(const char *game, const unsigned char *manager);
 
 static double now_s(void);
 static volatile double main_menu_seen; /* when a menu update last saw the main menu on screen (depth 1, page 0x0c) */
+/* Uncharted 1's pause menu Options page has the main menu's depth and page too (7 Nov 2026: Back there asked to close
+ * the game). The main menu of a start comes before any play (camera hooks: runtime_play_calls), the pause menu after
+ * it; so the question is asked only before the run's first play. (A main menu reached again from the pause menu goes
+ * back to the title page, as the game itself does.) */
+static int before_play(void) {
+    return runtime_play_calls == 0;
+}
 
 int runtime_menu_at_main(void) {
-    return main_menu_seen > 0 && now_s() - main_menu_seen < 0.25;
+    return main_menu_seen > 0 && now_s() - main_menu_seen < 0.25 && before_play();
 }
 
 static void continue_watch(int game, const unsigned char *host);
@@ -47,7 +54,8 @@ void runtime_menu_watch(int game, const unsigned char *host) {
     memcpy(&depth, host + fields[game].depth, 4);
     memcpy(&page, host + fields[game].page, 4);
     if (depth == 1 && page == MAIN_MENU_PAGE) main_menu_seen = now_s();
-    if (host == last_host[game] && last_depth[game] == 1 && depth == 0 && last_page[game] == MAIN_MENU_PAGE) {
+    if (host == last_host[game] && last_depth[game] == 1 && depth == 0 && last_page[game] == MAIN_MENU_PAGE &&
+        before_play()) {
         printf("Menu: %s: back from the main menu, asking whether to close the game\n", fields[game].name);
         fflush(stdout);
         bbgpu_ask_close();

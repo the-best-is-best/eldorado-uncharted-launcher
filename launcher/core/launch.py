@@ -51,6 +51,11 @@ def environment(config: cfg.Config, base: dict[str, str] | None = None,
     env["UNCHARTED_NO_DOF"] = "1" if data.get("no_dof") else "0"
     env["UNCHARTED_TORCH_FORWARD"] = "1" if data.get("torch_forward", True) else "0"
     env["UNCHARTED_U3_EXPOSURE"] = str(data.get("u3_exposure", "0"))
+    nate = str(data.get("nate_damage", "off"))
+    if nate in ("0", "1", "2", "3"):
+        env["UNCHARTED_NATE_DAMAGE"] = nate
+    else:
+        env.pop("UNCHARTED_NATE_DAMAGE", None)
     env["UNCHARTED_HIRES_SHADOWS"] = "1" if data.get("hires_shadows") else "0"
     env["UNCHARTED_UNLOCK"] = "1" if data.get("unlock") else "0"
     env["UNCHARTED_CHEATS"] = ",".join(config.cheats())

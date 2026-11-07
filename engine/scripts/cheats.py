@@ -1,7 +1,8 @@
 """Compile the enabled cheats of one executable into cheats.bin for bb-probe --patches.
 
-Cheats are "health" and "ammo". A patch is written only when the executable's game code is listed and the bytes at
-its address are the expected ones; anything else is reported and skipped, never an error.
+Cheats are "health", "ammo", "noreload", "onehit" and the others below. A patch is written only when the
+executable's game code is listed and the bytes at its address are the expected ones; anything else is reported and
+skipped, never an error.
 Addresses are image offsets (virtual addresses of the SELF's load segments).
 """
 import hashlib
@@ -80,6 +81,45 @@ for _code, _patches in REWARDS.items():
 # game's own "Infinite Grenades" switch, kept set by run.py (BB_POKE_U3).
 PATCHES[US['eboot.bin']]['grenades'] = (0x734a78, 'e8c319c1ff', NOP * 5)
 PATCHES[US['big2-ps4_Shipping.elf']]['grenades'] = (0x802273, 'e8a87d2e00', NOP * 5)
+# noreload (El Dorado's "No reload", Uncharted 1, 1.02 code): Uncharted 1 has no such switch. A weapon slot is
+# [weapon+slot*0x30]: +0x440 the magazine, +0x444 the reserve, +0x448 the magazine size (the pickup's add at 0x344cc5
+# fills +0x440 up to +0x448 for grenades, the reserve +0x444 for guns). The player Fire's only magazine use is the
+# call to 0x346440 (dec [weapon+slot*0x30+0x440]) that "ammo" drops: the magazine stays full and no reload comes, the
+# reserve is left alone. Uncharted 2 and 3 use their own No Reload switch (KEEP).
+PATCHES[US['eboot.bin']]['noreload'] = PATCHES[US['eboot.bin']]['ammo']
+# onehit (El Dorado's "One hit kills", 1.02 code), Uncharted 1 and 2 (Uncharted 3: its own switch, KEEP; Uncharted 2's
+# debug "One Hit Damage" is no such switch: an int 0..200, default 60, read only by player-net-fight.cpp, the
+# multiplayer melee). The hit goes where Bluepoint's difficulty tweak "Damage by Player to NPCs" (bp_ucctweaks.cpp,
+# getter case 4: Ultra Easy +0x50 / Ultra Ultra Hard +0x20 of its block) is applied: an NPC's damage from an attacker
+# of the player's faction. There the attacker is compared with the player itself (the game's player handle and its id
+# check) and the damage becomes 100000: the NPC dies of any hit of Nate's (bullet, melee, explosion; an NPC the game
+# keeps alive still does). Damage to Nate, and from his buddies, is unchanged.
+# Uncharted 1, npc.cpp RespondToAttack (0x13ed0): the damage [attack+0x14] in xmm0 is scaled by the tweak when
+# [attacker+0x60] == 1 (0x146f7) and handed to the NPC's damage (0x7da0 -> health 0x274e0, health float at +0x1c)
+# after "mov r15b, [rbx+0x2d29]" at 0x1472e, the join of every path (r15 = attacker [attack+8]; rax, rcx free). That
+# load jumps to a stub in the code segment's zero padding right after .eh_frame_hdr's table (it ends at 0x911530; the
+# ultrawide stubs start 0x100 past the last non-zero byte, so they land where they did): g_playerHandle 0xaa5f78
+# (slot, id at +8; the player's id at +0x64), and when the attacker is the player's game object [player+0xf0] (as the
+# NPC's own event handler compares at 0x12b09) xmm0 = 100000.0.
+# Uncharted 2, npc.cpp ComputeArmorDamage (0x244ef0; its int damage [rbp-0x4040] goes to the health vfunc
+# [npc+0x1f0]+0x10): the faction-1 block 0x245a95..0x245b39 (cmp dword [r8+0x150], 1 / jne; the tweak's multiply)
+# is rewritten in place with the player test first (handle 0x115bd20: slot, id at +8; the object's id at +0x44, as
+# this function checks the attacker r8): the player's hit sets the damage to 100000 and skips the multiply; anyone
+# else runs the same multiply (only the s_pInternal null assert's message call is dropped, its int 0x41 is kept).
+U1_ONEHIT_STUB = ('4d85ff7431488b052c4a19004885c074258b0d294a1900488b004885c0741739486475124c3bb8f00000007509'
+                  'b80050c347c5f96ec0448abb292d0000e9b33170ff')
+PATCHES[US['eboot.bin']]['onehit'] = [
+    (0x1472e, '448abb292d0000c683292d000000', 'e90dce8f00' + NOP * 2 + 'c683292d000000'),
+    (0x911540, '00' * (len(U1_ONEHIT_STUB) // 2), U1_ONEHIT_STUB)]
+PATCHES[US['big2-ps4_Shipping.elf']]['onehit'] = (
+    0x245a95,
+    '4183b850010000010f85960000004189f6c78560bfffff04000000488b1d095f4e014885db753e488b05b584320131db4885c0742e'
+    '488d3d5b62c800488d356062c800488d15f46cc800488d0d8ee8ba0041b8620100004531c9ffd0488b1dc85e4e01cd41c4c1fa2ac6'
+    'c5fa118558bfffff488dbbf8080000488db560bfffffe856abb000c5fa5983140a0000c5fa108d58bfffffc5f259c0c4e1fa2cc0'
+    '8985c0bfffff',
+    '4183b850010000010f8596000000488b057662f1004885c074204c3900751b8b056e62f100413b4044750fc785c0bfffffa0860100'
+    'e96a0000004189f6c78560bfffff04000000488b1ddd5e4e014885db7502cd41c4c1fa2ac6c5fa118558bfffff488dbbf8080000'
+    '488db560bfffffe866abb000c5fa5983140a0000c5fa108d58bfffffc5f259c0c4e1fa2cc08985c0bfffff' + NOP * 16)
 # torch (El Dorado's "Torch light follows the torch", Uncharted 2, 1.02 code): the torch update (Flashlight Active
 # 0x69a190) aims the light along the torch joint only in camera mode 9, and every frame the player light (record 0 of
 # the light table 0x1157760) is re-aimed along the camera's forward vector (function 0x698b50 and a copy inlined next
@@ -114,6 +154,150 @@ def exposure_patch(name):
     return [(U3_EXPOSURE_AT, 'c5fa10932c070000c5f057c9', jump.hex()),
             (U3_EXPOSURE_CAVE, '00' * len(stub), stub.hex()),
             (U3_EXPOSURE_AT + 0x25, '5f165700', second.hex())]
+# nathealth<L> (El Dorado's "Damage to Nate", 1.02 code): Nate takes damage as on difficulty L (0 Explorer, 1 Easy,
+# 2 Normal, 3 Hard: the games' own order, 0..5 = Explorer, Easy, Normal, Hard, Crushing, Brutal) whatever the chosen one; the
+# chosen difficulty stays for everything else (enemies, AI, saves, trophies). The damage of an NPC's shot at Nate is
+# scaled by difficulty in three places, each read here as level L:
+# - Bluepoint's tweaks (bp_ucctweaks.cpp; only Explorer and Brutal have values, the others read 1.0): the getter's
+#   cases 2 "Damage by NPCs Multiplier", 3 "Damage by NPCs (Melee)", 5/6 "Player Health Regen Rate/Delay", 8
+#   "Explosive Damage to Player" (Explorer field +0x24/+0x28/+0x30/+0x34/+0x44 of the block, Brutal +0/+4/+0xc/+0x10/
+#   +0x1c). Each case's "cmp eax, 5 / jne / read Brutal's" becomes "read Explorer's" (L 0) or "return 1.0".
+# - Naughty Dog's difficulty value (ApplyDifficultySetting, task.cpp: the difficulty's *<level>-difficulty-settings*
+#   interpolated by the dynamic difficulty), read by a shared function whose difficulty load jumps to a stub: when the
+#   return address is the NPC damage code's call, the level is L, else the game's own. U1: npc.cpp's damage to the
+#   player 0x16150 calls 0x31ef00 (pow of the damage base) at 0x16200 (the weapon damage 0x15e50, which serves every
+#   shooter, is left alone). U2: the NPC weapon damage 0x24fbe0 calls
+#   0x4aba00 at 0x24fc50/0x24fe4c/0x24fe6e. U3: the NPC weapon damage 0x366af0 calls the difficulty object's
+#   (0x16fb750) value 0x552a20 at 0x366c2b/0x366def.
+# - The same functions' own Hard/Crushing/Brutal multipliers and Explorer's damage floor: their difficulty loads
+#   become "mov reg, L".
+# Stubs: U1 after the onehit stub, U2/U3 right after the code's last byte (the ultrawide stubs move 0x100 on).
+NATE_LEVELS = 4
+
+
+def _asm(at, items):
+    """Bytes of items at address at: bytes, ('label', name), (op, target) for jmp/je/jne/call (rel32 / rel8 for je,
+    jne), ('rip', prefix, target, after) for a rip-relative operand (disp32, then 'after' more bytes)."""
+    def size(item):
+        if isinstance(item, bytes):
+            return len(item)
+        if item[0] == 'label':
+            return 0
+        if item[0] in ('je', 'jne'):
+            return 2
+        if item[0] in ('jmp', 'call'):
+            return 5
+        return len(item[1]) + 4 + len(item[3])
+    labels, pc = {}, at
+    for item in items:
+        if not isinstance(item, bytes) and item[0] == 'label':
+            labels[item[1]] = pc
+        pc += size(item)
+    out, pc = b'', at
+    for item in items:
+        n = size(item)
+        if isinstance(item, bytes):
+            out += item
+        elif item[0] in ('je', 'jne'):
+            rel = labels.get(item[1], item[1]) - (pc + 2)
+            if not -128 <= rel < 128:
+                raise ValueError('short jump out of range')
+            out += bytes([0x74 if item[0] == 'je' else 0x75]) + struct.pack('<b', rel)
+        elif item[0] in ('jmp', 'call'):
+            out += (b'\xe9' if item[0] == 'jmp' else b'\xe8') + struct.pack('<i', labels.get(item[1], item[1]) - (pc + 5))
+        elif item[0] == 'rip':
+            out += item[1] + struct.pack('<i', item[2] - (pc + n)) + item[3]
+        pc += n
+    return out
+
+
+def _jump_to(at, stub, length):
+    return (b'\xe9' + struct.pack('<i', stub - (at + 5))).ljust(length, b'\x90')
+
+
+def _imm(opcode, level, length):
+    return (bytes([opcode]) + struct.pack('<I', level)).ljust(length, b'\x90')
+
+
+def _getter_cases(blocks, explorer_read, default_tail, level):
+    """The tweak getter's case blocks [(address, original, Explorer offset)] -> patches for level."""
+    patches = []
+    for address, original, offset in blocks:
+        length = len(original) // 2
+        code = (explorer_read(offset) if level == 0 else b'') + default_tail(address + (6 if level == 0 else 0))
+        patches.append((address, original, code.ljust(length, b'\x90').hex()))
+    return patches
+
+
+def _u1_nate(level):
+    end = 0x3ad16c
+    patches = _getter_cases(
+        [(0x3ad0a8, '83f805756dc4c17a1006e9b5000000', 0x24), (0x3ad0b7, '83f805756ac4c17a104604e9a5000000', 0x28),
+         (0x3ad0d7, '83f8057562c4c17a10460ce985000000', 0x30), (0x3ad0e7, '83f805755ec4c17a104610eb78', 0x34),
+         (0x3ad101, '83f805755cc4c17a10461ceb5e', 0x44)],
+        lambda offset: bytes.fromhex('c4c17a1046') + bytes([offset]),          # vmovss xmm0, [r14+offset]
+        lambda at: b'\xe9' + struct.pack('<i', end - (at + 5)), level)
+    stub_a, game = 0x9115a0, 0x958208                                           # the game settings, difficulty +0x4878
+    load = [('rip', b'\x48\x8d\x05', game, b''), bytes.fromhex('8bb878480000')]  # lea rax, [game]; mov edi, [rax+0x4878]
+    a = _asm(stub_a, [('rip', b'\x48\x8d\x05', 0x16205, b''), bytes.fromhex('48394508'), ('jne', 'orig'),
+                      _imm(0xbf, level, 5), ('jmp', 0x31ef8e), ('label', 'orig')] + load + [('jmp', 0x31ef8e)])
+    # Not patched: the hard-difficulty factor 0x31edf0 in the weapon damage 0x15e50. That function serves every
+    # shooter, the player's shots included, and has no target in a register a stub could check (r15 is not one of
+    # its registers): a first version read r15 and gave the player's own shots level L (7 Nov 2026: enemies died
+    # from one shot).
+    cave = a
+    return patches + [
+        (0x31ef81, '488d05809263008bb878480000', _jump_to(0x31ef81, stub_a, 13).hex()),
+        (0x1629c, '488d05651f94008b8078480000', _imm(0xb8, level, 13).hex()),
+        (stub_a, '00' * len(cave), cave.hex())]
+
+
+def _u23_cases(level, blocks):
+    return _getter_cases(blocks, lambda offset: bytes.fromhex('c5fa1047') + bytes([offset]),  # vmovss xmm0, [rdi+offset]
+                         lambda at: b'\xc3', level)
+
+
+def _u2_nate(level):
+    patches = _u23_cases(level, [(0xd506cc, '83f8057551c5fa1007c3', 0x24), (0xd506d6, '83f8057551c5fa104704c3', 0x28),
+                                 (0xd506ec, '83f805754fc5fa10470cc3', 0x30), (0xd506f7, '83f805754ec5fa104710c3', 0x34),
+                                 (0xd5070d, '83f805754dc5fa10471cc3', 0x44)])
+    stub, back = 0xfe2be0, 0x4abaf5
+    items = [bytes.fromhex('488b4508')]                                         # mov rax, [rbp+8]
+    for ret in (0x24fc55, 0x24fe51, 0x24fe73):
+        items += [('rip', b'\x48\x8d\x0d', ret, b''), bytes.fromhex('4839c8'), ('je', 'nate')]
+    items += [('rip', b'\x48\x8d\x05', 0x1059640, b''), bytes.fromhex('8bb8a4480000'), ('jmp', back),
+              ('label', 'nate'), _imm(0xbf, level, 5), ('jmp', back)]
+    code = _asm(stub, items)
+    return patches + [
+        (0x4abae8, '488d0551dbba008bb8a4480000', _jump_to(0x4abae8, stub, 13).hex()),
+        (0x24feb0, '488d0d8997e0008b89a4480000', _imm(0xb9, level, 13).hex()),
+        (stub, '00' * len(code), code.hex())]
+
+
+def _u3_nate(level):
+    patches = _u23_cases(level, [(0x12c250b, '83f8057551c5fa1007c3', 0x24), (0x12c2515, '83f8057551c5fa104704c3', 0x28),
+                                 (0x12c252b, '83f805754fc5fa10470cc3', 0x30), (0x12c2536, '83f805754ec5fa104710c3', 0x34),
+                                 (0x12c254c, '83f805754dc5fa10471cc3', 0x44)])
+    stub, back = 0x16466d0, 0x552b39                                            # rax holds the call target: rcx only
+    items = []
+    for ret in (0x366c2e, 0x366df2):
+        items += [('rip', b'\x48\x8d\x0d', ret, b''), bytes.fromhex('48394d08'), ('je', 'nate')]
+    items += [('rip', b'\x48\x8d\x0d', 0x17b6368, b''), bytes.fromhex('8bb1484c0000'), ('jmp', back),
+              ('label', 'nate'), _imm(0xbe, level, 5), ('jmp', back)]
+    code = _asm(stub, items)
+    return patches + [
+        (0x552b2c, '488d0d353826018bb1484c0000', _jump_to(0x552b2c, stub, 13).hex()),
+        (0x366e59, '488d0d08f544018b89484c0000', _imm(0xb9, level, 13).hex()),
+        (0x366e7f, '488d0de2f444018b89484c0000', _imm(0xb9, level, 13).hex()),
+        (0x366f60, '488d0501f444018b80484c0000', _imm(0xb8, level, 13).hex()),
+        (0x366fd8, '488d0d89f344018b89484c0000', _imm(0xb9, level, 13).hex()),
+        (stub, '00' * len(code), code.hex())]
+
+
+for _code, _build in ((US['eboot.bin'], _u1_nate), (US['big2-ps4_Shipping.elf'], _u2_nate),
+                      (US['big3-ps4_Shipping.elf'], _u3_nate)):
+    for _level in range(NATE_LEVELS):
+        PATCHES[_code][f'nathealth{_level}'] = _build(_level)
 # text<n> (El Dorado's "Arabic" language, 1.02 code): the games load text1/ps4/<n>.common whatever the console language.
 # The text loader (text.cpp, "%s/%s%i.%s" with "build/main/text1/ps4/") reads the file number from the language's
 # table entry: "mov eax, esi; imul rax, rax, 0x38; lea rdx, [table]; mov r9d, [rdx+rax+0x14]" becomes

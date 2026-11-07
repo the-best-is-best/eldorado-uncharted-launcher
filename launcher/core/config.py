@@ -16,7 +16,7 @@ CONFIG_VERSION = 9
 
 LAUNCHER_DEFAULTS: dict[str, Any] = {"game": "u1", "diagnostics": True, "game_dir": "", "unlock": False,
                                      "job_sleep": "auto", "anisotropy": "0", "no_dof": False,
-                                     "torch_forward": True, "u3_exposure": "0", "hires_shadows": False,
+                                     "torch_forward": True, "u3_exposure": "0", "hires_shadows": False, "nate_damage": "off",
                                      "check_updates": True}
 # Each game's own launcher settings. The controls (controls .. vibration) are also written into the game's ini,
 # where tools/probe_uncharted.py reads them; launcher.json keeps a copy as the released launcher does.

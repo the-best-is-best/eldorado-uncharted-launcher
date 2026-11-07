@@ -65,9 +65,9 @@ CHEAT_TEXTS: dict[str, tuple[str, str]] = {
     "skipintro": ("Skip intro", "No logo movies at the start (Sony, Naughty Dog, Bluepoint)."),
     "invincible": ("Invincible", "Nate takes no damage."),
     "ammo": ("Infinite ammo", "The magazine never runs empty: no reloading."),
-    "noreload": ("No reload (Uncharted 2 and 3)", "The games' own No Reload switch: Nate never has to reload."),
+    "noreload": ("No reload", "Nate never has to reload."),
     "grenades": ("Infinite grenades", "Nate never runs out of grenades."),
-    "onehit": ("One hit kills (Uncharted 3)", "Every enemy goes down with one hit."),
+    "onehit": ("One hit kills", "Every enemy goes down with one hit."),
     "treasures": ("Give all treasures", "Every treasure counts as found in the save you play, a few seconds into "
                   "play. It is written into that save (and earns the treasure trophies), so it stays after the cheat "
                   "is turned off."),
@@ -178,6 +178,10 @@ SETTINGS: tuple[Setting, ...] = (
     # Cheats
     *(Setting("cheat_" + name, LAUNCHER, "cheats", title, hint)
       for name, (title, hint) in CHEAT_TEXTS.items()),
+    Setting("nate_damage", LAUNCHER, "cheats", "Damage to Nate",
+            "On any difficulty Nate takes damage (and heals) as on the level picked here; enemies stay as chosen. "
+            "Needs update 1.02.",
+            (("off", "Off (the difficulty's own)"), ("0", "Explorer"), ("1", "Easy"), ("2", "Normal"), ("3", "Hard"))),
     Setting("unlock", LAUNCHER, "cheats", "Unlock all chapters",
             "Every chapter in Chapter Select and Brutal difficulty from the start, in all three games. Your saves "
             "and progress stay as they are."),
