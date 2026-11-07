@@ -13,29 +13,34 @@ ComboBox {
     font.pixelSize: 14
 
     background: Rectangle {
-        radius: 3
-        color: box.hovered && !box.popup.visible ? Qt.lighter(Theme.panel, 1.15) : Theme.panel
-        border.color: box.popup.visible || box.activeFocus ? Theme.gold : (box.hovered ? Theme.dim : Theme.line)
+        radius: Theme.radiusSmall
+        color: box.hovered && !box.popup.visible ? Theme.panelHigh : Theme.panel
+        border.color: box.popup.visible || box.activeFocus ? Theme.accent : (box.hovered ? Theme.accentLine : Theme.line)
         border.width: 1
+        Behavior on color { ColorAnimation { duration: Theme.fast } }
+        Behavior on border.color { ColorAnimation { duration: Theme.fast } }
     }
     contentItem: Text {
-        leftPadding: 14
-        rightPadding: 36
+        leftPadding: box.mirrored ? 36 : 14
+        rightPadding: box.mirrored ? 14 : 36
         text: box.displayText
         color: Theme.ink
         font: box.font
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
     }
-    // A gold chevron that turns while the list is open.
+    // A chevron in the game's color that turns while the list is open.
     indicator: Canvas {
-        x: box.width - width - 12
+        id: chevron
+        property color stroke: Theme.accent
+        onStrokeChanged: requestPaint()
+        x: box.mirrored ? 12 : box.width - width - 12
         y: (box.height - height) / 2
         width: 12; height: 8
         onPaint: {
             var c = getContext("2d")
             c.reset()
-            c.strokeStyle = Theme.gold
+            c.strokeStyle = chevron.stroke
             c.lineWidth = 1.6
             c.lineCap = "square"
             c.beginPath(); c.moveTo(1, 1); c.lineTo(width / 2, height - 1); c.lineTo(width - 1, 1); c.stroke()
@@ -52,32 +57,37 @@ ComboBox {
         highlighted: box.highlightedIndex === index
         contentItem: Text {
             leftPadding: 14
+            rightPadding: 14
             text: box.textRole ? row.model[box.textRole] : row.model.modelData
-            // The chosen value in gold; the one under the mouse or the keys in ink on a lighter panel.
-            color: row.index === box.currentIndex ? Theme.gold : Theme.ink
+            // The chosen value in the game's color; the one under the mouse or the keys in ink on a lighter panel.
+            color: row.index === box.currentIndex ? Theme.accent : Theme.ink
             font: box.font
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
         }
-        background: Rectangle { color: row.highlighted ? Qt.lighter(Theme.panel, 1.35) : "transparent" }
+        background: Rectangle {
+            anchors { fill: parent; leftMargin: 4; rightMargin: 4; topMargin: 1; bottomMargin: 1 }
+            radius: 6
+            color: row.highlighted ? Theme.accentSoft : "transparent"
+        }
     }
     popup: Popup {
         y: box.height + 4
         width: box.width
-        implicitHeight: Math.min(contentItem.implicitHeight + 2, 360)
-        padding: 1
+        implicitHeight: Math.min(contentItem.implicitHeight + 8, 360)
+        padding: 4
         contentItem: ListView {
             clip: true
             implicitHeight: contentHeight
             model: box.popup.visible ? box.delegateModel : null
             currentIndex: box.highlightedIndex
-            ScrollIndicator.vertical: ScrollIndicator {}
+            ScrollBar.vertical: Scroller {}
         }
         background: Rectangle {
             color: Theme.panel
-            border.color: Theme.gold
+            border.color: Theme.accentLine
             border.width: 1
-            radius: 3
+            radius: Theme.radiusSmall
         }
     }
 }

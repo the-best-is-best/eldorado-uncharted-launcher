@@ -5,7 +5,7 @@
 They stand for the objects the games turn while they load: a Spanish gold coin (Drake's Fortune), a phurba, the
 Tibetan ritual dagger (Among Thieves), and a silver ring (Drake's Deception). Drawn here from shapes, nothing taken
 from the games. The engine shows them on each game's window and taskbar button until it has taken the game's own
-loading icon from the player's first loading screen (gow3_pc/gpu/shim/bbport_loading_icon.h).
+loading icon from the player's first loading screen (engine/gpu/shim/bbport_loading_icon.h).
 
 Run: python tools/draw_loading_icons.py (Pillow).
 """

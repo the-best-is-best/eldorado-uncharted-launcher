@@ -47,25 +47,28 @@ Item {
             model: 2
             Rectangle {
                 readonly property bool capturing: binding.row.capture ? binding.row.capture[index] : false
-                width: 150; height: 32; radius: 3
-                color: capturing ? Theme.line : Theme.panel
-                border.color: capturing ? Theme.gold : Theme.line
+                width: 150; height: 32; radius: Theme.radiusSmall
+                color: capturing ? Theme.accentSoft : (slotArea.containsMouse ? Theme.panelHigh : Theme.panel)
+                border.color: capturing ? Theme.accent : (slotArea.containsMouse ? Theme.accentLine : Theme.line)
+                Behavior on color { ColorAnimation { duration: Theme.fast } }
                 Text {
                     anchors.centerIn: parent
                     width: parent.width - 12; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
-                    text: parent.capturing ? "Press a key…" : (binding.row.keys ? binding.row.keys[index] : "")
-                    color: parent.capturing ? Theme.gold : Theme.ink
+                    text: parent.capturing ? qsTr("Press a key…") : (binding.row.keys ? binding.row.keys[index] : "")
+                    color: parent.capturing ? Theme.accent : Theme.ink
                     font.family: Theme.bodyFont; font.pixelSize: 13
                 }
                 MouseArea {
+                    id: slotArea
                     anchors.fill: parent
+                    hoverEnabled: true
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onClicked: (mouse) => mouse.button === Qt.RightButton ? binding.clear(index) : binding.capture(index)
                 }
             }
         }
         Rectangle {
-            width: 170; height: 32; radius: 3
+            width: 170; height: 32; radius: Theme.radiusSmall
             visible: binding.row.padFixed === true
             color: "transparent"; border.color: Theme.line
             Text {

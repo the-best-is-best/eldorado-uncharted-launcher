@@ -15,7 +15,7 @@ Rectangle {
     property bool stopArmed: false
     signal stopRequested()
 
-    color: Qt.rgba(0.04, 0.027, 0.016, 0.86)
+    color: Qt.rgba(0.03, 0.035, 0.045, 0.88)
 
     // Nothing under the layer takes clicks while it is up.
     MouseArea { anchors.fill: parent }
@@ -28,8 +28,8 @@ Rectangle {
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: "UNCHARTED " + overlay.gameNumber
-            color: Theme.gold
-            font.family: Theme.bodyFont; font.pixelSize: 14; font.letterSpacing: 4
+            color: Theme.accent
+            font.family: Theme.bodyFont; font.pixelSize: 14; font.letterSpacing: Theme.tracking(4)
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
@@ -44,12 +44,12 @@ Rectangle {
         BusyIndicator {
             anchors.horizontalCenter: parent.horizontalCenter
             running: overlay.visible
-            palette.dark: Theme.gold
+            palette.dark: Theme.accent
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
             width: parent.width
-            text: overlay.status.length > 0 ? overlay.status : "Starting..."
+            text: overlay.status.length > 0 ? overlay.status : qsTr("Starting...")
             horizontalAlignment: Text.AlignHCenter
             elide: Text.ElideRight
             color: Theme.dim
@@ -58,16 +58,16 @@ Rectangle {
         Item { width: 1; height: 12 }
         GoldButton {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: "STOP"
+            text: qsTr("STOP")
             danger: true
             onClicked: overlay.stopRequested()
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
             visible: overlay.stopArmed
-            text: "Press again to stop."
+            text: qsTr("Press again to stop.")
             color: Theme.dangerText
-            font.family: Theme.bodyFont; font.pixelSize: 13; font.letterSpacing: 1
+            font.family: Theme.bodyFont; font.pixelSize: 13; font.letterSpacing: Theme.tracking(1)
         }
     }
 }

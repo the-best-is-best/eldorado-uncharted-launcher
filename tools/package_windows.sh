@@ -4,10 +4,10 @@
 #   Uncharted Launcher.exe   starter (tools/windows_starter) -> python\pythonw.exe launcher\...
 #   python\                  Windows Python with Tkinter and Pillow (tools/copy_python.py)
 #   launcher\ tools\         the launcher (Qt Quick, PySide6) and the start script (tools/probe_uncharted.py)
-#   gow3_pc\                 run.py, scripts\ (game preparation), shaders\ (shader lists) and
+#   engine\                 run.py, scripts\ (game preparation), shaders\ (shader lists) and
 #                            out\ (bb-probe.exe, the engine, with its DLLs)
 # No game files ship: each player selects their own copy of the game in the launcher.
-# Run after building the runtime (gow3_pc/build.sh), from Git Bash or an MSYS2 CLANG64 shell.
+# Run after building the runtime (engine/build.sh), from Git Bash or an MSYS2 CLANG64 shell.
 # PYTHON_HOME is a Windows Python 3.10+ with Pillow (default: the `python` on PATH).
 set -euo pipefail
 cd -- "$(dirname -- "$0")/.."
@@ -19,28 +19,28 @@ msys=${MSYS2_ROOT:-/c/msys64}
 # local path ("//usr/..." is a network share, each try timed out after ~11 s).
 msys=${msys%/}
 [[ -d $msys/clang64/bin ]] && export PATH="$msys/clang64/bin:$PATH"
-[[ -f gow3_pc/out/bb-probe.exe ]] || { echo 'Build the engine first: gow3_pc/build.sh' >&2; exit 1; }
+[[ -f engine/out/bb-probe.exe ]] || { echo 'Build the engine first: engine/build.sh' >&2; exit 1; }
 
 stage=dist/stage/Uncharted-windows
 rm -rf -- dist/stage
-mkdir -p "$stage/gow3_pc/out" "$stage/gow3_pc/scripts" "$stage/tools" "$stage/launcher/assets" \
+mkdir -p "$stage/engine/out" "$stage/engine/scripts" "$stage/tools" "$stage/launcher/assets" \
     "$stage/analysis/uncharted-user"
 
 # The engine without debug information, and every DLL it loads from the CLANG64 tree.
 for exe in bb-probe.exe bb-gpu-capabilities.exe; do
-    llvm-strip --strip-debug -o "$stage/gow3_pc/out/$exe" "gow3_pc/out/$exe"
+    llvm-strip --strip-debug -o "$stage/engine/out/$exe" "engine/out/$exe"
 done
-ldd gow3_pc/out/bb-probe.exe gow3_pc/out/bb-gpu-capabilities.exe | awk '/clang64/ {print $3}' | sort -u |
+ldd engine/out/bb-probe.exe engine/out/bb-gpu-capabilities.exe | awk '/clang64/ {print $3}' | sort -u |
     while read -r dll; do
-        cp "$dll" "$stage/gow3_pc/out/"
+        cp "$dll" "$stage/engine/out/"
     done
 
 # What run.py runs to prepare and start a game, and the shader lists of each release.
-cp gow3_pc/run.py gow3_pc/LICENSE "$stage/gow3_pc/"
-cp gow3_pc/scripts/prepare.py gow3_pc/scripts/link_modules.py gow3_pc/scripts/link_libc.py \
-    gow3_pc/scripts/content_profile.py gow3_pc/scripts/trophies.py gow3_pc/scripts/isa_rewrite.py \
-    gow3_pc/scripts/cheats.py gow3_pc/scripts/patches.py gow3_pc/scripts/mods.py "$stage/gow3_pc/scripts/"
-cp -r gow3_pc/shaders "$stage/gow3_pc/"
+cp engine/run.py engine/LICENSE "$stage/engine/"
+cp engine/scripts/prepare.py engine/scripts/link_modules.py engine/scripts/link_libc.py \
+    engine/scripts/content_profile.py engine/scripts/trophies.py engine/scripts/isa_rewrite.py \
+    engine/scripts/cheats.py engine/scripts/patches.py engine/scripts/mods.py "$stage/engine/scripts/"
+cp -r engine/shaders "$stage/engine/"
 cp tools/probe_uncharted.py tools/discord_presence.py tools/hang_report.py tools/apply_update.py tools/install_update.py \
     tools/check_game_files.py tools/game_files_102.json.gz \
     tools/game_update_view.py tools/arabic_language.py "$stage/tools/"
@@ -58,22 +58,21 @@ mkdir -p "$stage/launcher/assets/loading"
 cp launcher/assets/loading/u1.png launcher/assets/loading/u2.png launcher/assets/loading/u3.png \
     "$stage/launcher/assets/loading/"
 cp tools/README-Windows.txt "$stage/README.txt"
-cp gow3_pc/LICENSE "$stage/LICENSE.txt"
-cp CHANGELOG.md "$stage/CHANGELOG.md"
+cp engine/LICENSE "$stage/LICENSE.txt"
 
 # Licenses of the sources built into the runtime, and of every MSYS2 package whose DLL ships: its
 # license files and, in THIRD-PARTY.txt, its version, license and source (some packages, FFmpeg
 # among them, carry no license file).
 licenses=$stage/licenses
 mkdir -p "$licenses"
-for dir in gow3_pc/gpu/third_party/* gow3_pc/third_party/*; do
+for dir in engine/gpu/third_party/* engine/third_party/*; do
     for file in "$dir"/LICENSE* "$dir"/COPYING* "$dir"/COPYRIGHT*; do
         [[ -f $file ]] || continue
         mkdir -p "$licenses/$(basename -- "$dir")"
         cp "$file" "$licenses/$(basename -- "$dir")/"
     done
 done
-head -n 24 gow3_pc/gpu/third_party/gcn/include/gcn/si_ci_vi_merged_offset.h > "$licenses/gcn-headers.txt"
+head -n 24 engine/gpu/third_party/gcn/include/gcn/si_ci_vi_merged_offset.h > "$licenses/gcn-headers.txt"
 mkdir -p "$licenses/liborbispkg"
 cp tools/pkgtool/LICENSE.txt "$licenses/liborbispkg/LICENSE.txt"
 echo "PkgTool and LibOrbisPkg 0.2.231 by Maxton, unchanged; source: https://github.com/maxton/LibOrbisPkg" \
@@ -81,7 +80,7 @@ echo "PkgTool and LibOrbisPkg 0.2.231 by Maxton, unchanged; source: https://gith
 pacman=$(command -v pacman || echo "$msys/usr/bin/pacman")
 # Three pacman calls in all (one per DLL took minutes on the CI runner).
 dlls=()
-for dll in "$stage"/gow3_pc/out/*.dll; do
+for dll in "$stage"/engine/out/*.dll; do
     dlls+=("$(cygpath -m "$msys/clang64/bin/$(basename -- "$dll")")")
 done
 mapfile -t packages < <({ "$pacman" -Qqo "${dlls[@]}" 2>/dev/null || true; } | sort -u)
@@ -91,7 +90,7 @@ mapfile -t packages < <({ "$pacman" -Qqo "${dlls[@]}" 2>/dev/null || true; } | s
     cp "$msys$file" "$licenses/msys2/$name"
 done
 {
-    echo "Third-party packages whose DLLs ship in gow3_pc\\out (MSYS2 CLANG64 builds)."
+    echo "Third-party packages whose DLLs ship in engine\\out (MSYS2 CLANG64 builds)."
     echo "Their sources: https://repo.msys2.org/mingw/sources/ and https://packages.msys2.org/"
     "$pacman" -Qi "${packages[@]}" | awk '/^Name /{print ""} /^(Name|Version|Licenses|URL) /{print}'
 } > "$licenses/THIRD-PARTY.txt"
@@ -100,12 +99,12 @@ done
 # bridge under their own licenses, and the FSR 4 native model. Without them the menus leave the
 # two out.
 # The engine loads the bridge as bbport_dlss.dll (an older gow3_dlss.dll works under that name).
-if [[ -f gow3_pc/out/gow3_dlss.dll && ! -f gow3_pc/out/bbport_dlss.dll ]]; then
-    cp gow3_pc/out/gow3_dlss.dll gow3_pc/out/bbport_dlss.dll
+if [[ -f engine/out/gow3_dlss.dll && ! -f engine/out/bbport_dlss.dll ]]; then
+    cp engine/out/gow3_dlss.dll engine/out/bbport_dlss.dll
 fi
-if [[ -f gow3_pc/out/bbport_dlss.dll && -f gow3_pc/out/nvngx_dlss.dll ]]; then
-    cp gow3_pc/out/bbport_dlss.dll gow3_pc/out/nvngx_dlss.dll "$stage/gow3_pc/out/"
-    mkdir -p "$licenses/nvidia-dlss" "$licenses/gow3-dlss-bridge"
+if [[ -f engine/out/bbport_dlss.dll && -f engine/out/nvngx_dlss.dll ]]; then
+    cp engine/out/bbport_dlss.dll engine/out/nvngx_dlss.dll "$stage/engine/out/"
+    mkdir -p "$licenses/nvidia-dlss" "$licenses/dlss-bridge"
     dlss_license=${NVIDIA_DLSS_LICENSE:-}
     if [[ -z $dlss_license ]]; then
         for file in downloads/dlss-sdk-*/LICENSE.txt; do
@@ -114,19 +113,19 @@ if [[ -f gow3_pc/out/bbport_dlss.dll && -f gow3_pc/out/nvngx_dlss.dll ]]; then
     fi
     [[ -f $dlss_license ]] || { echo 'Need the DLSS license (NVIDIA_DLSS_LICENSE).' >&2; exit 1; }
     cp "$dlss_license" "$licenses/nvidia-dlss/LICENSE.txt"
-    cp gow3_pc/gpu/dlss_bridge/LICENSE.txt "$licenses/gow3-dlss-bridge/LICENSE.txt"
+    cp engine/gpu/dlss_bridge/LICENSE.txt "$licenses/dlss-bridge/LICENSE.txt"
 fi
-# Intel XeSS (gow3_pc/packaging/windows/fetch_xess.sh), when fetched.
-if [[ -f gow3_pc/out/libxess.dll && -f gow3_pc/out/Intel-XeSS-LICENSE.txt ]]; then
-    cp gow3_pc/out/libxess.dll "$stage/gow3_pc/out/"
+# Intel XeSS (engine/packaging/windows/fetch_xess.sh), when fetched.
+if [[ -f engine/out/libxess.dll && -f engine/out/Intel-XeSS-LICENSE.txt ]]; then
+    cp engine/out/libxess.dll "$stage/engine/out/"
     mkdir -p "$licenses/intel-xess"
-    cp gow3_pc/out/Intel-XeSS-LICENSE.txt "$licenses/intel-xess/LICENSE.txt"
+    cp engine/out/Intel-XeSS-LICENSE.txt "$licenses/intel-xess/LICENSE.txt"
 fi
-if [[ -f gow3_pc/fsr4_shaders/fsr4_model_v07_i8_native_1080_pre.spv ]]; then
-    mkdir -p "$stage/gow3_pc/fsr4_shaders" "$licenses/fsr4"
-    cp gow3_pc/fsr4_shaders/LICENSE-FSR4-v07.txt gow3_pc/fsr4_shaders/*.spv gow3_pc/fsr4_shaders/*.bin \
-        gow3_pc/fsr4_shaders/*.json "$stage/gow3_pc/fsr4_shaders/"
-    cp gow3_pc/fsr4_shaders/LICENSE-FSR4-v07.txt "$licenses/fsr4/"
+if [[ -f engine/fsr4_shaders/fsr4_model_v07_i8_native_1080_pre.spv ]]; then
+    mkdir -p "$stage/engine/fsr4_shaders" "$licenses/fsr4"
+    cp engine/fsr4_shaders/LICENSE-FSR4-v07.txt engine/fsr4_shaders/*.spv engine/fsr4_shaders/*.bin \
+        engine/fsr4_shaders/*.json "$stage/engine/fsr4_shaders/"
+    cp engine/fsr4_shaders/LICENSE-FSR4-v07.txt "$licenses/fsr4/"
 fi
 
 "$python_home/python.exe" tools/copy_python.py "$python_home" "$stage/python"

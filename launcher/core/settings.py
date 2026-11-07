@@ -17,6 +17,7 @@ from typing import Any
 
 from . import config as cfg
 from . import controls, game_files, games, gpu, input_map, paths, presets, resolution
+from .i18n import t
 
 # Where a setting lives.
 LAUNCHER = "launcher"    # launcher.json, shared by the three games
@@ -72,16 +73,17 @@ CHEAT_TEXTS: dict[str, tuple[str, str]] = {
                 "and every cutscene. Nothing is saved: turned off, the menus show your own progress again."),
 }
 LANGUAGES: Options = (
+    # First: not one of the game's languages but a fan translation laid over one of them (tools/arabic_language.py),
+    # offered for the games whose copy has it (arabic_available).
+    ("ar", "Arabic (translation)"),
     ("1", "English (US)"), ("18", "English (UK)"), ("2", "Français"), ("4", "Deutsch"), ("5", "Italiano"),
     ("3", "Español (España)"), ("20", "Español (Latinoamérica)"), ("7", "Português (Portugal)"),
     ("17", "Português (Brasil)"), ("6", "Nederlands"), ("14", "Dansk"), ("15", "Norsk"), ("13", "Svenska"),
     ("12", "Suomi"), ("16", "Polski"), ("23", "Čeština"), ("25", "Ελληνικά"), ("8", "Русский"), ("19", "Türkçe"),
     ("0", "日本語"), ("9", "한국어"), ("10", "中文 (繁體)"),
-    # Not one of the game's languages: a fan translation laid over one of them (tools/arabic_language.py), offered
-    # for the games whose copy has it (arabic_available).
-    ("ar", "Arabic (translation)"),
 )
 ARABIC = "ar"
+ENGLISH = "1"  # English (US): where a game goes when its copy has no Arabic translation
 ARABIC_CACHE = "arabic-language.json"  # in the player's folder, shared with the start script
 # Speech packs in a copy of the game (u*data/build/main/sound1/.../<language>_ps4.psarc) -> language ids.
 SPEECH_PACKS: dict[str, tuple[str, ...]] = {
@@ -162,37 +164,40 @@ SETTINGS: tuple[Setting, ...] = (
             "The button icons in the games' text and menus. Auto follows the device you play with.",
             input_map.PROMPT_STYLES),
     # Cheats
-    *(Setting("cheat_" + name, LAUNCHER, "cheats", title, hint + " All three games.")
+    *(Setting("cheat_" + name, LAUNCHER, "cheats", title, hint)
       for name, (title, hint) in CHEAT_TEXTS.items()),
     Setting("unlock", LAUNCHER, "cheats", "Unlock all chapters",
             "Every chapter in Chapter Select and Brutal difficulty from the start, in all three games. Your saves "
             "and progress stay as they are."),
-    # Advanced
-    Setting("save_profile", GAME, "advanced", "Save profile",
+    # Game files
+    Setting("save_profile", GAME, "files", "Save profile",
             "Separate saves for this game, like another PS4 user: each profile keeps its own progress and in-game "
             "settings. Profile 1 has your earlier saves; switching never deletes anything.",
             (("1", "Profile 1"), ("2", "Profile 2"), ("3", "Profile 3"))),
-    Setting("language", GAME, "advanced", "Language",
-            "This game's menus and subtitles (each game has its own): pick it here, then press Square in the "
-            "game's main menu. Languages marked + voices are spoken in your copy too.", LANGUAGES),
-    Setting("anisotropy", LAUNCHER, "advanced", "Texture filtering",
+    Setting("language", GAME, "language", "Language",
+            "The game's menus and subtitles: pick it here, then press Square in the "
+            "game's main menu. Languages marked + voices are spoken in your copy too. Arabic (translation) appears "
+            "only when this game's copy has the Arabic translation update.", LANGUAGES),
+    Setting("anisotropy", LAUNCHER, "display", "Texture filtering",
             "Sharper ground and walls seen at an angle, in all three games; 16x costs almost nothing. Game = as on "
             "the PS4.", (("0", "Game"), ("4", "4x"), ("8", "8x"), ("16", "16x"))),
-    Setting("no_dof", LAUNCHER, "advanced", "No depth of field (Uncharted 2 and 3)",
+    Setting("no_dof", LAUNCHER, "display", "No depth of field (Uncharted 2 and 3)",
             "Turns off the background blur (aiming, cutscenes, play). Needs update 1.02."),
-    Setting("menu_shortcut", EVERY_INI, "advanced", "In-game menu shortcut",
+    Setting("menu_shortcut", EVERY_INI, "controls", "In-game menu shortcut",
             "The controller buttons that open the in-game menu (all games). L2 + R3 also zooms the scope with some "
             "guns: pick Select + Start or Keyboard only (Insert) then.",
             (("lt_r3", "L2 + R3"), ("view_menu", "Select + Start"), ("keyboard", "Keyboard only"))),
-    Setting("check_updates", LAUNCHER, "advanced", "Check for updates at start",
+    Setting("check_updates", LAUNCHER, "launcher", "Check for updates at start",
             "The launcher asks before it installs anything."),
-    Setting("diagnostics", LAUNCHER, "advanced", "Performance log",
+    Setting("diagnostics", LAUNCHER, "launcher", "Performance log",
             "Frame rate statistics in the log every 5 seconds: helps when you report a problem."),
 )
 BY_KEY: dict[str, Setting] = {setting.key: setting for setting in SETTINGS}
 TABS: tuple[tuple[str, str], ...] = (("setup", "QUICK SETUP"), ("display", "DISPLAY"),
-                                     ("performance", "PERFORMANCE"), ("controls", "CONTROLS"), ("cheats", "CHEATS"),
-                                     ("advanced", "ADVANCED"))
+                                     ("performance", "PERFORMANCE"), ("controls", "CONTROLS"), ("language", "LANGUAGE"),
+                                     ("files", "GAME FILES"), ("launcher", "LAUNCHER"), ("cheats", "CHEATS"))
+# The tabs that show one game's settings (the others: all games, or each game on its own row).
+PER_GAME_TABS: tuple[str, ...] = ("setup", "display", "performance")
 
 
 def in_tab(tab: str) -> list[Setting]:
@@ -201,13 +206,13 @@ def in_tab(tab: str) -> list[Setting]:
 
 def upscaling_options(root: Path | None = None) -> Options:
     """Off, FSR 1 and FSR 3.1 always; FSR 4 when its model files are installed; DLSS when its DLLs are beside the
-    engine (gow3_pc/bin in a package, gow3_pc/out in a build)."""
+    engine (engine/bin in a package, engine/out in a build)."""
     root = root or paths.ROOT
     names = ["off", "fsr1", "fsr3"]
-    if (root / "gow3_pc" / "fsr4_shaders" / "fsr4_model_v07_i8_native_1080_pre.spv").is_file():
+    if (root / "engine" / "fsr4_shaders" / "fsr4_model_v07_i8_native_1080_pre.spv").is_file():
         names.append("fsr4")
     if any((folder / "bbport_dlss.dll").is_file() and (folder / "nvngx_dlss.dll").is_file()
-           for folder in (root / "gow3_pc" / "bin", root / "gow3_pc" / "out")):
+           for folder in (root / "engine" / "bin", root / "engine" / "out")):
         names.append("dlss")
     return tuple((name, UPSCALING_TITLES[name]) for name in names)
 
@@ -325,8 +330,11 @@ class Editor:
             return tuple(choices)
         if name == "language":
             voices = voice_languages(config.game_dir())
-            return tuple((value, title + ("  (+ voices)" if value in voices else "")) for value, title in LANGUAGES
-                         if value != ARABIC or self.offers_arabic(key, game))
+            # The languages' own names stay as written; the translation's label and the voices mark are the
+            # launcher's texts.
+            return tuple((value, (t("Arabic (translation)") if value == ARABIC else title) +
+                          ("  " + t("(+ voices)") if value in voices else ""))
+                         for value, title in LANGUAGES if value != ARABIC or self.offers_arabic(key, game))
         if name in ("mouse_sens", "mouse_aim_sens"):
             current = str(game.get(name, "1.0"))
             if current not in dict(setting.options):  # a value the in-game menu set
@@ -334,10 +342,25 @@ class Editor:
         return setting.options
 
     def offers_arabic(self, key: str, game: dict[str, Any]) -> bool:
-        """The Arabic translation is a choice for a game whose copy has it, and stays one while it is chosen."""
+        """The Arabic translation is a choice for a game whose copy has it (and while the copy is not looked at
+        yet, for a game that has it chosen)."""
         if self.arabic is None or self.arabic.get(key, False):
             return True
-        return str(game.get("language", "")) == ARABIC
+        return key not in self.arabic and str(game.get("language", "")) == ARABIC
+
+    def drop_missing_arabic(self) -> list[str]:
+        """A game set to the Arabic translation whose copy has none (another game folder chosen) goes back to
+        English. Returns those games."""
+        if not self.arabic:
+            return []
+        config = self.load()
+        changed = [key for key in games.KEYS
+                   if str(config.game(key).get("language")) == ARABIC and not self.arabic.get(key, False)]
+        for key in changed:
+            config.game(key)["language"] = ENGLISH
+        if changed:
+            config.save()
+        return changed
 
     def preset_list(self) -> list[presets.Preset]:
         return presets.all_for(self.card, {name for name, _ in self.upscalers})

@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass, field, replace
 
 from . import config, gpu
+from .i18n import t
 
 UPSCALER_TITLES = {"dlss": "DLSS", "fsr4": "FSR 4", "fsr3": "FSR 3.1"}
 QUALITY_TITLES = {"off": "Native AA", "quality": "Quality", "balanced": "Balanced", "performance": "Performance",
@@ -57,6 +58,7 @@ PRESETS: dict[str, Preset] = {preset.name: preset for preset in (
            "scales up.",
            "3840x2160", "off", _values(str(config.MAX_FPS), "0", "50")),
 )}
+RECOMMENDED_TITLE = "RECOMMENDED"
 ORDER: tuple[str, ...] = ("recommended",) + gpu.TIERS
 
 
@@ -88,19 +90,20 @@ def recommended(card: gpu.Gpu | None, upscalers: set[str]) -> Preset:
         values.update(upscaler=upscaler, fsr1="0", rcas_strength="75")
     elif "upscaler" not in values:
         values["upscaler"] = "taa"
-    preset = replace(base, name="recommended", title="RECOMMENDED", upscale=upscale, values=values, base=base_name,
+    preset = replace(base, name="recommended", title=RECOMMENDED_TITLE, upscale=upscale, values=values, base=base_name,
                      upscaler=upscaler)
     if base_name == "igpu" and not upscaler:
         preset = for_igpu(preset, card.name if card else None)
     height = int(preset.resolution.split("x")[1])
     size = "4K" if height == 2160 else f"{height}p"
     if upscaler:
-        method = f"{UPSCALER_TITLES[upscaler]} {QUALITY_TITLES[preset.upscale]}"
+        method = f"{UPSCALER_TITLES[upscaler]} {t(QUALITY_TITLES[preset.upscale])}"
     else:
         method = "FSR 1" if preset.values.get("fsr1") == "1" else "TAA"
     fps = preset.values["fps_limit"]
-    detail = (f"Made for your PC ({card.name}): {size} at {fps} FPS with {method}." if card else
-              "Made for your PC once its graphics card is found: Medium until then.")
+    detail = (t("Made for your PC ({card}): {size} at {fps} FPS with {method}.", card=card.name, size=size, fps=fps,
+                method=method) if card else
+              t("Made for your PC once its graphics card is found: Medium until then."))
     return replace(preset, summary=f"{fps} FPS  •  {size}, {method}", detail=detail)
 
 

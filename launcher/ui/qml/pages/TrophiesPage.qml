@@ -4,13 +4,14 @@
 // the list on the right (earned first, newest first; hidden ones stay hidden until earned).
 // Keys (from Main.qml): Up/Down move in the list, Left/Right change game.
 import QtQuick
+import QtQuick.Controls
 import ".."
 import "../components"
 
 Page {
     id: page
-    title: "TROPHIES"
-    subtitle: trophies.available ? trophies.count + " of " + trophies.total + " earned" : ""
+    title: qsTr("TROPHIES")
+    subtitle: trophies.available ? qsTr("%1 of %2 earned").arg(trophies.count).arg(trophies.total) : ""
 
     readonly property var gradeColors: ({ "P": "#b9d7e6", "G": "#e6c25a", "S": "#c9cdd2", "B": "#c08a5a" })
 
@@ -53,8 +54,11 @@ Page {
         spacing: 10
         Text { text: trophies.progress + "%"; color: Theme.ink; font.family: Theme.titleFont; font.pixelSize: 54 }
         Rectangle {
-            width: parent.width; height: 6; radius: 3; color: Theme.line
-            Rectangle { width: parent.width * trophies.progress / 100; height: parent.height; radius: 3; color: Theme.gold }
+            width: parent.width; height: 8; radius: 4; color: Theme.line
+            Rectangle {
+                width: Math.max(height, parent.width * trophies.progress / 100); height: parent.height; radius: 4; color: Theme.accent
+                Behavior on width { NumberAnimation { duration: Theme.slow; easing.type: Easing.OutCubic } }
+            }
         }
         Item { width: 1; height: 6 }
         Repeater {
@@ -63,13 +67,13 @@ Page {
                 width: summary.width; height: 24
                 Rectangle {
                     width: 10; height: 10; radius: 5
-                    anchors.verticalCenter: parent.verticalCenter
+                    anchors { left: parent.left; verticalCenter: parent.verticalCenter }
                     color: page.gradeColors[modelData.grade]
                 }
                 Text {
-                    x: 20; anchors.verticalCenter: parent.verticalCenter
+                    anchors { left: parent.left; leftMargin: 20; verticalCenter: parent.verticalCenter }
                     text: modelData.name
-                    color: Theme.dim; font.family: Theme.bodyFont; font.pixelSize: 13; font.letterSpacing: 2
+                    color: Theme.dim; font.family: Theme.bodyFont; font.pixelSize: 13; font.letterSpacing: Theme.tracking(2)
                 }
                 Text {
                     anchors { right: parent.right; verticalCenter: parent.verticalCenter }
@@ -82,11 +86,12 @@ Page {
 
     // Right: the list.
     ListView {
+        ScrollBar.vertical: listBar
         id: list
         visible: trophies.available
-        anchors { top: tabs.bottom; topMargin: 28; bottom: hints.top; bottomMargin: 12; left: summary.right; leftMargin: 36; right: parent.right }
+        anchors { top: tabs.bottom; topMargin: 28; bottom: hints.top; bottomMargin: 12; left: summary.right; leftMargin: 36; right: parent.right; rightMargin: 20 }
         clip: true
-        spacing: 4
+        spacing: 6
         model: trophies.rows
         highlightMoveDuration: 120
         keyNavigationEnabled: false
@@ -94,19 +99,20 @@ Page {
             id: row
             readonly property bool selected: ListView.isCurrentItem
             width: ListView.view.width
-            height: 66
-            radius: 3
-            color: selected ? Theme.panel : "transparent"
-            border.color: selected ? Theme.gold : "transparent"
+            height: 68
+            radius: Theme.radius
+            color: selected ? Theme.accentSoft : trophyArea.containsMouse ? Theme.glassHover : Qt.rgba(1, 1, 1, 0.025)
+            border.color: selected ? Theme.accentLine : Qt.rgba(1, 1, 1, 0.05)
+            Behavior on color { ColorAnimation { duration: Theme.fast } }
 
             // The pack's own icon; a locked one dimmed, a hidden one not shown at all.
             Rectangle {
                 id: iconBox
-                x: 10; width: 48; height: 48
-                anchors.verticalCenter: parent.verticalCenter
+                width: 48; height: 48; radius: 6
+                anchors { left: parent.left; leftMargin: 10; verticalCenter: parent.verticalCenter }
                 color: Theme.line
                 Image {
-                    anchors.fill: parent
+                    anchors { fill: parent; margins: 2 }
                     source: modelData.secret ? "" : modelData.icon
                     sourceSize.width: 96
                     asynchronous: true
@@ -142,17 +148,21 @@ Page {
                 id: when
                 anchors { right: parent.right; rightMargin: 14; top: parent.top; topMargin: 12 }
                 text: modelData.when
-                color: modelData.earned ? Theme.gold : Theme.faint
-                font.family: Theme.bodyFont; font.pixelSize: 11; font.letterSpacing: 2
+                color: modelData.earned ? Theme.accent : Theme.faint
+                font.family: Theme.bodyFont; font.pixelSize: 11; font.letterSpacing: Theme.tracking(2)
             }
-            MouseArea { anchors.fill: parent; onClicked: list.currentIndex = index }
+            MouseArea { id: trophyArea; anchors.fill: parent; hoverEnabled: true; onClicked: list.currentIndex = index }
         }
+    }
+    Scroller {
+        id: listBar
+        anchors { top: list.top; bottom: list.bottom; left: list.right; leftMargin: 4 }
     }
     KeyHint {
         id: hints
         anchors { left: parent.left; bottom: parent.bottom }
-        entries: trophies.available ? [{ action: "views", text: "GAME" }, { action: "choose", text: "BROWSE" }]
-                                    : [{ action: "views", text: "GAME" }]
+        entries: trophies.available ? [{ action: "views", text: qsTr("GAME") }, { action: "choose", text: qsTr("BROWSE") }]
+                                    : [{ action: "views", text: qsTr("GAME") }]
     }
     Text {
         anchors { right: parent.right; verticalCenter: hints.verticalCenter }

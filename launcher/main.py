@@ -69,6 +69,15 @@ def main() -> int:
     app.setApplicationName(paths.APP_NAME)
     app.setWindowIcon(QIcon(str(UI_DIR / "assets" / "eldorado.ico")))
 
+    # The launcher's language (Settings, else Windows' own): Python's t() and QML's qsTr() read the same texts.
+    from core import config as cfg
+    from core import i18n
+    from ui.language_model import LanguageModel, Translator
+
+    i18n.set_language(i18n.chosen(cfg.Config.load().data.get(i18n.SETTING)))
+    translator = Translator(app)
+    app.installTranslator(translator)
+
     from ui.bridge import Launcher
 
     launcher = Launcher()
@@ -93,7 +102,19 @@ def main() -> int:
     # What QML sees, by name. Kept in a dict so the objects live as long as the window.
     models = {"launcher": launcher, "app": app_model, "gamepad": Gamepad(), "saves": SavesModel(),
               "trophies": TrophiesModel(), "gallery": GalleryModel(), "settings": SettingsModel()}
+    from ui.profile_model import ProfileModel
+
+    models["profiles"] = ProfileModel()
+    language = LanguageModel()
+    models["i18n"] = language
     engine = QQmlApplicationEngine()
+    language.attach(engine.retranslate, models.values())
+    # Another game folder or update (chosen, installed from a .pkg, a reset): every screen reads the files again:
+    # the game's version and its saves, the Arabic translation, the trophy packs.
+    for reread in (launcher.refresh, models["saves"].refresh, models["trophies"].reload, models["settings"].refresh):
+        app_model.filesChanged.connect(reread)
+        models["profiles"].switched.connect(reread)  # another player: other saves
+    models["settings"].languageWanted.connect(language.setLanguage)
     engine.addImageProvider("background", BackgroundProvider(launcher.picture))
     for name, model in models.items():
         engine.rootContext().setContextProperty(name, model)

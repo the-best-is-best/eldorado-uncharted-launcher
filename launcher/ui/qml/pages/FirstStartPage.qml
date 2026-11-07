@@ -8,8 +8,8 @@ import "../components"
 
 Page {
     id: first
-    title: "WELCOME TO EL DORADO"
-    subtitle: "Three quick steps, then the games are ready to play."
+    title: qsTr("WELCOME TO EL DORADO")
+    subtitle: qsTr("Three quick steps, then the games are ready to play.")
     signal finished()
 
     property bool shortcuts: true
@@ -36,17 +36,17 @@ Page {
         Column {
             width: parent.width
             spacing: 10
-            Text { text: "1   YOUR GAME"; color: Theme.gold; font.family: Theme.bodyFont; font.pixelSize: 13; font.letterSpacing: 3 }
+            Text { text: "1   " + qsTr("YOUR GAME"); color: Theme.accent; font.family: Theme.strongFont; font.pixelSize: 13; font.letterSpacing: Theme.tracking(3) }
             Text {
                 width: parent.width
                 text: first.ready ? app.gameDir
-                                  : "Choose your Uncharted: The Nathan Drake Collection folder: the one with eboot.bin and sce_sys."
+                                  : qsTr("Choose your Uncharted: The Nathan Drake Collection folder: the one with eboot.bin and sce_sys.")
                 color: first.ready ? Theme.ink : Theme.dim
                 font.family: Theme.bodyFont; font.pixelSize: 15
                 wrapMode: Text.WrapAnywhere
             }
             TextButton {
-                text: first.ready ? "CHANGE GAME FOLDER" : "CHOOSE GAME FOLDER"
+                text: first.ready ? qsTr("CHANGE GAME FOLDER") : qsTr("CHOOSE GAME FOLDER")
                 onClicked: app.chooseGameFolder()
             }
         }
@@ -54,10 +54,10 @@ Page {
         Column {
             width: parent.width
             spacing: 10
-            Text { text: "2   SETTINGS"; color: Theme.gold; font.family: Theme.bodyFont; font.pixelSize: 13; font.letterSpacing: 3 }
+            Text { text: "2   " + qsTr("SETTINGS"); color: Theme.accent; font.family: Theme.strongFont; font.pixelSize: 13; font.letterSpacing: Theme.tracking(3) }
             Text {
                 width: parent.width
-                text: "Every game starts with the Recommended settings for your graphics card. Change them any time in Settings."
+                text: qsTr("Every game starts with the Recommended settings for your graphics card. Change them any time in Settings.")
                 color: Theme.dim; font.family: Theme.bodyFont; font.pixelSize: 15; wrapMode: Text.WordWrap
             }
         }
@@ -65,18 +65,18 @@ Page {
         Column {
             width: parent.width
             spacing: 10
-            Text { text: "3   SHORTCUTS"; color: Theme.gold; font.family: Theme.bodyFont; font.pixelSize: 13; font.letterSpacing: 3 }
+            Text { text: "3   " + qsTr("SHORTCUTS"); color: Theme.accent; font.family: Theme.strongFont; font.pixelSize: 13; font.letterSpacing: Theme.tracking(3) }
             Toggle {
                 width: parent.width
-                label: "Desktop shortcuts"
-                hint: "One for the launcher and one per game (each starts its game directly)."
+                label: qsTr("Desktop shortcuts")
+                hint: qsTr("One for the launcher and one per game (each starts its game directly).")
                 checked: first.shortcuts
                 onToggled: function(value) { first.shortcuts = value }
             }
         }
 
         GoldButton {
-            text: "START"
+            text: qsTr("START")
             opacity: first.ready ? 1.0 : 0.4
             onClicked: first.accept()
         }

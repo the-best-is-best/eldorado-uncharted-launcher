@@ -67,6 +67,25 @@ Item {
         Backdrop { id: second }
     }
 
+    // A shade over the picture, deepest behind the games and at the foot, so every line reads on any picture.
+    Rectangle {
+        anchors.fill: parent
+        gradient: Gradient {
+            orientation: Gradient.Horizontal
+            GradientStop { position: 0.0; color: Qt.rgba(0.03, 0.035, 0.045, i18n.rtl ? 0.2 : 0.72) }
+            GradientStop { position: 0.5; color: Qt.rgba(0.03, 0.035, 0.045, 0.3) }
+            GradientStop { position: 1.0; color: Qt.rgba(0.03, 0.035, 0.045, i18n.rtl ? 0.72 : 0.2) }
+        }
+    }
+    Rectangle {
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        height: parent.height * 0.5
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: "transparent" }
+            GradientStop { position: 1.0; color: Qt.rgba(0.03, 0.035, 0.045, 0.85) }
+        }
+    }
+
     // The games and the selected one, above the log.
     Item {
         id: stage
@@ -74,8 +93,7 @@ Item {
 
         Column {
             id: cards
-            x: 48
-            anchors.verticalCenter: parent.verticalCenter
+            anchors { left: parent.left; leftMargin: 48; verticalCenter: parent.verticalCenter }
             spacing: 14
             Repeater {
                 model: launcher.games
@@ -91,26 +109,49 @@ Item {
             }
         }
 
+        // The chosen game on a glass panel.
+        Rectangle {
+            id: infoPanel
+            anchors { left: cards.right; leftMargin: home.compact ? 36 : 48; right: parent.right; rightMargin: 40; verticalCenter: parent.verticalCenter }
+            height: info.implicitHeight + 2 * info.anchors.margins
+            radius: Theme.radius + 4
+            color: Theme.glass
+            border.color: Theme.glassEdge
+        }
         Column {
             id: info
-            anchors { left: cards.right; leftMargin: home.compact ? 48 : 64; right: parent.right; rightMargin: 48; verticalCenter: parent.verticalCenter }
+            anchors { fill: infoPanel; margins: home.compact ? 22 : 30 }
             spacing: home.compact ? 6 : 10
 
-            Text { text: "UNCHARTED " + home.game.number; color: Theme.dim; font.family: Theme.bodyFont; font.pixelSize: 15; font.letterSpacing: 4 }
+            // The game's number on a chip of its color.
+            Rectangle {
+                width: chip.implicitWidth + 24; height: 26; radius: 13
+                color: Theme.accentSoft
+                border.color: Theme.accentLine
+                Text {
+                    id: chip
+                    anchors.centerIn: parent
+                    text: "UNCHARTED " + home.game.number
+                    color: Theme.accent; font.family: Theme.strongFont; font.pixelSize: 12; font.letterSpacing: Theme.tracking(3)
+                }
+            }
             Text {
                 width: parent.width
                 text: home.game.title
-                color: Theme.ink; font.family: Theme.titleFont; font.pixelSize: home.compact ? 36 : 52
+                color: Theme.ink; font.family: Theme.titleFont; font.pixelSize: home.compact ? 32 : 44
                 wrapMode: Text.WordWrap
                 style: Text.Raised; styleColor: Qt.rgba(0, 0, 0, 0.65)
             }
-            Text { text: home.game.place; color: Theme.gold; font.family: Theme.bodyFont; font.pixelSize: 13; font.letterSpacing: 3 }
-            Rectangle { width: 72; height: 2; color: Theme.gold }
+            Row {
+                spacing: 12
+                Rectangle { anchors.verticalCenter: parent.verticalCenter; width: 28; height: 2; radius: 1; color: Theme.accent }
+                Text { anchors.verticalCenter: parent.verticalCenter; text: home.game.place; color: Theme.accent; font.family: Theme.bodyFont; font.pixelSize: 13; font.letterSpacing: Theme.tracking(3) }
+            }
             Text {
                 width: parent.width
-                text: home.game.playTime + " played   ·   " + home.game.lastPlayed
-                      + (home.game.fps > 0 ? "   ·   " + home.game.fps + " FPS average" : "")
-                      + (trophies.percents[home.game.key] >= 0 ? "   ·   trophies " + trophies.percents[home.game.key] + "%" : "")
+                text: qsTr("%1 played").arg(home.game.playTime) + "   ·   " + home.game.lastPlayed
+                      + (home.game.fps > 0 ? "   ·   " + qsTr("%1 FPS average").arg(home.game.fps) : "")
+                      + (trophies.percents[home.game.key] >= 0 ? "   ·   " + qsTr("trophies %1%").arg(trophies.percents[home.game.key]) : "")
                 color: Theme.dim; font.family: Theme.bodyFont; font.pixelSize: 14
                 style: Text.Raised; styleColor: Qt.rgba(0, 0, 0, 0.6)
                 elide: Text.ElideRight
@@ -122,8 +163,8 @@ Item {
             // line would hold the start).
             Text {
                 visible: home.game.hasSave
-                text: "CONTINUE"
-                color: Theme.gold; font.family: Theme.bodyFont; font.pixelSize: 12; font.letterSpacing: 3
+                text: qsTr("CONTINUE")
+                color: Theme.faint; font.family: Theme.strongFont; font.pixelSize: 11; font.letterSpacing: Theme.tracking(3)
             }
             Text {
                 width: parent.width * 0.85
@@ -131,7 +172,9 @@ Item {
                 text: launcher.continueTitle
                 color: Theme.ink; font.family: Theme.titleFont; font.pixelSize: home.compact ? 18 : 22
                 horizontalAlignment: Text.AlignLeft
-                wrapMode: Text.WordWrap
+                // Arabic shown as stored is one line cut at its left end (Qt cuts the left only on an unwrapped line;
+                // wrapped, the sentence's start would drop off unseen).
+                wrapMode: launcher.continueBackwards ? Text.NoWrap : Text.WordWrap
                 maximumLineCount: home.compact || launcher.continueBackwards ? 1 : 2
                 elide: launcher.continueBackwards ? Text.ElideLeft : Text.ElideRight
                 style: Text.Raised; styleColor: Qt.rgba(0, 0, 0, 0.65)
@@ -143,14 +186,14 @@ Item {
                 font.family: home.game.hasSave ? Theme.bodyFont : Theme.titleFont; font.pixelSize: home.game.hasSave ? 14 : 17
                 horizontalAlignment: Text.AlignLeft
                 wrapMode: Text.WordWrap
-                maximumLineCount: home.compact || launcher.continueBackwards ? 1 : 2
-                elide: launcher.continueBackwards ? Text.ElideLeft : Text.ElideRight
+                maximumLineCount: 2  // the save's own detail, then when it was made
+                elide: Text.ElideRight
                 style: Text.Raised; styleColor: Qt.rgba(0, 0, 0, 0.6)
             }
             Item { width: 1; height: home.compact ? 6 : 14 }
 
             GoldButton {
-                text: launcher.running ? "STOP" : "PLAY"
+                text: launcher.running ? qsTr("STOP") : qsTr("PLAY")
                 danger: launcher.running
                 onClicked: home.accept()
             }
@@ -172,22 +215,30 @@ Item {
         spacing: 10
         readonly property int tile: Math.max(100, Math.min(176, Math.floor((width - 4 * 14) / 5)))
 
-        Text { text: "EXPEDITION LOG"; color: Theme.gold; font.family: Theme.bodyFont; font.pixelSize: 12; font.letterSpacing: 3 }
+        Text { text: qsTr("EXPEDITION LOG"); color: Theme.dim; font.family: Theme.strongFont; font.pixelSize: 11; font.letterSpacing: Theme.tracking(3) }
         Row {
             spacing: 14
             Repeater {
                 model: launcher.logRows
                 Item {
+                    id: tile
+                    readonly property color tone: Theme.accentOf(modelData.game)
+                    readonly property bool current: modelData.game === home.game.key
                     width: log.tile
                     height: plate.height + 42
                     Rectangle {
                         id: plate
                         width: log.tile
                         height: Math.round(log.tile * 9 / 16)
+                        y: tileArea.containsMouse && tileArea.enabled ? -3 : 0
+                        radius: Theme.radiusSmall
                         color: Theme.panel
-                        border.color: modelData.game === home.game.key ? Theme.gold : Theme.line
+                        border.width: tile.current ? 2 : 1
+                        border.color: tile.current ? tile.tone : Theme.glassEdge
+                        Behavior on y { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
+                        Behavior on border.color { ColorAnimation { duration: Theme.slow } }
                         Image {
-                            anchors { fill: parent; margins: 1 }
+                            anchors { fill: parent; margins: 3 }
                             source: modelData.picture
                             fillMode: Image.PreserveAspectCrop
                             asynchronous: true
@@ -195,9 +246,9 @@ Item {
                             clip: true
                         }
                         Rectangle {
-                            x: 6; y: 6; width: 22; height: 22; radius: 2
-                            color: Qt.rgba(0, 0, 0, 0.6)
-                            Text { anchors.centerIn: parent; text: modelData.number; color: Theme.gold; font.family: Theme.titleFont; font.pixelSize: 13 }
+                            x: 8; y: 8; width: 22; height: 22; radius: 11
+                            color: tile.tone
+                            Text { anchors.centerIn: parent; text: modelData.number; color: Theme.accentInk; font.family: Theme.strongFont; font.pixelSize: 12 }
                         }
                     }
                     Text {
@@ -212,12 +263,15 @@ Item {
                         anchors.bottom: parent.bottom
                         width: parent.width
                         text: modelData.when
-                        color: Theme.faint; font.family: Theme.bodyFont; font.pixelSize: 11; font.letterSpacing: 1
+                        color: Theme.faint; font.family: Theme.bodyFont; font.pixelSize: 11; font.letterSpacing: Theme.tracking(1)
                         elide: Text.ElideRight
                     }
                     MouseArea {
+                        id: tileArea
                         anchors.fill: parent
+                        hoverEnabled: true
                         enabled: !launcher.running
+                        cursorShape: Qt.PointingHandCursor
                         onClicked: launcher.selectGame(modelData.game)
                     }
                 }
@@ -230,8 +284,8 @@ Item {
         id: hints
         anchors { left: parent.left; leftMargin: 48; bottom: parent.bottom; bottomMargin: 22 }
         entries: [
-            { action: "choose", text: "CHOOSE" },
-            { action: "accept", text: launcher.running ? "STOP (TWICE)" : "PLAY" }
+            { action: "choose", text: qsTr("CHOOSE") },
+            { action: "accept", text: launcher.running ? qsTr("STOP (TWICE)") : qsTr("PLAY") }
         ]
     }
 

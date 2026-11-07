@@ -13,6 +13,9 @@ import "pages"
 
 ApplicationWindow {
     id: window
+    // Arabic: the whole window right to left (the rail on the right), the dialogs in the overlay too.
+    LayoutMirroring.enabled: i18n.rtl
+    LayoutMirroring.childrenInherit: true
     width: 1280
     height: 720
     minimumWidth: 960
@@ -23,12 +26,21 @@ ApplicationWindow {
 
     // A screen has a page in the stack; an action is shown by the one action page (its name says which).
     readonly property var screens: [
-        { name: "HOME", page: 0 }, { name: "SAVES", page: 1 }, { name: "TROPHIES", page: 2 },
-        { name: "GALLERY", page: 3 }, { name: "SETTINGS", page: 4 },
-        { name: "UPDATE", action: "update" }, { name: "LOGS", action: "logs" }, { name: "QUIT", action: "quit" }
+        { name: qsTr("HOME"), page: 0 }, { name: qsTr("SAVES"), page: 1 }, { name: qsTr("TROPHIES"), page: 2 },
+        { name: qsTr("GALLERY"), page: 3 }, { name: qsTr("SETTINGS"), page: 4 },
+        { name: qsTr("UPDATE"), action: "update" }, { name: qsTr("LOGS"), action: "logs" }, { name: qsTr("QUIT"), action: "quit" }
     ]
     readonly property int firstAction: 5
     property int screen: 0
+
+    // The chosen game's color for the whole window, eased from the last one.
+    readonly property color gameAccent: launcher.games.length > 0 && launcher.games[launcher.selectedIndex]
+                                        ? Theme.accentOf(launcher.games[launcher.selectedIndex].key) : Theme.gold
+    onGameAccentChanged: { accentFade.stop(); accentFade.to = gameAccent; accentFade.start() }
+    Component.onCompleted: Theme.accent = gameAccent
+    // Arabic letters join and East Asian signs stand apart: no letter spacing there (Theme.tracking).
+    Binding { target: Theme; property: "joinedScript"; value: i18n.unspaced }
+    ColorAnimation { id: accentFade; target: Theme; property: "accent"; duration: Theme.slow; easing.type: Easing.InOutQuad }
 
     // While a game's window is up the launcher steps aside, and comes back when the game ends.
     Connections {
@@ -57,7 +69,8 @@ ApplicationWindow {
             else if (name === "next") window.nextScreen(1)
             else if (name === "previous") window.nextScreen(-1)
             else if (name === "play") { window.screen = 0; homePage.accept() }
-            else window.call({left: "moveLeft", right: "moveRight"}[name] || name)
+            else if (name === "left" || name === "right") window.sideways(name)
+            else window.call(name)
         }
     }
     onVisibleChanged: if (typeof gamepad !== "undefined") gamepad.setActive(visible)
@@ -74,16 +87,24 @@ ApplicationWindow {
         if (window.screen === 0) app.quit(true)
         else window.screen = 0
     }
+    // Left and right as the player sees them: right to left (Arabic) the next tab or item is on the left, so the
+    // arrow keeps pointing where the move goes.
+    function sideways(arrow) {
+        var forward = (arrow === "right") !== i18n.rtl
+        window.call(forward ? "moveRight" : "moveLeft")
+    }
     function current() { return stack.children[stack.currentIndex] }
     function call(name) { var page = current(); if (page && typeof page[name] === "function") page[name]() }
 
     Item {
         anchors.fill: parent
+        LayoutMirroring.enabled: i18n.rtl
+        LayoutMirroring.childrenInherit: true
         focus: true
         Keys.onUpPressed: window.call("up")
         Keys.onDownPressed: window.call("down")
-        Keys.onLeftPressed: window.call("moveLeft")
-        Keys.onRightPressed: window.call("moveRight")
+        Keys.onLeftPressed: window.sideways("left")
+        Keys.onRightPressed: window.sideways("right")
         Keys.onReturnPressed: window.call("accept")
         Keys.onEnterPressed: window.call("accept")
         Keys.onDeletePressed: window.call("remove")
@@ -93,26 +114,40 @@ ApplicationWindow {
         Keys.onEscapePressed: window.back()
 
         // One item of the rail: a screen's name, or an action's (UPDATE in its own color while a release waits).
+        // The chosen one sits on a soft pill of the game's color with a bright bar at its edge.
         component RailItem: Rectangle {
+            id: railItem
             property int at: 0
             readonly property var item: window.screens[at]
             readonly property bool chosen: at === window.screen
             visible: window.available(at)
-            width: 160; height: 40; radius: 3
-            color: chosen ? Theme.panel : "transparent"
-            Rectangle { width: 3; height: parent.height; color: Theme.gold; visible: parent.chosen }
+            width: 168; height: 42; radius: Theme.radiusSmall
+            color: chosen ? Theme.accentSoft : (railArea.containsMouse && railArea.enabled ? Theme.glassHover : "transparent")
+            Behavior on color { ColorAnimation { duration: Theme.fast } }
+            Rectangle {
+                anchors { left: parent.left; leftMargin: 6; verticalCenter: parent.verticalCenter }
+                width: 3; radius: 2
+                height: railItem.chosen ? 20 : 0
+                color: Theme.accent
+                Behavior on height { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
+            }
             Text {
-                x: 16; anchors.verticalCenter: parent.verticalCenter
-                text: parent.item.name
-                color: parent.chosen ? Theme.ink : parent.item.action === "update" ? Theme.update : Theme.dim
-                font.family: Theme.bodyFont; font.pixelSize: 13; font.letterSpacing: 3
+                anchors { left: parent.left; leftMargin: 22; verticalCenter: parent.verticalCenter }
+                text: railItem.item.name
+                color: railItem.chosen ? Theme.ink : railItem.item.action === "update" ? Theme.update
+                     : railArea.containsMouse ? Theme.ink : Theme.dim
+                font.family: railItem.chosen ? Theme.strongFont : Theme.bodyFont
+                font.pixelSize: 13; font.letterSpacing: Theme.tracking(3)
+                Behavior on color { ColorAnimation { duration: Theme.fast } }
             }
             MouseArea {
+                id: railArea
                 anchors.fill: parent
-                enabled: parent.item.action === "quit" || !launcher.running || parent.at === 0
+                hoverEnabled: true
+                enabled: railItem.item.action === "quit" || !launcher.running || railItem.at === 0
                 onClicked: {
-                    if (parent.item.action !== undefined) actionPage.run(parent.item.action)
-                    else window.screen = parent.at
+                    if (railItem.item.action !== undefined) actionPage.run(railItem.item.action)
+                    else window.screen = railItem.at
                 }
             }
         }
@@ -120,22 +155,25 @@ ApplicationWindow {
         // The rail.
         Rectangle {
             id: rail
-            width: 200
+            width: 212
             anchors { top: parent.top; bottom: parent.bottom; left: parent.left }
-            color: Qt.darker(Theme.base, 1.3)
+            color: Theme.rail
+            Rectangle { anchors { top: parent.top; bottom: parent.bottom; right: parent.right } width: 1; color: Theme.glassEdge }
             Column {
-                x: 24; y: 32
+                anchors { left: parent.left; leftMargin: 22; top: parent.top; topMargin: 30 }
                 spacing: 4
-                Text { text: "EL DORADO"; color: Theme.gold; font.family: Theme.titleFont; font.pixelSize: 22; font.letterSpacing: 4 }
-                Text { text: "UNCHARTED COLLECTION"; color: Theme.faint; font.family: Theme.bodyFont; font.pixelSize: 10; font.letterSpacing: 2 }
-                Item { width: 1; height: 36 }
+                Text { leftPadding: 2; text: "EL DORADO"; color: Theme.gold; font.family: Theme.titleFont; font.pixelSize: 22; font.letterSpacing: Theme.tracking(4) }
+                Text { leftPadding: 2; text: "UNCHARTED COLLECTION"; color: Theme.faint; font.family: Theme.bodyFont; font.pixelSize: 10; font.letterSpacing: Theme.tracking(2) }
+                Item { width: 1; height: 18 }
+                ProfileSwitch {}
+                Item { width: 1; height: 18 }
                 Repeater {
                     model: window.firstAction
                     RailItem { at: index }
                 }
             }
             Column {
-                anchors { left: parent.left; leftMargin: 24; bottom: railHints.top; bottomMargin: 24 }
+                anchors { left: parent.left; leftMargin: 22; bottom: railHints.top; bottomMargin: 22 }
                 spacing: 4
                 Repeater {
                     model: window.screens.length - window.firstAction
@@ -145,10 +183,10 @@ ApplicationWindow {
             // The keys of the device in use (KeyHint follows it).
             Column {
                 id: railHints
-                anchors { left: parent.left; leftMargin: 24; bottom: parent.bottom; bottomMargin: 20 }
-                spacing: 6
-                KeyHint { entries: [{ action: "next", text: "SCREENS" }] }
-                KeyHint { entries: [{ action: "back", text: "HOME" }] }
+                anchors { left: parent.left; leftMargin: 26; bottom: parent.bottom; bottomMargin: 20 }
+                spacing: 8
+                KeyHint { entries: [{ action: "next", text: qsTr("SCREENS") }] }
+                KeyHint { entries: [{ action: "back", text: qsTr("HOME") }] }
             }
         }
 
@@ -169,6 +207,8 @@ ApplicationWindow {
     // The first start (no game folder yet, or the settings never set up): over everything until START.
     Loader {
         anchors.fill: parent
+        LayoutMirroring.enabled: i18n.rtl
+        LayoutMirroring.childrenInherit: true
         active: app.firstStart
         sourceComponent: Rectangle {
             color: Theme.base

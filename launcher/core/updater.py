@@ -41,7 +41,7 @@ USER_AGENT = "ElDorado-Launcher"
 REQUIRED: tuple[str, ...] = (
     "Uncharted Launcher.exe", "VERSION", "python/pythonw.exe", "python/Lib/site-packages/PySide6/QtQuick.pyd",
     "launcher/main.py", "launcher/core/updater.py", "launcher/ui/qml/Main.qml", "tools/apply_update.py",
-    "tools/probe_uncharted.py", "gow3_pc/run.py", "gow3_pc/scripts/prepare.py", "gow3_pc/out/bb-probe.exe",
+    "tools/probe_uncharted.py", "engine/run.py", "engine/scripts/prepare.py", "engine/out/bb-probe.exe",
 )
 CHUNK = 1 << 16
 # A try that brought at least this much counts as progress: the failure count starts again.

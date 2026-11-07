@@ -23,6 +23,7 @@ from datetime import date
 from pathlib import Path
 
 from . import games
+from .i18n import t
 
 SAVES, DELETED, BACKUPS = "saves", "deleted", "backups"
 VIEWS: tuple[str, ...] = (SAVES, DELETED, BACKUPS)
@@ -67,6 +68,7 @@ class Save:
     detail: str
     time: float            # saves/deleted: when the game wrote it; backups: when the copy was made
     picture: Path | None
+    version: str = ""      # the game version that wrote it ("01.03"), "" when it was not recorded
 
     @property
     def data(self) -> Path:
@@ -161,7 +163,36 @@ def _make_save(view: str, profile: str, title_dir: Path, holder: Path, name: str
         return None  # not a story save (the game leaves the chapter line empty only on its system saves)
     made = stamp_time(holder.name) if view == BACKUPS else 0.0
     return Save(view, game, name, profile, title_dir.name, holder, readable(param.subtitle),
-                readable(param.detail), made or param.time, picture_of(meta))
+                readable(param.detail), made or param.time, picture_of(meta), version_of(meta))
+
+
+# Written by tools/probe_uncharted.py after each run: the game version that wrote the save.
+VERSION_FILE = "eldorado-game-version.txt"
+
+
+def version_of(meta: Path) -> str:
+    try:
+        return (meta / VERSION_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _version_key(text: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(part) for part in text.split("."))
+    except ValueError:
+        return ()
+
+
+def too_new(save: Save, game_version: str) -> bool:
+    """A save written by a newer version of the game than the one chosen: the game does not load it, so the
+    launcher neither shows nor changes it. A save without a recorded version is shown."""
+    made, now = _version_key(save.version), _version_key(game_version)
+    return bool(made and now) and made > now
+
+
+def playable(found: list[Save], game_version: str) -> list[Save]:
+    return [save for save in found if not too_new(save, game_version)]
 
 
 def list_saves(user_dir: Path, view: str, profiles: dict[str, str]) -> list[Save]:
@@ -382,9 +413,9 @@ def when_text(stamp: float, now: float | None = None) -> str:
     today = time.localtime(time.time() if now is None else now)
     days = (date(today.tm_year, today.tm_mon, today.tm_mday) - date(then.tm_year, then.tm_mon, then.tm_mday)).days
     if days <= 0:
-        return time.strftime("today %H:%M", then)
+        return t("today {time}", time=time.strftime("%H:%M", then))
     if days == 1:
-        return time.strftime("yesterday %H:%M", then)
+        return t("yesterday {time}", time=time.strftime("%H:%M", then))
     if days < 30:
-        return f"{days} days ago"
+        return t("{days} days ago", days=days)
     return f"{then.tm_mday} {time.strftime('%b %Y', then)}"

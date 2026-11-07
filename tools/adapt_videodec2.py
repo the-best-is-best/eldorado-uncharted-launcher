@@ -2,7 +2,7 @@
 from pathlib import Path
 import re
 root=Path(__file__).resolve().parent.parent
-dest=root / "gow3_pc/gpu/shim/videodec2"
+dest=root / "engine/gpu/shim/videodec2"
 dest.mkdir(parents=True,exist_ok=True)
 for filename in ("videodec2.h","videodec2_impl.h","videodec_error.h"):
     input_name="upstream-videodec-error.h" if filename=="videodec_error.h" else "upstream-"+filename

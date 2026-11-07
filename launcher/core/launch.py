@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import config as cfg
 from . import games, paths, resolution
+from .i18n import t
 
 RUN_SCRIPT = paths.ROOT / "tools" / "probe_uncharted.py"
 LAST_RUN_LOG = paths.USER_DIR / "launcher-last-run.log"
@@ -43,9 +44,9 @@ def environment(config: cfg.Config, base: dict[str, str] | None = None,
     env["UNCHARTED_NO_DOF"] = "1" if data.get("no_dof") else "0"
     env["UNCHARTED_UNLOCK"] = "1" if data.get("unlock") else "0"
     env["UNCHARTED_CHEATS"] = ",".join(config.cheats())
-    update = config.chosen_update()
-    if update:
-        env["UNCHARTED_UPDATE"] = str(update)
+    # A game's update is the one beside its folder (<folder>-patch), found by the start script: never one chosen for
+    # another game folder.
+    env.pop("UNCHARTED_UPDATE", None)
     env.pop("GOW3_VBLANK_HZ", None)
     for key in games.KEYS:
         game, name = config.game(key), key.upper()
@@ -175,16 +176,17 @@ def crash_reason(lines: list[str]) -> str:
     lines say nothing. A freeze is reported however the game was closed afterwards."""
     for line in reversed(lines):
         if line.startswith("Freeze: no new frame for"):
-            return (f"The game froze ({line[len('Freeze: '):].strip()}).\n\n"
-                    "The log folder's boot.log has the threads' stacks.")
+            return (t("The game froze") + f" ({line[len('Freeze: '):].strip()}).\n\n" +
+                    t("The log folder's boot.log has the threads' stacks."))
         if line.startswith("Hang watchdog:") and " report " in line:
-            return "The game froze. A report of where it stopped was saved:\n" + line.split(" report ", 1)[1].strip()
+            return (t("The game froze") + ". " + t("A report of where it stopped was saved:") + "\n" +
+                    line.split(" report ", 1)[1].strip())
     for index, line in enumerate(lines):
         if line.startswith("Fault:"):
             where = next((entry.strip() for entry in lines[index + 1:index + 6]
                           if entry.lstrip().startswith(("host #0", "#0"))), "")
             return "\n".join(part for part in (line.strip(), where) if part) + \
-                "\n\nThe log folder's boot.log has the details."
+                "\n\n" + t("The log folder's boot.log has the details.")
     for index, line in enumerate(lines):
         if line.startswith("STOP:") or "Unreachable code" in line or "Assertion" in line:
             context = [entry.strip() for entry in lines[max(0, index - 2):index + 1] if entry.strip()]

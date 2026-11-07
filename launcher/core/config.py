@@ -15,7 +15,7 @@ from . import games, paths, safe_write
 CONFIG_VERSION = 9
 
 LAUNCHER_DEFAULTS: dict[str, Any] = {"game": "u1", "diagnostics": True, "game_dir": "", "unlock": False,
-                                     "job_sleep": "auto", "anisotropy": "0", "no_dof": False, "update_dir": "",
+                                     "job_sleep": "auto", "anisotropy": "0", "no_dof": False,
                                      "check_updates": True}
 # Each game's own launcher settings. The controls (controls .. vibration) are also written into the game's ini,
 # where tools/probe_uncharted.py reads them; launcher.json keeps a copy as the released launcher does.
@@ -61,6 +61,9 @@ class Config:
         except (OSError, ValueError):
             stored = {}
         data = {**LAUNCHER_DEFAULTS, **(stored if isinstance(stored, dict) else {})}
+        # An older version let the player choose an update folder for any game folder: a game's update is the one
+        # beside its folder now (game_files.update_next_to_game), so the old choice is dropped.
+        data.pop("update_dir", None)
         stored_games = data.get("games") if isinstance(data.get("games"), dict) else {}
         data["games"] = {key: _game_entry(stored_games.get(key)) for key in games.KEYS}
         data.setdefault("version", CONFIG_VERSION)
@@ -84,15 +87,6 @@ class Config:
     def game_dir(self) -> Path:
         folder = str(self.data.get("game_dir") or "")
         return Path(folder) if folder else DEFAULT_GAME_DIR
-
-    def chosen_update(self) -> Path | None:
-        """The update folder chosen in the settings, if it is still there."""
-        folder = str(self.data.get("update_dir") or "")
-        if folder:
-            for candidate in (Path(folder), Path(folder) / "uroot"):
-                if games.is_game_dir(candidate):
-                    return candidate
-        return None
 
     def cheats(self) -> list[str]:
         return [name for name in CHEATS if self.data.get("cheat_" + name)]

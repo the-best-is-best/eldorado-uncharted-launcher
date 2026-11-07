@@ -9,8 +9,8 @@ The launcher (launcher/uncharted_launcher.pyw) calls this script as it always di
         big3-ps4_Shipping.elf> --game <folder>
 
 and passes its settings in the environment (UNCHARTED_* and GOW3_*) and in each game's settings file
-analysis/uncharted-user/probe-u<N>.ini. The engine in gow3_pc/ (run.py, bb-probe.exe) takes BB_* variables,
-a per-game bbport-u<N>.ini and input-u<N>.ini: this script translates one into the other, runs gow3_pc/run.py,
+analysis/uncharted-user/probe-u<N>.ini. The engine in engine/ (run.py, bb-probe.exe) takes BB_* variables,
+a per-game bbport-u<N>.ini and input-u<N>.ini: this script translates one into the other, runs engine/run.py,
 and keeps the log where the launcher and the tools look for it: analysis/<game log dir>/boot.log, with a copy
 per run in attempts/boot-<time>/ and the boot.json / boot.running.json records.
 
@@ -40,14 +40,14 @@ from game_update_view import game_with_update  # noqa: E402
 from arabic_language import find_arabic_language  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-ENGINE = ROOT / "gow3_pc"
+ENGINE = ROOT / "engine"
 USER = ROOT / "analysis" / "uncharted-user"
 EXECUTABLES = ("eboot.bin", "big2-ps4_Shipping.elf", "big3-ps4_Shipping.elf")
 GAME_KEYS = {"eboot.bin": "u1", "big2-ps4_Shipping.elf": "u2", "big3-ps4_Shipping.elf": "u3"}
 LOG_DIRS = {"u1": "uncharted", "u2": "big2-ps4_Shipping", "u3": "big3-ps4_Shipping"}
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
-# The two builds of the game code, by SHA-1 of the segments an executable loads (as gow3_pc/launcher's
+# The two builds of the game code, by SHA-1 of the segments an executable loads (as engine/launcher's
 # shader preparation knows them): the shader location index to use is chosen by title id and build.
 GAME_CODE = {
     "cd749c2f217a842200a9867f7c8af0973c990a74": "1.00", "1616597c9cf8b4b6d50d7cbf3aeb3677efba6587": "1.00",
@@ -65,7 +65,7 @@ SHADER_INDEXES = {
     ("CUSA02344", "1.02"): "shader_locations_CUSA02344.txt",
     ("CUSA02826", "1.02"): "shader_locations_CUSA02826.txt",
 }
-# Render sizes the engine accepts (gow3_pc/launcher): about 3440 x 1440 at most, 4K for the 4K choices.
+# Render sizes the engine accepts (engine/launcher): about 3440 x 1440 at most, 4K for the 4K choices.
 RENDER_PIXELS_MAX = 3440 * 1440
 RENDER_PIXELS_MAX_BIG = 3840 * 2160
 TEMPORAL_UPSCALERS = ("fsr3", "fsr4", "fsr411", "dlss", "xess")
@@ -78,7 +78,7 @@ CHEAT_NAMES = {"invincible": "health", "ammo": "ammo", "devmode": "devmode", "re
 # (update 1.02 image offsets), kept set by the engine (BB_POKE, per game through run.py's BB_POKE_U2/U3).
 REWARD_POKES = {"u2": "1114178:b=1,1114179:b=1", "u3": "17b2a94:b=1,17b2a95:b=1"}
 # Infinite grenades: Uncharted 3's own debug switch "Infinite Grenades" (1.02 image offset), kept set the same way.
-# Uncharted 1 and 2 have no such switch: their throw's ammo use is patched out (gow3_pc/scripts/cheats.py).
+# Uncharted 1 and 2 have no such switch: their throw's ammo use is patched out (engine/scripts/cheats.py).
 GRENADE_POKES = {"u3": "17faa92:b=1"}
 # Mouse button names: the settings file's (GOW3_MOUSE_MAP) to the engine's input.ini names.
 MOUSE_NAMES = {"left": "Mouse Left", "right": "Mouse Right", "middle": "Mouse Middle", "x1": "Mouse 4",
@@ -595,6 +595,37 @@ def back_up_saves():
         print(f"Save backup: {made} save{'s' if made != 1 else ''} copied to {USER / 'savedata-backups'}")
 
 
+# Which version of the game wrote a save (<dir>.sce_sys/<this file>, "01.03"): a save made with a newer update than
+# the copy now chosen does not load in the game, and the launcher leaves it out (launcher/core/saves.py).
+SAVE_VERSION_FILE = "eldorado-game-version.txt"
+
+
+def game_version(game_dir):
+    """APP_VER of the game as it runs (the update's when it is laid over the game), "" when unreadable."""
+    try:
+        sys.path.insert(0, str(ENGINE / "scripts"))
+        from prepare import sfo
+        return str(sfo((game_dir / "sce_sys" / "param.sfo").read_bytes()).get("APP_VER", ""))
+    except Exception:
+        return ""
+    finally:
+        sys.path.pop(0)
+
+
+def stamp_saves(since, version):
+    """After a run: every game save written during it records the game version that wrote it."""
+    saves = USER / "savedata"
+    if not version or not saves.is_dir():
+        return
+    for meta in saves.glob("*/*/SAVEDATA0*.sce_sys"):
+        try:
+            param = meta / "param.bin"
+            if GAME_SAVE.match(meta.name[:-len(".sce_sys")]) and param.is_file() and param.stat().st_mtime >= since:
+                (meta / SAVE_VERSION_FILE).write_text(version, encoding="utf-8")
+        except OSError as error:
+            print(f"Save version: {meta.name} not marked ({error})")
+
+
 STATS = USER / "eldorado-stats.json"
 FRAME_STATS = re.compile(r"^Frame stats: ([0-9.]+) FPS.*?, ([0-9]+) draws/frame")
 
@@ -763,7 +794,7 @@ def main():
     parser.add_argument("--game", type=Path, default=ROOT / "game/CUSA02344/uroot")
     parser.add_argument("--analysis-root", type=Path, help="Ignored (kept for older callers)")
     parser.add_argument("--user-dir", type=Path, help="Ignored (kept for older callers)")
-    parser.add_argument("--runtime-executable", type=Path, help="Run this bb-probe.exe instead of gow3_pc/out's")
+    parser.add_argument("--runtime-executable", type=Path, help="Run this bb-probe.exe instead of engine/out's")
     parser.add_argument("--boot", action="store_true", help="Run the game (without it: only prepare its files)")
     parser.add_argument("--executable", choices=EXECUTABLES, default="eboot.bin")
     parser.add_argument("--guest-arg", action="append", default=None, help="Ignored (the engine sets the game's argv)")
@@ -783,7 +814,7 @@ def main():
         os.environ["BB_PROBE"] = str(args.runtime_executable.resolve())
     if not os.environ.get("BB_PROBE") and not (ENGINE / "out" / "bb-probe.exe").is_file() \
             and not (ENGINE / "bin" / "bb-probe.exe").is_file():
-        print(f"The game engine is missing: {ENGINE / 'out' / 'bb-probe.exe'} (build it with gow3_pc/build.sh "
+        print(f"The game engine is missing: {ENGINE / 'out' / 'bb-probe.exe'} (build it with engine/build.sh "
               "or install a package).")
         return 2
     USER.mkdir(parents=True, exist_ok=True)
@@ -803,7 +834,10 @@ def main():
         game_dir = game_with_update(game_dir, ROOT / "analysis" / "views")
     except Exception as error:  # the game still starts, without its update
         print(f"Update: not used ({error})")
+    started = time.time() - 2  # file times are coarse on some drives
+    version = game_version(game_dir)
     result = run(args, game, args.executable, game_dir)
+    stamp_saves(started, version)
     return 124 if result["timed_out"] else result["exit_code"]
 
 

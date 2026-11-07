@@ -60,7 +60,7 @@ source += '\n    return 0;\n}\n'
 context = context.replace('#include "common/types.h"', '// Assembly entry points use the guest System V ABI.')
 # The C++ context has natural padding after fpucw; use its actual MXCSR offset.
 context = context.replace('0x72(%rdi)', '0x74(%rdi)')
-dest = root / "gow3_pc/gpu/shim"
+dest = root / "engine/gpu/shim"
 for name, data in (("gow3_fiber.cpp", source), ("gow3_fiber.h", header),
                    ("gow3_fiber_context.cpp", context), ("gow3_fiber_error.h", errors)):
     (dest / name).write_text(data, encoding="utf-8")

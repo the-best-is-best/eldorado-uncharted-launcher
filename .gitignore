@@ -19,7 +19,7 @@
 !/analysis/MULTIPLAYER-REMOTE-AVATAR.md
 # Multiplayer mod output built from the game's files (tools/uc2mp_menu.py) and test copies.
 /work/
-/gow3_pc/out/
+/engine/out/
 /Uncharted.lnk
 __pycache__/
 *.pyc

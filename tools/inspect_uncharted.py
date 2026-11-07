@@ -11,7 +11,7 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "gow3_pc" / "scripts"))
+sys.path.insert(0, str(ROOT / "engine" / "scripts"))
 from link_modules import canonical, module
 from prepare import sfo
 
@@ -19,7 +19,7 @@ from prepare import sfo
 def inspect(game, out):
     out.mkdir(parents=True, exist_ok=True)
     known = dict(re.findall(r'\{"([^"]+)",\s*"([^"]+)"\}',
-                           (ROOT / "gow3_pc/src/import_names.inc").read_text()))
+                           (ROOT / "engine/src/import_names.inc").read_text()))
     report = {"authority": "local artifact bytes and source parser",
               "limitations": ["No execution observed by this inventory.",
                               "A known symbol name does not prove runtime support.",

@@ -12,7 +12,8 @@ from PySide6.QtCore import Property, QCoreApplication, QObject, QTimer, Signal, 
 
 from core import art
 from core import config as cfg
-from core import games, launch, paths, saves, stats
+from core import game_files, games, launch, paths, saves, stats
+from core.i18n import t
 from ui import windows
 from ui.saves_model import picture_url, shown
 
@@ -77,7 +78,7 @@ class Launcher(QObject):
         for game in games.GAMES:
             played = self._stats.get(game.key, stats.Stats())
             rows.append({"key": game.key, "number": game.number, "title": game.title, "name": game.name,
-                         "place": game.place, "playTime": played.play_time(), "lastPlayed": played.last_played(),
+                         "place": t(game.place), "playTime": played.play_time(), "lastPlayed": played.last_played(),
                          "fps": round(played.fps), "hasSave": saves.latest(self._saves, game.key) is not None})
         return rows
 
@@ -117,10 +118,12 @@ class Launcher(QObject):
         """The latest save's detail (play time, treasures) and when it was made, or that there is none."""
         latest = saves.latest(self._saves, self._selected)
         if latest is None:
-            return NO_SAVE
-        parts = [line for line in latest.detail.split("\n") if line.strip()]
-        parts.append(saves.when_text(saves.saved_at(latest)))
-        return as_stored("   ·   ".join(part for part in parts if part))
+            return t(NO_SAVE)
+        stored = "   ·   ".join(line for line in latest.detail.split("\n") if line.strip())
+        when = saves.when_text(saves.saved_at(latest))
+        # Only the game's own text is shown as stored; the launcher's "today 12:50" is a line of its own (its own
+        # direction, Arabic included), so a narrow window never cuts it off.
+        return "\n".join(part for part in (as_stored(stored), when) if part)
 
     @Property(bool, notify=changed)
     def continueBackwards(self) -> bool:
@@ -164,7 +167,7 @@ class Launcher(QObject):
             try:
                 config.save()
             except OSError as error:
-                self.message.emit(f"The chosen game could not be saved:\n{error}")
+                self.message.emit(t("The chosen game could not be saved:") + f"\n{error}")
         self._config = config
         self.changed.emit()
 
@@ -196,7 +199,7 @@ class Launcher(QObject):
         self._started = time.time()
         self._stopping = False
         self._switching = False
-        self._status = f"Starting {game.name}..."
+        self._status = t("Starting {game}...", game=game.name)
         self._watch.start()
         self.changed.emit()
 
@@ -212,7 +215,7 @@ class Launcher(QObject):
     def stop(self) -> None:
         if self._session is not None:
             self._stopping = True
-            self._status = "Stopping..."
+            self._status = t("Stopping...")
             self.changed.emit()
             self._session.stop()
 
@@ -221,10 +224,11 @@ class Launcher(QObject):
     def _load_saves(self) -> None:
         profiles = {key: str(self._config.game(key).get("save_profile") or "1") for key in games.KEYS}
         try:
-            self._saves = saves.list_saves(paths.USER_DIR, saves.SAVES, profiles)
+            self._saves = saves.playable(saves.list_saves(paths.USER_DIR, saves.SAVES, profiles),
+                                         game_files.version_in_use(self._config))
         except OSError as error:
             self._saves = []
-            self._status = f"The saves could not be read: {error}"
+            self._status = t("The saves could not be read: {error}", error=error)
         game_dir = self._config.game_dir()
         # A new dict each time: the image thread reads the old one or the new one, never a half-made one.
         self._pictures = {game.key: art.choose(self._latest_picture(game.key), game_dir, game)
@@ -241,7 +245,7 @@ class Launcher(QObject):
         if switched is not None:
             # The first game's window closes seconds before the next one's is up: the launcher stays aside.
             self._switching = True
-            self._status = f"Switching to {switched.name}..."
+            self._status = t("Switching to {game}...", game=switched.name)
             self.changed.emit()
         elif line.startswith(STATUS_PREFIXES):
             self._status = line[:120]
@@ -257,12 +261,14 @@ class Launcher(QObject):
             QCoreApplication.exit(code)
             return
         reason = launch.last_run_reason(self._started)
-        froze = reason.startswith("The game froze")
+        froze = reason.startswith(t("The game froze"))
         if (code == 0 or stopped) and not froze:
             self._status = ""
         else:
-            self._status = "The game froze." if froze else f"The game stopped unexpectedly (code {code})."
-            self.message.emit(reason or f"The game ended with code {code}.\n\n{NO_WINDOW_NOTE}")
+            self._status = t("The game froze.") if froze else \
+                t("The game stopped unexpectedly (code {code}).", code=code)
+            self.message.emit(reason or t("The game ended with code {code}.", code=code) + "\n\n" +
+                              t(NO_WINDOW_NOTE))
         self.refresh()
 
     def _check_game_window(self) -> None:

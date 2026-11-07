@@ -23,6 +23,8 @@ GAMES: tuple[Game, ...] = (
     Game("u3", "3", "DRAKE'S DECEPTION", "Uncharted 3: Drake's Deception", "big3-ps4_Shipping.elf",
          "RUB' AL KHALI"),
 )
+# The places of GAMES, listed for the translation (tools/i18n_texts.py reads them here).
+PLACES: tuple[str, ...] = ("PANAMA COAST", "HIMALAYAS", "RUB' AL KHALI")
 KEYS: tuple[str, ...] = tuple(game.key for game in GAMES)
 
 

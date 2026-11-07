@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 
 from . import paths
+from .i18n import t
 
 STATS_FILE = paths.USER_DIR / "eldorado-stats.json"
 
@@ -22,13 +23,15 @@ class Stats:
 
     def play_time(self) -> str:
         hours, minutes = divmod(self.seconds // 60, 60)
-        return f"{hours} h {minutes:02d} min" if hours else f"{minutes} min"
+        if hours:
+            return t("{hours} h {minutes} min", hours=hours, minutes=f"{minutes:02d}")
+        return t("{minutes} min", minutes=minutes)
 
     def last_played(self, now: float | None = None) -> str:
         if not self.last:
-            return "Not played yet"
+            return t("Not played yet")
         days = int(((now or time.time()) - self.last) // 86400)
-        return "Today" if days <= 0 else "Yesterday" if days == 1 else f"{days} days ago"
+        return t("Today") if days <= 0 else t("Yesterday") if days == 1 else t("{days} days ago", days=days)
 
 
 def load() -> dict[str, Stats]:

@@ -22,15 +22,26 @@ Rectangle {
     signal doubleClicked()
 
     width: ListView.view ? ListView.view.width : 600
-    height: 80
-    radius: 3
-    color: armed ? Qt.darker(Theme.danger, 2.2) : selected ? Theme.panel : "transparent"
-    border.color: armed ? Theme.danger : selected ? Theme.gold : "transparent"
+    height: 84
+    radius: Theme.radius
+    color: armed ? Qt.rgba(Theme.danger.r, Theme.danger.g, Theme.danger.b, 0.16)
+         : selected ? Theme.accentSoft : rowArea.containsMouse ? Theme.glassHover : Qt.rgba(1, 1, 1, 0.025)
+    border.color: armed ? Theme.danger : selected ? Theme.accentLine : Qt.rgba(1, 1, 1, 0.05)
     border.width: 1
+    Behavior on color { ColorAnimation { duration: Theme.fast } }
+
+    // The selected row's bar at its start edge.
+    Rectangle {
+        anchors { left: parent.left; verticalCenter: parent.verticalCenter }
+        width: 3; height: row.selected ? parent.height - 28 : 0; radius: 2
+        color: row.armed ? Theme.danger : Theme.accent
+        Behavior on height { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
+    }
 
     Image {
         id: image
-        x: 10
+        anchors.left: parent.left
+        anchors.leftMargin: 14
         anchors.verticalCenter: parent.verticalCenter
         width: row.pictureWidth
         height: width * 9 / 16
@@ -55,7 +66,9 @@ Rectangle {
         font.pixelSize: 12
     }
     MouseArea {
+        id: rowArea
         anchors.fill: parent
+        hoverEnabled: true
         onClicked: row.clicked()
         onDoubleClicked: row.doubleClicked()
     }

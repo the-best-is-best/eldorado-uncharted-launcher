@@ -8,6 +8,7 @@ from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
 from core import config as cfg
 from core import games, trophies
+from core.i18n import t
 
 
 class TrophiesModel(QObject):
@@ -66,7 +67,7 @@ class TrophiesModel(QObject):
         if self._set(self._key) is not None:
             return ""
         return self._errors.get(self._key) or \
-            "No trophy list: the game folder has no sce_sys/trophy pack for this game."
+            t("No trophy list: the game folder has no sce_sys/trophy pack for this game.")
 
     @Property(int, notify=changed)
     def count(self) -> int:
@@ -86,7 +87,7 @@ class TrophiesModel(QObject):
     @Property("QVariantList", notify=changed)
     def grades(self) -> list[dict]:
         current = self._set(self._key)
-        return [{"grade": g.grade, "name": g.name, "earned": g.earned, "total": g.total}
+        return [{"grade": g.grade, "name": t(g.name), "earned": g.earned, "total": g.total}
                 for g in (current.grades() if current else [])]
 
     @Property("QVariantList", notify=changed)
@@ -94,11 +95,12 @@ class TrophiesModel(QObject):
         current = self._set(self._key)
         if not current:
             return []
-        return [{"number": t.number, "grade": t.grade, "gradeName": trophies.GRADE_NAMES.get(t.grade, "BRONZE"),
-                 "name": t.shown_name(), "detail": t.shown_detail(),
-                 "earned": bool(t.earned), "when": t.earned_text(), "secret": t.secret,
-                 "icon": QUrl.fromLocalFile(str(t.icon)).toString() if t.icon else ""}
-                for t in current.trophies]
+        return [{"number": trophy.number, "grade": trophy.grade,
+                 "gradeName": t(trophies.GRADE_NAMES.get(trophy.grade, "BRONZE")),
+                 "name": trophy.shown_name(), "detail": trophy.shown_detail(),
+                 "earned": bool(trophy.earned), "when": trophy.earned_text(), "secret": trophy.secret,
+                 "icon": QUrl.fromLocalFile(str(trophy.icon)).toString() if trophy.icon else ""}
+                for trophy in current.trophies]
 
     @Property("QVariantMap", notify=changed)
     def percents(self) -> dict[str, int]:

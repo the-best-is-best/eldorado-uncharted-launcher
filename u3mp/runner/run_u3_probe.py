@@ -100,7 +100,7 @@ if a.exclusive_script:
 if a.mode=='bootstrap-pools':env['GOW3_EXEC_WATCH']='205005e,73e6ef,678e84,66d8c0'
 if a.mode in ('menu-entry','menu-callback'):env['GOW3_EXEC_WATCH']='6496ec,6496f1,66e500,651940'
 if a.mode=='menu-flow':env['GOW3_EXEC_WATCH']='66e500,66e510,651940,671d00'
-cmd=[str(INSTALL/'gow3_pc/out/Uncharted.exe'),str(out/'boot-linked.bin'),'--no-game-hooks','--low-image','--content-profile',str(out/'content.bin'),'--app0',str(GAME),'--user',str(out/'user'),'--guest-path','eboot.bin','--guest-arg','ispartofuccollection']
+cmd=[str(INSTALL/'engine/out/Uncharted.exe'),str(out/'boot-linked.bin'),'--no-game-hooks','--low-image','--content-profile',str(out/'content.bin'),'--app0',str(GAME),'--user',str(out/'user'),'--guest-path','eboot.bin','--guest-arg','ispartofuccollection']
 for overlay in overlays:cmd.extend(['--app0-overlay',str(overlay)])
 r=dict(mode=a.mode,image_source=str(image_source),source_sha256=source_sha,patched_sha256=hashlib.sha256(d).hexdigest(),command=cmd,environment={k:v for k,v in env.items() if k.startswith('GOW3_')},actions=[],claim='Diagnostic only; no multiplayer or transport success implied')
 print(out,flush=True);start=time.monotonic();timeout=False;pulses=list(plan);captures=sorted(a.capture_at or [10,24]);release=None

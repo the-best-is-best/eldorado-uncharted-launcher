@@ -1,6 +1,6 @@
 """Replace the vendored equeue's racy raw-pointer registry with shared ownership."""
 from pathlib import Path
-root=Path(__file__).resolve().parent.parent / "gow3_pc/gpu/shadps4/core/libraries/kernel"
+root=Path(__file__).resolve().parent.parent / "engine/gpu/shadps4/core/libraries/kernel"
 path=root / "equeue.cpp"
 source=path.read_text()
 if 'SharedHandleTable<EqueueInternal' in source:

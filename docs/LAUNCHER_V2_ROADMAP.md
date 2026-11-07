@@ -3,7 +3,7 @@
 Branch: `launcher-v2`. Goal: a new launcher written from scratch for El Dorado, in **Python + PySide6 (Qt Quick /
 QML)**, with no code from the legacy launcher, and at least every feature the released launcher has.
 
-Only the launcher (the window outside the game) changes. The engine (`gow3_pc/`, `bb-probe.exe`), the game start
+Only the launcher (the window outside the game) changes. The engine (`engine/`, `bb-probe.exe`), the game start
 script (`tools/probe_uncharted.py`) and the update installer (`tools/apply_update.py`) are kept and called the same way.
 
 The released launcher (Tkinter) stays on `main` and keeps shipping until v2 reaches parity. On this branch it lives
@@ -34,7 +34,7 @@ launcher/
     gpu.py                GPU/VRAM detection for the Recommended preset
     presets.py            presets and the Recommended choice
     saves.py              list, delete (to savedata-deleted), restore, delete for good, backups list/restore
-    trophies.py           wraps gow3_pc/scripts/trophies.py (cache, unlocks, progress)
+    trophies.py           wraps engine/scripts/trophies.py (cache, unlocks, progress)
     gallery.py            screenshots per game, delete to Recycle Bin
     stats.py              eldorado-stats.json (play time, last played, average FPS)
     launch.py             builds the UNCHARTED_* environment, starts/stops tools/probe_uncharted.py, reads its output
@@ -172,7 +172,7 @@ Each phase ends with its acceptance checks passing; nothing ships from this bran
 - Accept: every action works on a copy of a real save folder; nothing is ever deleted outright except "delete for good".
 - DONE 7 Nov 2026: `core/saves.py`, `core/trophies.py`, `core/gallery.py` with their screens; moves are rename-only
   with rollback; save titles from `<dir>.sce_sys/param.bin` (what the saves actually have); the trophy list uses the
-  player's own pack through `gow3_pc/scripts/trophies.py`. Tested on temporary copies; not yet tried by hand on the
+  player's own pack through `engine/scripts/trophies.py`. Tested on temporary copies; not yet tried by hand on the
   real saves (delete, restore, Recycle Bin).
 
 ### Phase 4 — Settings (4 days)
@@ -208,7 +208,7 @@ Each phase ends with its acceptance checks passing; nothing ships from this bran
   new entry point; `tools/windows_starter` starts `launcher\main.py`. DONE 7 Nov 2026 (the GitHub workflow downloads
   PySide6 Essentials 6.12.0 into `downloads/pyside6`; `tools/copy_pyside.py` trims it into the package). Pillow stays
   for the shortcut and Steam icons, Tkinter for the update installer's window (a later trim: both through Qt).
-- Delete `legacy/launcher-tk/`; merge `launcher-v2` into `main`; release as 2.0.0.
+- Delete `legacy/launcher-tk/`; merge `launcher-v2` into `main`; the first public release (nothing has been released yet: its version is chosen then).
 
 Estimate: about 17 working days for one developer working by hand; the code of most phases takes a working
 session or two here, and the time that counts is the player's testing on a real PC after each phase.
@@ -265,7 +265,7 @@ the Arabic text patch · per-game language.
 
 ## 7. Engine performance track (separate from the launcher; done on `main`)
 
-The launcher rewrite does not change game FPS. Game speed is the engine's (`gow3_pc/`). This track runs on `main`
+The launcher rewrite does not change game FPS. Game speed is the engine's (`engine/`). This track runs on `main`
 next to the launcher work. Rule: **only changes with a measured gain ship; no feature is removed or turned off**
 (save pictures, backups, screenshots, trophies, cheats, prompts, multithreaded rendering, mouse on guns, Discord
 all stay as they are).
@@ -276,7 +276,7 @@ all stay as they are).
 - Multithreaded rendering (`BB_DRAW_PIPE`, stage A/B/C) is already on by default for all games (launcher config 9).
 
 Status (6 Nov 2026): steps 1 and 2 done and pushed (new profile recorded on all three games; LTO on by default in
-`gow3_pc/build.sh`). The Uncharted 1 jungle went from dips to about 55 FPS to a steady 59-60 (57 at worst).
+`engine/build.sh`). The Uncharted 1 jungle went from dips to about 55 FPS to a steady 59-60 (57 at worst).
 
 ### 7.2 Step 1 — new PGO profile for our code (guaranteed; do first) — DONE
 - Why: Mevlock measured LTO + PGO at −4.8% GPU-thread time per draw (7.72 → 7.35 µs, 73.2 → 76.3 FPS, three runs,

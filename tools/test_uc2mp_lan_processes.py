@@ -113,7 +113,7 @@ def invalid_options(executable):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--peer-exe", type=Path, default=ROOT / "gow3_pc/out/gpu/uc2mp-lan-peer.exe")
+    parser.add_argument("--peer-exe", type=Path, default=ROOT / "engine/out/gpu/uc2mp-lan-peer.exe")
     parser.add_argument("--logs", type=Path, default=ROOT / "work/local-lobby/lan-smoke")
     args = parser.parse_args()
     if not args.peer_exe.is_file():

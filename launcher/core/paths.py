@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# The package folder: launcher/ sits next to tools/, gow3_pc/ and analysis/.
+# The package folder: launcher/ sits next to tools/, engine/ and analysis/.
 ROOT: Path = Path(__file__).resolve().parents[2]
 LAUNCHER_DIR: Path = ROOT / "launcher"
 USER_DIR: Path = ROOT / "analysis" / "uncharted-user"

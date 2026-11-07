@@ -13,13 +13,13 @@ Item {
     id: dialogs
 
     readonly property var folderTitles: ({
-        game: "Select the Uncharted game folder (the one with eboot.bin and sce_sys)",
-        update: "Choose the extracted game update 1.02 folder",
-        game_destination: "Choose where to put the game (about 60 GB)"
+        game: qsTr("Select the Uncharted game folder (the one with eboot.bin and sce_sys)"),
+        update: qsTr("Choose the extracted game update 1.02 folder"),
+        game_destination: qsTr("Choose where to put the game (about 60 GB)")
     })
     readonly property var fileTitles: ({
-        pkg: "Choose the game update (.pkg)",
-        game_pkg: "Choose the game (.pkg), not the update"
+        pkg: qsTr("Choose the game update (.pkg)"),
+        game_pkg: qsTr("Choose the game (.pkg), not the update")
     })
 
     function show(text) {
@@ -31,7 +31,7 @@ Item {
         target: app
         function onPickFolder(kind) {
             folderPicker.kind = kind
-            folderPicker.title = dialogs.folderTitles[kind] || "Choose a folder"
+            folderPicker.title = dialogs.folderTitles[kind] || qsTr("Choose a folder")
             // The game goes next to its package unless the player picks elsewhere.
             if (kind === "game_destination" && app.pendingPkgFolder !== "")
                 folderPicker.currentFolder = app.pendingPkgFolder
@@ -39,7 +39,7 @@ Item {
         }
         function onPickFile(kind) {
             filePicker.kind = kind
-            filePicker.title = dialogs.fileTitles[kind] || "Choose a file"
+            filePicker.title = dialogs.fileTitles[kind] || qsTr("Choose a file")
             filePicker.open()
         }
         function onConfirm(kind, text) {
@@ -57,6 +57,10 @@ Item {
         target: typeof settings !== "undefined" ? settings : null
         function onNotice(text) { dialogs.show(text) }
     }
+    Connections {
+        target: typeof profiles !== "undefined" ? profiles : null
+        function onMessage(text) { dialogs.show(text) }
+    }
 
     FolderDialog {
         id: folderPicker
@@ -68,7 +72,7 @@ Item {
         id: filePicker
         property string kind
         fileMode: FileDialog.OpenFile
-        nameFilters: ["PS4 package (*.pkg)", "All files (*)"]
+        nameFilters: [qsTr("PS4 package (*.pkg)"), qsTr("All files (*)")]
         onAccepted: app.fileChosen(kind, selectedFile)
     }
 
@@ -78,7 +82,15 @@ Item {
         parent: Overlay.overlay
         anchors.centerIn: parent
         modal: true
-        background: Rectangle { color: Theme.panel; border.color: Theme.line }
+        background: Rectangle { color: Theme.panel; border.color: Theme.glassEdge; radius: Theme.radius }
+        palette.button: Theme.panelHigh
+        palette.buttonText: Theme.ink
+        palette.highlight: Theme.accent
+        palette.mid: Theme.panelHigh
+        palette.dark: Theme.accentLine
+        palette.window: Theme.panel
+        palette.windowText: Theme.ink
+        padding: 24
         Text {
             id: boxText
             width: 460
@@ -110,7 +122,8 @@ Item {
         modal: true
         closePolicy: Popup.NoAutoClose
         visible: app.busy && app.statusText.length > 0
-        background: Rectangle { color: Theme.panel; border.color: Theme.line }
+        background: Rectangle { color: Theme.panel; border.color: Theme.glassEdge; radius: Theme.radius }
+        padding: 24
         Column {
             width: 460
             spacing: 16
@@ -124,10 +137,12 @@ Item {
                 id: bar
                 width: parent.width; height: 6; radius: 3
                 color: Theme.line
+                // Arabic: the bar fills from the right.
+                transform: Scale { origin.x: bar.width / 2; xScale: i18n.rtl ? -1 : 1 }
                 Rectangle {
                     id: fill
                     height: parent.height; radius: 3
-                    color: Theme.gold
+                    color: Theme.accent
                     // A known length fills from the left; an unknown one sweeps.
                     width: app.progress >= 0 ? bar.width * Math.min(1, app.progress) : bar.width * 0.25
                     SequentialAnimation on x {
@@ -141,7 +156,7 @@ Item {
             }
             TextButton {
                 visible: app.cancellable
-                text: "CANCEL"
+                text: qsTr("CANCEL")
                 onClicked: app.cancel()
             }
         }

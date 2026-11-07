@@ -47,7 +47,7 @@ Note: older notes call map 4 (`san-upper-multi`) "Sanctuary". It is **City of Br
    and, for asset porting, the PS3 game (BCES01670) with its patch and DLC packages.
 2. Environment:
    - `UNCHARTED_GAME_DIR`: the PS4 game folder (contains `eboot.bin` and `u3data/`).
-   - `UNCHARTED_PC_DIR`: the port install. Defaults to the repository root (`gow3_pc/out/Uncharted.exe`,
+   - `UNCHARTED_PC_DIR`: the port install. Defaults to the repository root (`engine/out/Uncharted.exe`,
      `python/python.exe`, `analysis/big3-ps4_Shipping`).
    - The `re/` scripts also read `U3MP_PROJECT_DIR`, `U3_PS3_GAME_DIR` and `U3MP_WORK_DIR` for their inputs.
 3. Helper blobs: `python helper/build_u3_pool_blob.py --source helper/<name>.c --out work/<name>.bin`

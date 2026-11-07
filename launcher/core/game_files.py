@@ -16,6 +16,7 @@ from types import ModuleType
 
 from . import config as cfg
 from . import games, paths
+from .i18n import t
 
 TOOLS = paths.ROOT / "tools"
 SHADER_CACHE = paths.USER_DIR / "cache"
@@ -52,15 +53,17 @@ class FileCheck:
         return not self.missing and not self.wrong_size
 
     def summary(self, shown: int = 15) -> str:
-        head = (f"{self.total} files checked, {len(self.missing)} missing, {len(self.wrong_size)} with a wrong size.")
+        head = t("{total} files checked, {missing} missing, {wrong} with a wrong size.", total=self.total,
+                 missing=len(self.missing), wrong=len(self.wrong_size))
         if self.complete:
-            return "Your game files are complete.\n\n" + head
-        problems = [f"missing  {name}" for name in self.missing] + [f"size     {name}" for name in self.wrong_size]
+            return t("Your game files are complete.") + "\n\n" + head
+        problems = [t("missing  {name}", name=name) for name in self.missing] + \
+            [t("size     {name}", name=name) for name in self.wrong_size]
         listed = "\n".join(problems[:shown])
         if len(problems) > shown:
-            listed += f"\n... and {len(problems) - shown} more"
-        return ("Your game files are incomplete, so the game will stop where it needs them. Extract or dump the "
-                f"base game again.\n\n{head}\n\n{listed}")
+            listed += "\n" + t("... and {count} more", count=len(problems) - shown)
+        return (t("Your game files are incomplete, so the game will stop where it needs them. Extract or dump the "
+                  "base game again.") + f"\n\n{head}\n\n{listed}")
 
 
 # --- param.sfo ----------------------------------------------------------------------------------------------------
@@ -130,36 +133,34 @@ def update_next_to_game(game_dir: Path) -> Path | None:
 
 def update_in_use(config: cfg.Config) -> Path | None:
     """The update the games get: the chosen folder, else one beside the game folder."""
-    return config.chosen_update() or update_next_to_game(config.game_dir())
+    return update_next_to_game(config.game_dir())
+
+
+def version_in_use(config: cfg.Config) -> str:
+    """The game version the games run as: the update's when there is one, else the game folder's ("" unknown)."""
+    update = update_in_use(config)
+    for folder in (update, config.game_dir()):
+        if folder is not None:
+            version = app_version(folder)
+            if version:
+                return version
+    return ""
 
 
 def update_text(config: cfg.Config) -> str:
     update = update_in_use(config)
     if update:
-        return f"Game update {app_version(update) or '?'} is used: {update}"
+        return t("Game update {version} is used: {folder}", version=app_version(update) or "?", folder=update)
     version = app_version(config.game_dir())
     if version and version >= "01.02":
-        return f"Game version {version} (the update is in the game folder)."
-    return (f"Game version {version or '?'}, no update found. For the 1.02 fixes choose your update 1.02 folder "
-            "or its .pkg.")
+        return t("Game version {version} (the update is in the game folder).", version=version)
+    return t("Game version {version}, no update found. For the 1.02 fixes choose your update 1.02 folder or its "
+             ".pkg.", version=version or "?")
 
 
 def _installer() -> ModuleType:
     """tools/install_update.py: unpacks the player's own update or game .pkg (PkgTool)."""
     return tool_module("install_update")
-
-
-def set_update_folder(config: cfg.Config, folder: Path) -> Path:
-    """An update the player already extracted, anywhere: checked and remembered (nothing is copied)."""
-    game_dir = _require_game_dir(config)
-    installer = _installer()
-    try:
-        update = Path(installer.check_folder(folder, game_dir))
-    except installer.UpdateError as error:
-        raise GameFilesError(f"This folder can't be used:\n{error}") from error
-    config.data["update_dir"] = str(update)
-    config.save()
-    return update
 
 
 def existing_update(config: cfg.Config) -> Path | None:
@@ -181,12 +182,7 @@ def install_update_pkg(config: cfg.Config, pkg: Path, log: Callable[[str], None]
         raise GameFilesError(f"The update was not installed:\n{error}") from error
     except OSError as error:  # a disk or permission problem: shown as it is
         raise GameFilesError(f"The update was not installed:\n{type(error).__name__}: {error}") from error
-    # Reloaded: the install takes minutes, the other settings may have changed meanwhile.
-    fresh = cfg.Config.load(config.file)
-    fresh.data["update_dir"] = str(update)
-    fresh.save()
-    config.data["update_dir"] = str(update)
-    return update
+    return update  # beside the game folder: found there from now on
 
 
 def install_game_pkg(config: cfg.Config, pkg: Path, destination: Path, log: Callable[[str], None]) -> Path:
@@ -258,7 +254,7 @@ def player_folder(name: str) -> Path:
 def reset_settings(config: cfg.Config) -> None:
     """Every game back to its defaults (launcher.json and probe-uN.ini); the game folder, the update and the
     controls written by the in-game menu stay."""
-    kept = {key: config.data.get(key) for key in ("game", "game_dir", "update_dir")}
+    kept = {key: config.data.get(key) for key in ("game", "game_dir")}
     for key, value in cfg.LAUNCHER_DEFAULTS.items():
         config.data[key] = value
     config.data.update({key: value for key, value in kept.items() if value is not None})

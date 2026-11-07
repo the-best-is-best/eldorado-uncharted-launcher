@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 Michelle Raouf
 """Controller input for the launcher's window: SDL3 through ctypes (Qt 6 has no gamepad module; the engine ships
-SDL3.dll in gow3_pc/bin or gow3_pc/out). Only the gamepad subsystem is started, no SDL window.
+SDL3.dll in engine/bin or engine/out). Only the gamepad subsystem is started, no SDL window.
 
 How Main.qml uses it (main.py sets the context property: setContextProperty("gamepad", Gamepad())):
 
@@ -102,7 +102,7 @@ def step(state: RepeatState, held: frozenset[str], now: float) -> tuple[list[str
 
 def sdl_candidates() -> list[Path]:
     msys = Path(os.environ.get("MSYS2_ROOT", "C:/msys64"))
-    return [paths.ROOT / "gow3_pc" / "bin" / "SDL3.dll", paths.ROOT / "gow3_pc" / "out" / "SDL3.dll",
+    return [paths.ROOT / "engine" / "bin" / "SDL3.dll", paths.ROOT / "engine" / "out" / "SDL3.dll",
             msys / "clang64" / "bin" / "SDL3.dll"]
 
 

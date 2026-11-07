@@ -34,13 +34,17 @@ Item {
     Rectangle {
         id: knob
         anchors { right: parent.right; verticalCenter: parent.verticalCenter }
-        width: 48; height: 24; radius: 12
-        color: toggle.checked ? Theme.gold : Theme.line
+        width: 48; height: 26; radius: 13
+        color: toggle.checked ? Theme.accent : Theme.line
+        border.color: toggle.checked ? "transparent" : Qt.rgba(1, 1, 1, 0.08)
+        Behavior on color { ColorAnimation { duration: Theme.fast } }
         Rectangle {
-            width: 18; height: 18; radius: 9
-            y: 3; x: toggle.checked ? parent.width - width - 3 : 3
-            color: toggle.checked ? Theme.base : Theme.dim
-            Behavior on x { NumberAnimation { duration: 100 } }
+            width: 20; height: 20; radius: 10
+            // Right to left the switch is on at its left end.
+            y: 3; x: toggle.checked !== LayoutMirroring.enabled ? parent.width - width - 3 : 3
+            color: toggle.checked ? Theme.accentInk : Theme.dim
+            Behavior on x { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
+            Behavior on color { ColorAnimation { duration: Theme.fast } }
         }
     }
     MouseArea {

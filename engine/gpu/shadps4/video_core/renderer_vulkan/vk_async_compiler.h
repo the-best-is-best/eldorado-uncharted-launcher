@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Background compiler queue, from the God of War III port (FelipePrado0/gow3_pc, a fork of this
+// Background compiler queue, from the God of War III port (FelipePrado0/engine, a fork of this
 // port): graphics pipelines are built on worker threads and draws skip until theirs is ready.
 #pragma once
 

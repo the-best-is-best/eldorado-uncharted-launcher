@@ -46,7 +46,7 @@ def inventory(flag,kind,first,next,pid=0):
             valid=advance(snapshot,c.byref(item))
     finally: kernel.CloseHandle(snapshot)
 def identify():
-    expected=ROOT / "gow3_pc/out/gow3-probe.exe"
+    expected=ROOT / "engine/out/gow3-probe.exe"
     for process in inventory(2,Process,"Process32FirstW","Process32NextW"):
         if process.name.lower()!=expected.name.lower(): continue
         handle=kernel.OpenProcess(0x1000|0x10,False,process.pid)

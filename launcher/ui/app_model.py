@@ -23,6 +23,7 @@ from PySide6.QtCore import Property, QCoreApplication, QObject, QTimer, QUrl, Si
 
 from core import config as cfg
 from core import game_files, games, paths, shortcuts, steam, updater
+from core.i18n import t
 
 # Errors core/ raises for the player; anything else is shown with its type (a bug, but never swallowed).
 PLAYER_ERRORS = (updater.UpdateError, game_files.GameFilesError, steam.SteamError, shortcuts.ShortcutError, OSError)
@@ -114,7 +115,7 @@ class AppModel(QObject):
     @Property(str, notify=changed)
     def version(self) -> str:
         installed = updater.installed_version(paths.ROOT)
-        return updater.version_text(installed) if installed else "source tree"
+        return updater.version_text(installed) if installed else t("source tree")
 
     @Property(str, notify=changed)
     def pendingPkgFolder(self) -> str:
@@ -129,12 +130,6 @@ class AppModel(QObject):
         if self._refuse_while_running():
             return
         self.pickFolder.emit("game")
-
-    @Slot()
-    def chooseUpdateFolder(self) -> None:
-        if self._refuse_while_running() or not self._has_game_dir():
-            return
-        self.pickFolder.emit("update")
 
     @Slot()
     def installUpdatePkg(self) -> None:
@@ -161,10 +156,6 @@ class AppModel(QObject):
         try:
             if kind == "game":
                 game_files.set_game_dir(config, folder)
-            elif kind == "update":
-                update = game_files.set_update_folder(config, folder)
-                self.message.emit(f"Game update {game_files.app_version(update) or '?'} is used from now on:\n"
-                                  f"{update}")
         except game_files.GameFilesError as error:
             self.message.emit(str(error))
         self._files_changed()
@@ -182,8 +173,8 @@ class AppModel(QObject):
             self._pending_pkg = pkg
             existing = game_files.existing_update(cfg.Config.load())
             if existing:
-                self.confirm.emit("replace_update", f"There is an update folder already:\n{existing}\n\n"
-                                                    "Replace it with this update?")
+                self.confirm.emit("replace_update", t("There is an update folder already:") + f"\n{existing}\n\n" +
+                                  t("Replace it with this update?"))
             else:
                 self._install_pkg()
 
@@ -206,9 +197,9 @@ class AppModel(QObject):
 
         def work() -> str:
             update = game_files.install_update_pkg(config, pkg, log=lambda text: self._step.emit(-1.0, text))
-            return f"Update installed:\n{update}\n\nThe games use it from their next start."
+            return t("Update installed:") + f"\n{update}\n\n" + t("The games use it from their next start.")
 
-        self._run("Checking the update...", work, self._files_changed)
+        self._run(t("Checking the update..."), work, self._files_changed)
 
     def _install_game(self, destination: Path) -> None:
         pkg, self._pending_game_pkg = self._pending_game_pkg, None
@@ -220,31 +211,33 @@ class AppModel(QObject):
         def work() -> str:
             game_dir = game_files.install_game_pkg(config, pkg, destination,
                                                    log=lambda text: self._step.emit(-1.0, text))
-            return (f"Game installed:\n{game_dir}\n\nIt is the game folder now. Next, install update 1.02 with "
-                    "Install game update (from its .pkg).")
+            return (t("Game installed:") + f"\n{game_dir}\n\n" +
+                    t("It is the game folder now. Next, install update 1.02 with Install game update (from its .pkg)."))
 
-        self._run("Checking the game package...", work, self._files_changed)
+        self._run(t("Checking the game package..."), work, self._files_changed)
 
     @Slot()
     def checkGameFiles(self) -> None:
         config = cfg.Config.load()
         if not self._has_game_dir(config):
             return
-        self._run("Checking the game files...", lambda: game_files.check_files(config.game_dir()).summary())
+        self._run(t("Checking the game files..."), lambda: game_files.check_files(config.game_dir()).summary())
 
     @Slot()
     def clearShaderCache(self) -> None:
         if self._refuse_while_running():
             return
         if not game_files.SHADER_CACHE.exists():
-            self.message.emit("There is no shader cache yet.")
+            self.message.emit(t("There is no shader cache yet."))
             return
-        self.confirm.emit("clear_cache", "Delete the shader cache?\n\nShaders are compiled again the next time you "
-                                         "play, which brings back stutters for a while.")
+        self.confirm.emit("clear_cache", t("Delete the shader cache?") + "\n\n" +
+                          t("Shaders are compiled again the next time you play, which brings back stutters for a "
+                            "while."))
 
     def _clear_cache(self) -> None:
-        self._run("Deleting the shader cache...",
-                  lambda: "Shader cache cleared." if game_files.clear_shader_cache() else "There is no shader cache.")
+        self._run(t("Deleting the shader cache..."),
+                  lambda: t("Shader cache cleared.") if game_files.clear_shader_cache() else
+                  t("There is no shader cache."))
 
     @Slot(str)
     def openFolder(self, name: str) -> None:
@@ -252,22 +245,22 @@ class AppModel(QObject):
             folder = game_files.player_folder(name)
             os.startfile(folder)  # type: ignore[attr-defined]  # Windows only, as the package
         except (game_files.GameFilesError, OSError) as error:
-            self.message.emit(f"The folder could not be opened:\n{error}")
+            self.message.emit(t("The folder could not be opened:") + f"\n{error}")
 
     @Slot()
     def resetSettings(self) -> None:
         if self._refuse_while_running():
             return
-        self.confirm.emit("reset", "Reset every game's settings to their defaults?\n\nThe game folder, the game "
-                                   "update, saves and controls are kept.")
+        self.confirm.emit("reset", t("Reset every game's settings to their defaults?") + "\n\n" +
+                          t("The game folder, the game update, saves and controls are kept."))
 
     def _reset(self) -> None:
         try:
             game_files.reset_settings(cfg.Config.load())
         except OSError as error:
-            self.message.emit(f"The settings could not be written:\n{error}")
+            self.message.emit(t("The settings could not be written:") + f"\n{error}")
             return
-        self._files_changed("Settings reset: every game is on the Medium preset with the default controls.")
+        self._files_changed(t("Settings reset: every game is on the Medium preset with the default controls."))
 
     # --- closing ----------------------------------------------------------------------------------------------
 
@@ -277,9 +270,10 @@ class AppModel(QObject):
         """Closes the launcher. Asks first when told to (a key press) and always while a game runs: the start
         script and its game end with the launcher."""
         if self.running_check is not None and self.running_check():
-            self.confirm.emit("quit", "The game is still running and closes with the launcher.\n\nQuit anyway?")
+            self.confirm.emit("quit", t("The game is still running and closes with the launcher.") + "\n\n" +
+                              t("Quit anyway?"))
         elif ask:
-            self.confirm.emit("quit", "Close El Dorado?")
+            self.confirm.emit("quit", t("Close El Dorado?"))
         else:
             QCoreApplication.quit()
 
@@ -291,17 +285,17 @@ class AppModel(QObject):
 
         def work() -> str:
             made = shortcuts.create_all(game_dir)
-            return ("Shortcuts created on the desktop:\n" + "\n".join(link.name for link in made) +
-                    "\n\nEach game's shortcut starts it directly with the launcher's settings.")
+            return (t("Shortcuts created on the desktop:") + "\n" + "\n".join(link.name for link in made) +
+                    "\n\n" + t("Each game's shortcut starts it directly with the launcher's settings."))
 
-        self._run("Creating the shortcuts...", work)
+        self._run(t("Creating the shortcuts..."), work)
 
     @Slot()
     @Slot(bool)
     def addToSteam(self, per_game: bool = False) -> None:
         config = cfg.Config.load()
         game_dir = config.game_dir() if games.is_game_dir(config.game_dir()) else None
-        self._run("Adding to Steam...", lambda: _add_to_steam(per_game, game_dir))
+        self._run(t("Adding to Steam..."), lambda: _add_to_steam(per_game, game_dir))
 
     # --- launcher updates -------------------------------------------------------------------------------------
 
@@ -316,7 +310,7 @@ class AppModel(QObject):
         current = updater.installed_version(paths.ROOT)
         if current is None:
             if manual:
-                self.message.emit("This copy runs from the source tree: update it with git.")
+                self.message.emit(t("This copy runs from the source tree: update it with git."))
             return
         if self._busy and not manual:
             return  # the check at start gives way to whatever the player started
@@ -328,29 +322,30 @@ class AppModel(QObject):
         def done(release: updater.Release | None) -> None:
             self._release = release
             if release:
-                self._update_text = f"Version {release.text} is available."
+                self._update_text = t("Version {version} is available.", version=release.text)
             else:
-                self._update_text = f"Version {updater.version_text(current)} is the newest."
+                self._update_text = t("Version {version} is the newest.", version=updater.version_text(current))
                 if manual:
                     self.message.emit(self._update_text)
 
-        self._run("Checking for updates..." if manual else "", work, done, quiet=not manual)
+        self._run(t("Checking for updates...") if manual else "", work, done, quiet=not manual)
 
     @Slot()
     def installUpdate(self) -> None:
         release = self._release
         if release is None or self._busy or self._refuse_while_running():
             return
-        self.confirm.emit("install", f"Install version {release.text} ({release.size / 1e6:.0f} MB download)?\n\n"
-                                     "Saves, settings and the shader cache are kept. The launcher closes, installs "
-                                     f"the update and starts again.\n\nWhat's new: {release.page}")
+        self.confirm.emit("install", t("Install version {version} ({size} MB download)?", version=release.text,
+                                       size=f"{release.size / 1e6:.0f}") + "\n\n" +
+                          t("Saves, settings and the shader cache are kept. The launcher closes, installs the update "
+                            "and starts again.") + "\n\n" + t("What's new: {page}", page=release.page))
 
     @Slot()
     def cancel(self) -> None:
         """Stops the update download; the file downloaded so far is resumed next time."""
         if self.cancellable:
             self._cancel.set()
-            self._status = "Stopping the download..."
+            self._status = t("Stopping the download...")
             self.changed.emit()
 
     def _download_update(self) -> None:
@@ -361,17 +356,18 @@ class AppModel(QObject):
 
         def progress(done: int, total: int) -> None:
             if total:
-                self._step.emit(done / total, f"Downloading the update... {100 * done / total:.0f}%")
+                self._step.emit(done / total, t("Downloading the update... {percent}%",
+                                                percent=f"{100 * done / total:.0f}"))
             else:
-                self._step.emit(-1.0, f"Downloading the update... {done / 1e6:.0f} MB")
+                self._step.emit(-1.0, t("Downloading the update... {size} MB", size=f"{done / 1e6:.0f}"))
 
         def work() -> Path:
             archive = updater.download(release, paths.ROOT, progress, self._cancel.is_set)
-            self._step.emit(-1.0, "Unpacking the update...")
+            self._step.emit(-1.0, t("Unpacking the update..."))
             return updater.stage(archive, paths.ROOT, release.version)
 
         def done(staged: Path) -> None:
-            self._update_text = "Installing the update... the launcher starts again in a moment."
+            self._update_text = t("Installing the update... the launcher starts again in a moment.")
             try:
                 updater.hand_off(paths.ROOT, staged)
             except updater.UpdateError as error:
@@ -380,7 +376,7 @@ class AppModel(QObject):
             # The installer waits for this process to end.
             QCoreApplication.quit()
 
-        self._run("Downloading the update...", work, done, cancellable=True)
+        self._run(t("Downloading the update..."), work, done, cancellable=True)
 
     # --- first start ------------------------------------------------------------------------------------------
 
@@ -396,7 +392,7 @@ class AppModel(QObject):
         try:
             config.save()
         except OSError as error:
-            self.message.emit(f"The settings could not be written:\n{error}")
+            self.message.emit(t("The settings could not be written:") + f"\n{error}")
         self._first_start = False
         self.changed.emit()
 
@@ -408,7 +404,7 @@ class AppModel(QObject):
         error is a message unless quiet (the check at start says nothing when offline). cancellable: work() stops
         when cancel() is pressed (it reads self._cancel)."""
         if self._busy:
-            self.message.emit("Wait for the current action to finish.")
+            self.message.emit(t("Wait for the current action to finish."))
             return
         self._busy = True
         self._cancellable = cancellable
@@ -463,7 +459,7 @@ class AppModel(QObject):
 
     def _refuse_while_running(self) -> bool:
         if self.running_check is not None and self.running_check():
-            self.message.emit("Close the game first.")
+            self.message.emit(t("Close the game first."))
             return True
         return False
 
@@ -471,7 +467,7 @@ class AppModel(QObject):
         config = config or cfg.Config.load()
         if games.is_game_dir(config.game_dir()):
             return True
-        self.message.emit("Choose the game folder first.")
+        self.message.emit(t("Choose the game folder first."))
         return False
 
 
@@ -484,31 +480,35 @@ def _local_path(url: Any) -> Path | None:
 def _player_text(error: Exception) -> str:
     if isinstance(error, steam.SteamError):
         if error.kind == "no_steam":
-            return ("Steam was not found on this PC (no Steam account folder in Steam's userdata). Install Steam and "
-                    "sign in once, then try again.")
-        return f"Steam's list of non-Steam games could not be read, so it was left as it is:\n{error.detail}"
+            return t("Steam was not found on this PC (no Steam account folder in Steam's userdata). Install Steam "
+                     "and sign in once, then try again.")
+        return t("Steam's list of non-Steam games could not be read, so it was left as it is:") + f"\n{error.detail}"
     return str(error) or type(error).__name__
 
 
 def _add_to_steam(per_game: bool, game_dir: Path | None) -> str:
     if steam.steam_running():
-        return ("Steam is open. Steam saves its own list of games when it closes, so a game added now would be lost."
-                "\n\nClose Steam completely (Steam menu -> Exit), then try again.")
+        return (t("Steam is open. Steam saves its own list of games when it closes, so a game added now would be "
+                  "lost.") + "\n\n" + t("Close Steam completely (Steam menu -> Exit), then try again."))
     game_list = [(game.key, game.name) for game in games.GAMES] if per_game else None
     wanted = steam.targets(paths.ROOT, shortcuts.STARTER, Path(sys.executable), shortcuts.ENTRY_SCRIPT, game_list)
     names = (steam.COLLECTION_NAME,) + tuple(game.name for game in games.GAMES)
     results = steam.add_to_steam(wanted, str(shortcuts.APP_ICON), game_dir, all_names=names)
     lines = []
     for result in results:
-        who = f"{result.persona} ({result.folder.name})" if result.persona else f"Steam account {result.folder.name}"
-        changes = [f"{count} {word}" for count, word in ((result.added, "added"), (result.updated, "updated"),
-                                                        (result.removed, "replaced")) if count]
+        who = f"{result.persona} ({result.folder.name})" if result.persona else \
+            t("Steam account {account}", account=result.folder.name)
+        changes = [text for count, text in ((result.added, t("{count} added", count=result.added)),
+                                            (result.updated, t("{count} updated", count=result.updated)),
+                                            (result.removed, t("{count} replaced", count=result.removed))) if count]
         lines.append(f"{who}: {', '.join(changes)}")
-    added = "the three games" if per_game else f'"{steam.COLLECTION_NAME}"'
-    pictures = ("Library pictures come from your game files." if game_dir
-                else "No library pictures: choose the game folder first, then add again.")
+    pictures = (t("Library pictures come from your game files.") if game_dir
+                else t("No library pictures: choose the game folder first, then add again."))
     backups = [str(result.backup) for result in results if result.backup]
-    text = f"Added {added} to Steam:\n" + "\n".join(lines) + f"\n\n{pictures}"
+    added = t("Added the three games to Steam:") if per_game else \
+        t("Added {name} to Steam:", name=f'"{steam.COLLECTION_NAME}"')
+    text = added + "\n" + "\n".join(lines) + f"\n\n{pictures}"
     if backups:
-        text += "\n\nThe previous list was saved as:\n" + "\n".join(backups)
-    return text + "\n\nStart Steam again: " + ("they are" if per_game else "it is") + " in your Library."
+        text += "\n\n" + t("The previous list was saved as:") + "\n" + "\n".join(backups)
+    return text + "\n\n" + (t("Start Steam again: they are in your Library.") if per_game else
+                             t("Start Steam again: it is in your Library."))

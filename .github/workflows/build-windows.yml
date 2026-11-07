@@ -1,10 +1,9 @@
 # Builds the engine with MSYS2 CLANG64 and packages Uncharted-windows (launcher, Python, runtime and
 # DLLs; no game files) on a self-hosted Windows runner. Actions -> Build Windows -> Run workflow asks
 # for the version (X.Y.Z): the package carries it (its VERSION, which the launcher's updates compare)
-# and, with "Publish" ticked, it is released as tag vX.Y.Z with tools/release-notes/vX.Y.Z.md (else
-# the newest section of CHANGELOG.md).
+# and, with "Publish" ticked, it is released as tag vX.Y.Z with tools/release-notes/vX.Y.Z.md.
 #
-# The runner's PC needs MSYS2 with the CLANG64 packages of gow3_pc/packaging/windows/README.md
+# The runner's PC needs MSYS2 with the CLANG64 packages of engine/packaging/windows/README.md
 # (MSYS2_ROOT, default C:\msys64) and a Windows Python 3.10+ with Pillow (PYTHON_HOME). The
 # repository variable ELDORADO_AA_FROM may name an installed package folder to take the DLAA and
 # FSR 4 files from (tools/copy_aa_files.sh); without it tools/fetch_aa_files.sh downloads them.
@@ -79,7 +78,7 @@ jobs:
         run: |
           git config --global --add safe.directory '*'
           export MSYS2_ROOT=$(cygpath -u "$MSYS2_ROOT")
-          BB_PGO=use gow3_pc/build.sh  # the profile in gow3_pc/pgo (about 20% faster)
+          BB_PGO=use engine/build.sh  # the profile in engine/pgo (about 20% faster)
 
       # NVIDIA DLAA (the DLSS DLL and its bridge) and the FSR 4 native model; without them the
       # package simply offers TAA and FSR 3.1.
@@ -124,8 +123,7 @@ jobs:
           if-no-files-found: error
 
       # Tag vX.Y.Z on the commit built, and the release with the zip. GitHub records the zip's SHA-256,
-      # which the launcher checks before installing it. Notes: tools/release-notes/vX.Y.Z.md, else the
-      # newest section of CHANGELOG.md.
+      # which the launcher checks before installing it. Notes: tools/release-notes/vX.Y.Z.md.
       - name: Publish the release
         if: inputs.publish
         shell: pwsh
@@ -134,15 +132,7 @@ jobs:
         run: |
           $tag = "v$env:VERSION"
           $notes = "tools/release-notes/$tag.md"
-          if (-not (Test-Path $notes)) {
-            $notes = "dist/release-notes.md"
-            $lines = Get-Content CHANGELOG.md -Encoding utf8
-            $start = [Array]::FindIndex($lines, [Predicate[string]]{ param($l) $l -like '## *' })
-            if ($start -lt 0) { throw "No release notes: add tools/release-notes/$tag.md" }
-            $end = [Array]::FindIndex($lines, $start + 1, [Predicate[string]]{ param($l) $l -like '## *' })
-            if ($end -lt 0) { $end = $lines.Length }
-            $lines[($start + 1)..($end - 1)] | Out-File -Encoding utf8 $notes
-          }
+          if (-not (Test-Path $notes)) { throw "No release notes: add tools/release-notes/$tag.md" }
           gh release create $tag dist/Uncharted-windows.zip --target $env:GITHUB_SHA `
             --title "El Dorado Launcher $env:VERSION" --notes-file $notes --latest
 
@@ -151,5 +141,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-log
-          path: gow3_pc/out/gpu-build.log
+          path: engine/out/gpu-build.log
           if-no-files-found: ignore

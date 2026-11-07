@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2026 gow3_pc
+// SPDX-FileCopyrightText: Copyright 2026 engine
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstdio>

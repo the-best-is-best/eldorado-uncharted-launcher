@@ -168,7 +168,16 @@ def run_legacy(scenarios_file: Path, out_file: Path) -> None:
     assert spec is not None
     legacy = module_from_spec(spec)
     loader.exec_module(legacy)
-    legacy.ROOT = REPO  # the same engine files (DLSS, FSR 4) decide the upscalers on both sides
+    # The same engine files (DLSS, FSR 4) decide the upscalers on both sides; the released launcher looks for them
+    # in gow3_pc\ (the engine's folder before 2.0): a folder whose gow3_pc is a junction to engine\.
+    import _winapi
+
+    view = Path(tempfile.mkdtemp())
+    _winapi.CreateJunction(str(REPO / "engine"), str(view / "gow3_pc"))
+    import atexit
+
+    atexit.register(os.rmdir, view / "gow3_pc")  # the junction alone (rmdir never enters it)
+    legacy.ROOT = view
 
     class Anything:
         def __getattr__(self, name: str) -> Any:

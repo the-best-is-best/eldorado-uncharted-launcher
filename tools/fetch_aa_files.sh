@@ -3,10 +3,10 @@
 # are not part of this repository:
 #   - NVIDIA DLSS SDK v310.9.16 (github.com/NVIDIA/DLSS, NVIDIA's license: LICENSE.txt): headers,
 #     nvsdk_ngx_s.lib and nvngx_dlss.dll into downloads/dlss-sdk-<version>; with MSVC (Visual
-#     Studio 2022 or its Build Tools) builds gow3_pc/gpu/dlss_bridge -> gow3_dlss.dll and puts
-#     both DLLs in gow3_pc/out beside the runtime. About 63 MB.
+#     Studio 2022 or its Build Tools) builds engine/gpu/dlss_bridge -> gow3_dlss.dll and puts
+#     both DLLs in engine/out beside the runtime. About 63 MB.
 #   - FSR 4 v07 INT8 native model (AMD's MIT-licensed FidelityFX SDK source, built by Q2RTX:
-#     github.com/FireBurn/Q2RTX) into gow3_pc/fsr4_shaders, the 1080 and 2160 tiers. About 6 MB.
+#     github.com/FireBurn/Q2RTX) into engine/fsr4_shaders, the 1080 and 2160 tiers. About 6 MB.
 # Usage: tools/fetch_aa_files.sh [dlss] [fsr4] (default both). Files already there are kept.
 set -euo pipefail
 cd -- "$(dirname -- "$0")/.."
@@ -59,18 +59,18 @@ if [[ $want == *dlss* ]]; then
     fi
     [[ -n $cmake_exe && -x $cmake_exe ]] || { echo "No MSVC (Visual Studio Build Tools) found: DLSS bridge not built" >&2; exit 1; }
     root=$(cygpath -w "$PWD")
-    "$cmake_exe" -S "$root\\gow3_pc\\gpu\\dlss_bridge" -B "$root\\gow3_pc\\out\\dlss-bridge" \
+    "$cmake_exe" -S "$root\\engine\\gpu\\dlss_bridge" -B "$root\\engine\\out\\dlss-bridge" \
         -G "$generator" -A x64 -DDLSS_SDK_ROOT="$root\\downloads\\dlss-sdk-$version" \
         -DVULKAN_INCLUDE="$root\\downloads\\vulkan-include" > /dev/null
-    "$cmake_exe" --build "$root\\gow3_pc\\out\\dlss-bridge" --config Release > /dev/null
-    cp gow3_pc/out/dlss-bridge/Release/gow3_dlss.dll "$sdk/lib/Windows_x86_64/rel/nvngx_dlss.dll" gow3_pc/out/
-    echo "DLSS: gow3_pc/out/gow3_dlss.dll and nvngx_dlss.dll ($version)"
+    "$cmake_exe" --build "$root\\engine\\out\\dlss-bridge" --config Release > /dev/null
+    cp engine/out/dlss-bridge/Release/gow3_dlss.dll "$sdk/lib/Windows_x86_64/rel/nvngx_dlss.dll" engine/out/
+    echo "DLSS: engine/out/gow3_dlss.dll and nvngx_dlss.dll ($version)"
 fi
 
 if [[ $want == *fsr4* ]]; then
     commit=ae8d628fae208813172446d1e49ed94150b04658
     base="https://raw.githubusercontent.com/FireBurn/Q2RTX/$commit/baseq2/fsr4_shaders"
-    dest=gow3_pc/fsr4_shaders
+    dest=engine/fsr4_shaders
     model=fsr4_model_v07_i8_native
     files=(LICENSE-FSR4-v07.txt rcas.spv fsr4_rcas.spv spd_auto_exposure.spv "${model}_pre.spv" "${model}_post.spv")
     # Native AA, and the upscaling models a render resolution below the output picks by its

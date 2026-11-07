@@ -11,16 +11,15 @@ Page {
     property string action: ""
 
     readonly property var texts: ({
-        update: { title: "UPDATE", line: app.updateText,
-                  body: "Saves, settings and the shader cache are kept. The launcher closes, installs the update and "
-                        + "starts again.",
-                  button: "INSTALL" },
-        logs: { title: "LOGS", line: "The engine's log of each start (boot.log), for a problem report.",
-                body: "Opens the folder of the newest boot.log.", button: "OPEN LOG FOLDER" },
-        quit: { title: "QUIT",
-                line: launcher.running ? "The game is still running: it closes with the launcher."
-                                       : "Close El Dorado.",
-                body: "", button: "QUIT" }
+        update: { title: qsTr("UPDATE"), line: app.updateText,
+                  body: qsTr("Saves, settings and the shader cache are kept. The launcher closes, installs the update and starts again."),
+                  button: qsTr("INSTALL") },
+        logs: { title: qsTr("LOGS"), line: qsTr("The engine's log of each start (boot.log), for a problem report."),
+                body: qsTr("Opens the folder of the newest boot.log."), button: qsTr("OPEN LOG FOLDER") },
+        quit: { title: qsTr("QUIT"),
+                line: launcher.running ? qsTr("The game is still running: it closes with the launcher.")
+                                       : qsTr("Close El Dorado."),
+                body: "", button: qsTr("QUIT") }
     })
     readonly property var shown: texts[action] || { title: "", line: "", body: "", button: "" }
     title: shown.title

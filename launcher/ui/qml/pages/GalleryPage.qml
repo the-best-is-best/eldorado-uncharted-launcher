@@ -4,13 +4,14 @@
 // Keys (from Main.qml): arrows move in the grid; Up from the first row goes to the game row, where Left/Right change
 // game and Enter opens the folder; in the grid Enter opens the picture, Delete twice moves it to the Recycle Bin.
 import QtQuick
+import QtQuick.Controls
 import ".."
 import "../components"
 
 Page {
     id: page
-    title: "GALLERY"
-    subtitle: grid.count + (grid.count === 1 ? " screenshot" : " screenshots")
+    title: qsTr("GALLERY")
+    subtitle: grid.count === 1 ? qsTr("%1 screenshot").arg(grid.count) : qsTr("%1 screenshots").arg(grid.count)
 
     property bool onGames: true               // the focus is on the game row, not on the grid
     property int armed: -1                    // the picture waiting for its second Delete
@@ -70,23 +71,23 @@ Page {
         active: page.onGames
         onPicked: (index) => page.changeGame(index - gallery.gameIndex)
         Item { width: 8; height: 1 }
-        TextButton { text: "OPEN FOLDER"; implicitHeight: 34; onClicked: gallery.openFolder() }
+        TextButton { text: qsTr("OPEN FOLDER"); implicitHeight: 34; onClicked: gallery.openFolder() }
     }
 
     // A delete waiting for its second press, or what the last action said; the keys are at the bottom.
     Text {
         id: note
         anchors { top: tabs.bottom; topMargin: 10; left: parent.left; right: parent.right }
-        text: page.armed >= 0 ? "Press Delete again to move this screenshot to the Recycle Bin." : gallery.note
+        text: page.armed >= 0 ? qsTr("Press Delete again to move this screenshot to the Recycle Bin.") : gallery.note
         color: page.armed >= 0 ? Theme.dangerText : Theme.faint
-        font.family: Theme.bodyFont; font.pixelSize: 11; font.letterSpacing: 1
+        font.family: Theme.bodyFont; font.pixelSize: 11; font.letterSpacing: Theme.tracking(1)
         elide: Text.ElideRight
     }
 
     Text {
         anchors { top: note.bottom; topMargin: 24; left: parent.left; right: parent.right }
         visible: grid.count === 0
-        text: "No screenshots yet: press F12 in the game to take one."
+        text: qsTr("No screenshots yet: press F12 in the game to take one.")
         wrapMode: Text.WordWrap
         color: Theme.dim; font.family: Theme.titleFont; font.pixelSize: 17
     }
@@ -94,14 +95,15 @@ Page {
     KeyHint {
         id: hints
         anchors { left: parent.left; bottom: parent.bottom }
-        entries: page.onGames ? [{ action: "views", text: "GAME" }, { action: "accept", text: "OPEN FOLDER" }]
-                              : [{ action: "choose", text: "BROWSE" }, { action: "accept", text: "OPEN" },
-                                 { action: "remove", text: "RECYCLE BIN (TWICE)" }]
+        entries: page.onGames ? [{ action: "views", text: qsTr("GAME") }, { action: "accept", text: qsTr("OPEN FOLDER") }]
+                              : [{ action: "choose", text: qsTr("BROWSE") }, { action: "accept", text: qsTr("OPEN") },
+                                 { action: "remove", text: qsTr("RECYCLE BIN (TWICE)") }]
     }
 
     GridView {
+        ScrollBar.vertical: gridBar
         id: grid
-        anchors { top: note.bottom; topMargin: 14; bottom: hints.top; bottomMargin: 12; left: parent.left; right: parent.right }
+        anchors { top: note.bottom; topMargin: 14; bottom: hints.top; bottomMargin: 12; left: parent.left; right: parent.right; rightMargin: 20 }
         clip: true
         model: gallery.rows
         cellWidth: Math.max(220, Math.floor(width / Math.max(1, Math.floor(width / 270))))
@@ -116,14 +118,18 @@ Page {
             height: grid.cellHeight
             Rectangle {
                 id: frame
-                x: 0; y: 0
+                anchors { left: parent.left; top: parent.top }
                 width: parent.width - 16
                 height: Math.floor(width * 9 / 16)
+                radius: Theme.radiusSmall
                 color: Theme.panel
-                border.width: cell.selected ? 2 : 1
-                border.color: cell.armedHere ? Theme.danger : cell.selected ? Theme.gold : Theme.line
+                border.width: cell.selected || cell.armedHere ? 2 : 1
+                border.color: cell.armedHere ? Theme.danger : cell.selected ? Theme.accent : shotArea.containsMouse ? Theme.accentLine : Theme.glassEdge
+                scale: shotArea.containsMouse && !cell.selected ? 1.02 : 1.0
+                Behavior on scale { NumberAnimation { duration: Theme.fast } }
+                Behavior on border.color { ColorAnimation { duration: Theme.fast } }
                 Image {
-                    anchors { fill: parent; margins: 2 }
+                    anchors { fill: parent; margins: 3 }
                     source: modelData.url
                     sourceSize.width: 480
                     asynchronous: true
@@ -139,10 +145,16 @@ Page {
                 elide: Text.ElideRight
             }
             MouseArea {
+                id: shotArea
                 anchors.fill: frame
+                hoverEnabled: true
                 onClicked: { page.disarm(); grid.currentIndex = index; page.onGames = false }
                 onDoubleClicked: gallery.open(index)
             }
         }
+    }
+    Scroller {
+        id: gridBar
+        anchors { top: grid.top; bottom: grid.bottom; left: grid.right; leftMargin: 4 }
     }
 }

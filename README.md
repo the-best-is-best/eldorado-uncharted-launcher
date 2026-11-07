@@ -17,7 +17,7 @@ the PC; a runtime supplies the PS4 system libraries, and a Vulkan renderer execu
   DLSS/DLAA), performance, controls (keyboard, mouse and controller actions), cheats, advanced.
 - **In-game save list:** readable Arabic titles with chapter, play time and treasures; delete a save
   with Delete / Triangle; each save shows a picture of where it was made.
-- **Mouse on the Uncharted 1 jeep gun**, and renderer and stability fixes (see [CHANGELOG.md](CHANGELOG.md)).
+- **Mouse on the Uncharted 1 jeep gun**, and renderer and stability fixes.
 - Desktop shortcuts per game with that game's icon, made from your own game files.
 
 ## Requirements
@@ -49,7 +49,7 @@ pacman -S --needed git patch \
   mingw-w64-clang-x86_64-{spirv-tools,spirv-headers,spirv-cross} \n  mingw-w64-clang-x86_64-{protobuf,openssl,zlib,miniupnpc,nlohmann-json}
 git clone --recursive https://github.com/the-best-is-best/eldorado-uncharted-launcher.git
 cd eldorado-uncharted-launcher
-BB_PGO=use gow3_pc/build.sh      # the engine: gow3_pc/out/bb-probe.exe (profile-optimized)
+BB_PGO=use engine/build.sh      # the engine: engine/out/bb-probe.exe (profile-optimized)
 tools/package_windows.sh         # dist/Uncharted-windows(.zip); needs a Windows Python 3.10+ with Pillow
                                  # (and iced-x86 for older Intel CPUs)
 ```
@@ -59,7 +59,7 @@ on the self-hosted runner and publishes the release ([build-windows.yml](.github
 
 ## License
 
-El Dorado is licensed under the GNU GPL v2 or later (see `gow3_pc/LICENSE`). It includes code from other
+El Dorado is licensed under the GNU GPL v2 or later (see `engine/LICENSE`). It includes code from other
 open-source projects, each under its own license: the copyright notices are kept in the source files and
 the Windows package carries every bundled library's license in its `licenses` folder. NVIDIA, RTX and DLSS
 are trademarks of NVIDIA Corporation; DLAA uses the NVIDIA DLSS SDK under NVIDIA's license.

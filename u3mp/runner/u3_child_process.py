@@ -7,7 +7,7 @@ import msvcrt,os,subprocess,time
 from pathlib import Path
 
 _POLICY=0x220000
-_RUNTIME=Path(os.environ.get('UNCHARTED_PC_DIR') or Path(__file__).resolve().parents[2])/'gow3_pc/out/Uncharted.exe'
+_RUNTIME=Path(os.environ.get('UNCHARTED_PC_DIR') or Path(__file__).resolve().parents[2])/'engine/out/Uncharted.exe'
 _k=c.WinDLL('kernel32',use_last_error=True)
 class _SI(c.Structure):
  _fields_=[('cb',w.DWORD),('lpReserved',w.LPWSTR),('lpDesktop',w.LPWSTR),('lpTitle',w.LPWSTR),('dwX',w.DWORD),('dwY',w.DWORD),('dwXSize',w.DWORD),('dwYSize',w.DWORD),('dwXCountChars',w.DWORD),('dwYCountChars',w.DWORD),('dwFillAttribute',w.DWORD),('dwFlags',w.DWORD),('wShowWindow',w.WORD),('cbReserved2',w.WORD),('lpReserved2',c.POINTER(c.c_byte)),('hStdInput',w.HANDLE),('hStdOutput',w.HANDLE),('hStdError',w.HANDLE)]

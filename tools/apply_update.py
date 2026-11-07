@@ -7,7 +7,7 @@ update\\staged, after the old launcher has closed:
   3. on any error puts every moved item back, so the old version keeps working,
   4. moves back into the new folders everything of the old ones that the package does not
      install: the player's own files (ReShade's ReShade.ini, presets and reshade-shaders\\ next
-     to Uncharted.exe, a game folder put inside gow3_pc\\, notes). Only files the previous package
+     to Uncharted.exe, a game folder put inside engine\\, notes). Only files the previous package
      installed itself (installed-files.txt) and the new one no longer has stay behind (#134),
   5. starts "Uncharted Launcher.exe" (the new launcher removes update\\ when it starts).
 usage: apply_update.py --root <package folder> --wait-pid <launcher pid> [--no-restart] [--quiet]

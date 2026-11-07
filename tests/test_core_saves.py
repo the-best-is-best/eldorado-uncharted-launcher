@@ -203,3 +203,20 @@ def test_when_text_reads_as_spoken() -> None:
     assert saves.when_text(now - 3 * 86400, now) == "3 days ago"
     assert saves.when_text(now - 40 * 86400, now) == "28 Sep 2026"
     assert saves.when_text(0, now) == ""
+
+
+def test_a_save_of_a_newer_game_version_is_left_out(tmp_path) -> None:
+    from core import saves as saves_module
+
+    def save(version: str) -> saves_module.Save:
+        meta = tmp_path / f"m{version or 'none'}"
+        meta.mkdir()
+        if version:
+            (meta / saves_module.VERSION_FILE).write_text(version, encoding="utf-8")
+        return saves_module.Save("saves", "u1", "SAVEDATA012", "1", "CUSA02320", tmp_path, "c", "d", 0.0, None,
+                                 saves_module.version_of(meta))
+
+    newer, same, older, unknown = save("01.03"), save("01.02"), save("01.00"), save("")
+    shown = saves_module.playable([newer, same, older, unknown], "01.02")
+    assert newer not in shown and same in shown and older in shown and unknown in shown
+    assert saves_module.playable([newer], "") == [newer]   # the chosen copy's version unknown: nothing hidden

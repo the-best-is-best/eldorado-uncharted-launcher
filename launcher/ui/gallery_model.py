@@ -10,6 +10,7 @@ from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
 from core import config as cfg
 from core import gallery, games
+from core.i18n import t
 
 
 class GalleryModel(QObject):
@@ -83,7 +84,7 @@ class GalleryModel(QObject):
         shot = self._shot(index)
         if not shot:
             return False
-        done = self._run(lambda: gallery.delete(shot), f"{shot.name} moved to the Recycle Bin.")
+        done = self._run(lambda: gallery.delete(shot), t("{name} moved to the Recycle Bin.", name=shot.name))
         self._read()
         self.changed.emit()
         return done

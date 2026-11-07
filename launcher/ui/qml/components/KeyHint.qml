@@ -29,24 +29,24 @@ Row {
         Row {
             spacing: 8
             Rectangle {
-                width: Math.max(22, cap.implicitWidth + 12)
-                height: 20
-                radius: 3
-                color: Qt.rgba(0, 0, 0, 0.35)
-                border.color: Theme.faint
+                width: Math.max(24, cap.implicitWidth + 14)
+                height: 22
+                radius: 6
+                color: Qt.rgba(1, 1, 1, 0.06)
+                border.color: Theme.accentLine
                 Text {
                     id: cap
                     anchors.centerIn: parent
                     text: hints.label(modelData.action)
-                    color: Theme.dim
-                    font.family: Theme.bodyFont; font.pixelSize: 11; font.letterSpacing: 1
+                    color: Theme.ink
+                    font.family: Theme.bodyFont; font.pixelSize: 11; font.letterSpacing: Theme.tracking(1)
                 }
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: modelData.text
                 color: Theme.faint
-                font.family: Theme.bodyFont; font.pixelSize: 11; font.letterSpacing: 2
+                font.family: Theme.bodyFont; font.pixelSize: 11; font.letterSpacing: Theme.tracking(2)
             }
         }
     }

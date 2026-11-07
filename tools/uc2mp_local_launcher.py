@@ -1,7 +1,7 @@
 """Launch the experimental PC lobby using the original UI and isolated saves.
 
 The normal game executable, launcher configuration and save files are untouched.
-Build first: ninja -C gow3_pc/out/gpu gow3-probe uc2mp-test uc2mp-menu-test
+Build first: ninja -C engine/out/gpu gow3-probe uc2mp-test uc2mp-menu-test
 """
 import argparse
 import ipaddress
@@ -17,7 +17,7 @@ import sys
 from probe_uncharted import ROOT, find_update, game_version
 
 
-# Levels each map loads with it, after the map (gow3_pc/src/uc2mp_map_levels.h, PS3 net.bin).
+# Levels each map loads with it, after the map (engine/src/uc2mp_map_levels.h, PS3 net.bin).
 MAP_LEVELS = {"warzone-multi": ("sky-multi-warzone",),
               "village-multi": ("village-multi-wide", "sky-village-multi", "village-multi-tank"),
               "shambhala-multi": ("sky-sham-descent", "sham-multi-wide"),
@@ -25,7 +25,7 @@ MAP_LEVELS = {"warzone-multi": ("sky-multi-warzone",),
               "gompa-multi": ("gompa-multi-wide", "sky-gompa"),
               "train-wreck-multi": ("sky-train-wreck",),
               "ice-cave-multi": ("sky-ice-cave",)}
-# Maps with PS3 online spawners (gow3_pc/src/uc2mp_extracted_spawn_catalog.h): player spawners.
+# Maps with PS3 online spawners (engine/src/uc2mp_extracted_spawn_catalog.h): player spawners.
 SPAWNERS = {"village-multi": 41, "warzone-multi": 35, "gompa-multi": 36, "ice-cave-multi": 33,
             "shambhala-multi": 37, "the-fort-multi": 29, "train-wreck-multi": 34,
             "treasure-multi": 31}
@@ -166,9 +166,9 @@ def main():
     source = update or game
     if game_version(source) != "01.02":
         parser.error("Ce raccordement experimental requiert Uncharted 2 version 1.02.")
-    built = ROOT / "gow3_pc/out/gpu/gow3-probe.exe"
+    built = ROOT / "engine/out/gpu/gow3-probe.exe"
     if not built.is_file():
-        parser.error("Compile d'abord le runtime : ninja -C gow3_pc/out/gpu gow3-probe")
+        parser.error("Compile d'abord le runtime : ninja -C engine/out/gpu gow3-probe")
     work = ROOT / "work/local-lobby"
     if args.instance:
         work = work / "instances" / args.instance

@@ -46,7 +46,7 @@ def inventory(flag,kind,first,next,pid=0):
             valid=advance(snapshot,c.byref(item))
     finally: kernel.CloseHandle(snapshot)
 def identify():
-    expected=ROOT / "gow3_pc/out/gow3-probe.exe"
+    expected=ROOT / "engine/out/gow3-probe.exe"
     for process in inventory(2,Process,"Process32FirstW","Process32NextW"):
         if process.name.lower()!=expected.name.lower(): continue
         handle=kernel.OpenProcess(0x1000|0x10,False,process.pid)
@@ -63,7 +63,7 @@ def read(address,size):
     return data.raw[:used.value]
 modules=list(inventory(8|16,Module,"Module32FirstW","Module32NextW",pid))
 native=next(m for m in modules if m.name.lower()=="gow3-probe.exe")
-symbols=subprocess.check_output(["C:/msys64/clang64/bin/llvm-nm.exe",str(ROOT/"gow3_pc/out/gow3-probe.exe")],text=True)
+symbols=subprocess.check_output(["C:/msys64/clang64/bin/llvm-nm.exe",str(ROOT/"engine/out/gow3-probe.exe")],text=True)
 slot_symbol=re.search(r"^([0-9a-fA-F]+) [a-zA-Z] tls_slot$",symbols,re.M)
 if not slot_symbol: raise RuntimeError("Runtime TLS symbol unavailable; rebuild with symbols")
 slot_data=read(native.base+int(slot_symbol[1],16)-0x140000000,4)

@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Michelle Raouf
 """Each game's trophy set and how much of it the player has earned.
 
-The engine's gow3_pc/scripts/trophies.py reads the player's own trophy pack (Game/sce_sys/trophy/trophy0N.trp)
+The engine's engine/scripts/trophies.py reads the player's own trophy pack (Game/sce_sys/trophy/trophy0N.trp)
 into USER/cache/hub-trophy/<key> (trophies.txt plus the pack's TROPnnn.PNG icons); the game writes each unlock to
 USER/trophy/<NP id>.log. This module only reads those: no trophy text or picture ships with the launcher."""
 from __future__ import annotations
@@ -14,13 +14,14 @@ from pathlib import Path
 from types import ModuleType
 
 from . import paths, safe_write
+from .i18n import t
 
 GRADES: tuple[str, ...] = ("P", "G", "S", "B")
 GRADE_NAMES: dict[str, str] = {"P": "PLATINUM", "G": "GOLD", "S": "SILVER", "B": "BRONZE"}
 # The old engine's unlock files and the set each belongs to (merged into <NP id>.log once).
 OLD_LOGS: dict[str, str] = {"trophy01.txt": "NPWR09798_00", "trophy02.txt": "NPWR09799_00",
                             "trophy03.txt": "NPWR09801_00"}
-ENGINE_SCRIPT = paths.ROOT / "gow3_pc" / "scripts" / "trophies.py"
+ENGINE_SCRIPT = paths.ROOT / "engine" / "scripts" / "trophies.py"
 
 
 class TrophyError(Exception):
@@ -43,16 +44,16 @@ class Trophy:
         return self.hidden and not self.earned
 
     def shown_name(self) -> str:
-        return "Hidden trophy" if self.secret else self.name
+        return t("Hidden trophy") if self.secret else self.name
 
     def shown_detail(self) -> str:
-        return "Keep playing to find it." if self.secret else self.detail
+        return t("Keep playing to find it.") if self.secret else self.detail
 
     def earned_text(self) -> str:
         if not self.earned:
-            return "LOCKED"
+            return t("LOCKED")
         # Some logs carry 1 as the time (unlocked by a tool): earned, date unknown.
-        return time.strftime("%d %b %Y", time.localtime(self.earned)) if self.earned > 1 else "EARNED"
+        return time.strftime("%d %b %Y", time.localtime(self.earned)) if self.earned > 1 else t("EARNED")
 
 
 @dataclass(frozen=True)

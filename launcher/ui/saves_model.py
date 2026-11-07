@@ -12,7 +12,8 @@ from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
 from core import art
 from core import config as cfg
-from core import games, paths, saves
+from core import game_files, games, paths, saves
+from core.i18n import t
 
 VIEW_NAMES: dict[str, str] = {saves.SAVES: "SAVES", saves.DELETED: "DELETED SAVES", saves.BACKUPS: "BACKUPS"}
 # What each view does with OK and Delete; the ones in TWICE wait for a second press.
@@ -22,6 +23,7 @@ TWICE = {"delete", "delete_for_good", "restore_backup"}
 ARMED_NOTES: dict[str, str] = {"delete": "PRESS DELETE AGAIN TO DELETE",
                                "delete_for_good": "PRESS DELETE AGAIN TO REMOVE FOR GOOD",
                                "restore_backup": "PRESS OK AGAIN TO RESTORE"}
+# The texts below are English; t() reads them in the launcher's language where they are handed to QML.
 # The key hints of each view (KeyHint.qml's actions), after "\u2190 \u2192 VIEWS".
 ACCEPT_HINTS: dict[str, str] = {saves.DELETED: "RESTORE", saves.BACKUPS: "RESTORE (TWICE)"}
 REMOVE_HINTS: dict[str, str] = {saves.SAVES: "DELETE (TWICE)", saves.DELETED: "REMOVE FOR GOOD (TWICE)"}
@@ -78,15 +80,15 @@ class SavesModel(QObject):
 
     @Property(str, notify=changed)
     def viewName(self) -> str:
-        return VIEW_NAMES[self._view]
+        return t(VIEW_NAMES[self._view])
 
     @Property(str, notify=changed)
     def viewLine(self) -> str:
-        return VIEW_LINES[self._view]
+        return t(VIEW_LINES[self._view])
 
-    @Property("QVariantList", constant=True)
+    @Property("QVariantList", notify=changed)
     def views(self) -> list[dict]:
-        return [{"key": key, "name": VIEW_NAMES[key]} for key in saves.VIEWS]
+        return [{"key": key, "name": t(VIEW_NAMES[key])} for key in saves.VIEWS]
 
     @Property(int, notify=changed)
     def selectedIndex(self) -> int:
@@ -107,11 +109,11 @@ class SavesModel(QObject):
     @Property("QVariantList", notify=changed)
     def hints(self) -> list[dict[str, str]]:
         """The view's key hints, as KeyHint.qml takes them (the key cap follows the device in use)."""
-        entries = [{"action": "views", "text": "VIEWS"}]
+        entries = [{"action": "views", "text": t("VIEWS")}]
         if self._view in ACCEPT_HINTS:
-            entries.append({"action": "accept", "text": ACCEPT_HINTS[self._view]})
+            entries.append({"action": "accept", "text": t(ACCEPT_HINTS[self._view])})
         if self._view in REMOVE_HINTS:
-            entries.append({"action": "remove", "text": REMOVE_HINTS[self._view]})
+            entries.append({"action": "remove", "text": t(REMOVE_HINTS[self._view])})
         return entries
 
     def _get_game_running(self) -> bool:
@@ -185,10 +187,12 @@ class SavesModel(QObject):
 
     def _load(self) -> None:
         try:
-            self._saves = saves.list_saves(paths.USER_DIR, self._view, self._profiles())
+            # Saves of a newer game version than the copy chosen do not load in it: left out.
+            version = game_files.version_in_use(cfg.Config.load())
+            self._saves = saves.playable(saves.list_saves(paths.USER_DIR, self._view, self._profiles()), version)
         except OSError as error:
             self._saves = []
-            self._say(f"The saves could not be read: {error}", error=True)
+            self._say(t("The saves could not be read: {error}", error=error), error=True)
         self._index = max(0, min(self._index, len(self._saves) - 1))
 
     def _act(self, action: str) -> None:
@@ -197,7 +201,7 @@ class SavesModel(QObject):
             return
         if self._game_running:
             self._disarm()
-            self._say("Close the game before changing its saves.", error=True)
+            self._say(t("Close the game before changing its saves."), error=True)
             self.changed.emit()
             return
         if action in TWICE and self._armed != action:
@@ -218,20 +222,22 @@ class SavesModel(QObject):
         user_dir = paths.USER_DIR
         if action == "delete":
             saves.delete(user_dir, save)
-            return f"{save.name} deleted (kept in Deleted saves)."
+            return t("{save} deleted (kept in Deleted saves).", save=save.name)
         if action == "restore":
             saves.restore(user_dir, save)
-            return f"{save.name} restored."
+            return t("{save} restored.", save=save.name)
         if action == "delete_for_good":
             saves.delete_for_good(user_dir, save)
-            return f"{save.name} removed for good."
+            return t("{save} removed for good.", save=save.name)
         replaced = saves.restore_backup(user_dir, save)
-        tail = " (the one it replaced is in Deleted saves)" if replaced else ""
-        return f"{save.name} restored from the backup of {when(save.time)}{tail}."
+        if replaced:
+            return t("{save} restored from the backup of {when} (the one it replaced is in Deleted saves).",
+                     save=save.name, when=when(save.time))
+        return t("{save} restored from the backup of {when}.", save=save.name, when=when(save.time))
 
     def _row(self, position: int, save: saves.Save) -> dict:
         game = games.by_key(save.game)
-        note = ARMED_NOTES[self._armed] if self._armed and position == self._index else \
+        note = t(ARMED_NOTES[self._armed]) if self._armed and position == self._index else \
             f"UNCHARTED {game.number}   {when(save.time)}"
         return {"name": save.name, "game": save.game, "gameName": game.name, "title": shown(save.chapter),
                 # Shown as stored, the line runs from its sentence's end to its start: QML cuts it at the left.

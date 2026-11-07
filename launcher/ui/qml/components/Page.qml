@@ -12,9 +12,9 @@ Item {
 
     Column {
         id: head
-        x: 48; y: 36
+        anchors { left: parent.left; leftMargin: 48; top: parent.top; topMargin: 36 }
         spacing: 6
-        Text { text: page.title; color: Theme.ink; font.family: Theme.titleFont; font.pixelSize: 34; font.letterSpacing: 3 }
+        Text { text: page.title; color: Theme.ink; font.family: Theme.titleFont; font.pixelSize: 32; font.letterSpacing: Theme.tracking(3) }
         Text { text: page.subtitle; visible: text.length > 0; color: Theme.dim; font.family: Theme.bodyFont; font.pixelSize: 14 }
     }
     Item {

@@ -6,7 +6,7 @@ Arabic translations of the collection replace one of the game's 22 languages (th
 the games read for no console language we could find).
 Each game keeps its texts in <uNdata>/build/main/core.psarc as text1/ps4/<n>.common, n being the game's own
 number for the language; the file with the most Arabic letters is the translation. The launcher's "Arabic" choice
-makes each game load that file whatever the console language (the "text<n>" patch, gow3_pc/scripts/cheats.py). Results are kept in a small cache keyed by the archive's size and time, so a start reads nothing again
+makes each game load that file whatever the console language (the "text<n>" patch, engine/scripts/cheats.py). Results are kept in a small cache keyed by the archive's size and time, so a start reads nothing again
 until the game or its update changes.
 """
 import json
