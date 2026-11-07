@@ -67,6 +67,49 @@ def test_old_logs_are_merged_once(tmp_path: Path) -> None:
     assert trophies.migrate_old_logs(tmp_path) == 0
 
 
+def _old_engine_logs(user: Path) -> Path:
+    """The old engine's trophy/trophy0N.txt ("id time" lines, a trophy can repeat) next to Mevlock's logs."""
+    folder = user / "trophy"
+    folder.mkdir(parents=True)
+    (folder / "NPWR09798_00.log").write_text("5 100", encoding="utf-8")       # no line end at the end
+    (folder / "trophy01.txt").write_text("5 50\n6 60\nbroken\n6 70\n7 x\n", encoding="utf-8")
+    (folder / "trophy03.txt").write_text("0 10\n", encoding="utf-8")           # no NPWR09801_00.log yet
+    return folder
+
+
+def _check_merged(folder: Path) -> None:
+    assert (folder / "NPWR09798_00.log").read_text(encoding="utf-8") == "5 100\n6 60\n"
+    assert (folder / "NPWR09801_00.log").read_text(encoding="utf-8") == "0 10\n"
+    assert not (folder / "NPWR09799_00.log").exists()
+    for name in ("trophy01.txt", "trophy03.txt"):
+        assert (folder / f"{name}.migrated").is_file() and not (folder / name).exists()
+
+
+def test_launcher_merges_old_engine_logs_once(tmp_path: Path) -> None:
+    folder = _old_engine_logs(tmp_path)
+    assert trophies.migrate_old_logs(tmp_path) == 2
+    _check_merged(folder)
+    assert trophies.migrate_old_logs(tmp_path) == 0
+    _check_merged(folder)
+
+
+def test_start_script_merges_old_engine_logs_once(tmp_path: Path) -> None:
+    import importlib.util
+
+    script = Path(__file__).resolve().parents[1] / "tools" / "probe_uncharted.py"
+    spec = importlib.util.spec_from_file_location("probe_uncharted_trophy_test", script)
+    assert spec is not None and spec.loader is not None
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    folder = _old_engine_logs(tmp_path)
+    probe.migrate_trophy_logs(tmp_path)
+    _check_merged(folder)
+    probe.migrate_trophy_logs(tmp_path)
+    _check_merged(folder)
+    # The launcher finds nothing left to move after the start script did it.
+    assert trophies.migrate_old_logs(tmp_path) == 0
+
+
 def test_language_numbers() -> None:
     assert trophies.language_number("3") == 3
     assert trophies.language_number("ar") == 1

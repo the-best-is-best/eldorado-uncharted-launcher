@@ -1,0 +1,7 @@
+# The Mevlock/uncharted_pc-dev commit this engine is merged up to (its src/, gpu/, shaders/, scripts/, tests/, run.py;
+# not its launcher, docs or README). The next merge: in a clone of Mevlock's repository,
+#   git diff --full-index --binary <commit below> origin/HEAD -- src gpu shaders scripts tests run.py > mevlock.diff
+# then here, with our changes staged: git apply -3 --directory=engine mevlock.diff
+commit a4892a992d4443d46cdb47b074f0160c3b3a3495
+version 0.3.6.47
+merged 2026-11-07

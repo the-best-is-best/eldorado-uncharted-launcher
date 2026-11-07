@@ -65,7 +65,9 @@ CHEAT_TEXTS: dict[str, tuple[str, str]] = {
     "skipintro": ("Skip intro", "No logo movies at the start (Sony, Naughty Dog, Bluepoint)."),
     "invincible": ("Invincible", "Nate takes no damage."),
     "ammo": ("Infinite ammo", "The magazine never runs empty: no reloading."),
+    "noreload": ("No reload (Uncharted 2 and 3)", "The games' own No Reload switch: Nate never has to reload."),
     "grenades": ("Infinite grenades", "Nate never runs out of grenades."),
+    "onehit": ("One hit kills (Uncharted 3)", "Every enemy goes down with one hit."),
     "treasures": ("Give all treasures", "Every treasure counts as found in the save you play, a few seconds into "
                   "play. It is written into that save (and earns the treasure trophies), so it stays after the cheat "
                   "is turned off."),
@@ -84,7 +86,17 @@ LANGUAGES: Options = (
 )
 ARABIC = "ar"
 ENGLISH = "1"  # English (US): where a game goes when its copy has no Arabic translation
-ARABIC_CACHE = "arabic-language.json"  # in the player's folder, shared with the start script
+ENGLISH_UK = "18"
+# A language and its other region: what a game gets when its copy lacks the one chosen.
+SIBLING: dict[str, str] = {"1": "18", "18": "1", "3": "20", "20": "3", "7": "17", "17": "7"}
+ARABIC_WANTED = "arabic_wanted"  # a game entry: Arabic again once the copy has the translation
+LANGUAGES_CACHE = "text-languages.json"  # in the player's folder, shared with the start script
+ARABIC_CODE = "ar"
+# The launcher's language numbers (PS4 language ids) -> the language a text file holds (tools/text_languages.py).
+LANGUAGE_CODES: dict[str, str] = {"ar": "ar", "1": "en-US", "18": "en-GB", "2": "fr", "4": "de", "5": "it", "3": "es",
+                                  "20": "es-419", "7": "pt", "17": "pt-BR", "6": "nl", "14": "da", "15": "no", "13": "sv",
+                                  "12": "fi", "16": "pl", "23": "cs", "25": "el", "8": "ru", "19": "tr", "0": "ja", "9": "ko",
+                                  "10": "zh-Hant"}
 # Speech packs in a copy of the game (u*data/build/main/sound1/.../<language>_ps4.psarc) -> language ids.
 SPEECH_PACKS: dict[str, tuple[str, ...]] = {
     "english": ("1", "18"), "french": ("2",), "german": ("4",), "italian": ("5",), "spanish": ("3", "20"),
@@ -183,6 +195,16 @@ SETTINGS: tuple[Setting, ...] = (
             "the PS4.", (("0", "Game"), ("4", "4x"), ("8", "8x"), ("16", "16x"))),
     Setting("no_dof", LAUNCHER, "display", "No depth of field (Uncharted 2 and 3)",
             "Turns off the background blur (aiming, cutscenes, play). Needs update 1.02."),
+    Setting("hires_shadows", LAUNCHER, "display", "Sharper lamp shadows (Uncharted 2 and 3)",
+            "Higher-resolution shadows from lamps and the torch; costs almost nothing. Needs update 1.02."),
+    Setting("torch_forward", LAUNCHER, "display", "Torch light follows the torch (Uncharted 2)",
+            "The light falls where Nate points the torch, not where the camera looks. Off: as on the PS4. "
+            "Needs update 1.02."),
+    Setting("u3_exposure", LAUNCHER, "display", "Uncharted 3 brightness",
+            "Darker (minus) or brighter (plus) picture in Uncharted 3, for PCs where it looks too bright. Game = as "
+            "on the PS4. Needs update 1.02.",
+            (("-1", "−1"), ("-0.75", "−0.75"), ("-0.5", "−0.5"), ("-0.25", "−0.25"), ("0", "Game"),
+             ("0.25", "+0.25"), ("0.5", "+0.5"))),
     Setting("menu_shortcut", EVERY_INI, "controls", "In-game menu shortcut",
             "The controller buttons that open the in-game menu (all games). L2 + R3 also zooms the scope with some "
             "guns: pick Select + Start or Keyboard only (Insert) then.",
@@ -227,35 +249,40 @@ def voice_languages(game_dir: Path | None) -> set[str]:
     return ids
 
 
-def arabic_finder() -> ModuleType:
-    """tools/arabic_language.py, the start script's finder of the translation (loaded by path, not copied)."""
-    return game_files.tool_module("arabic_language")
+def text_languages_tool() -> ModuleType:
+    """tools/text_languages.py: which language each text file of the player's copy holds (loaded by path)."""
+    return game_files.tool_module("text_languages")
 
 
-def arabic_available(config: cfg.Config, log: Callable[[str], None] = print) -> dict[str, bool]:
-    """Which games have the Arabic translation in the player's copy: the start script's finder on each game's
-    core.psarc as the engine gets it, the update's when the update has one (the game update is laid over the game
-    at a start), else the game's. The finder keeps its answer by the archive's size and time, so only the first call
-    reads an archive (seconds). A game whose texts cannot be read is False, with the reason on a log line."""
-    found = dict.fromkeys(games.KEYS, False)
+def copy_languages(config: cfg.Config, log: Callable[[str], None] = print) -> dict[str, dict[str, str]]:
+    """For each game, {language code: text file} of the player's copy as the engine gets it (the update's texts when
+    the update has them, else the game's). A translation shows as its own language in the file it took (the Arabic
+    one in English (US)'s file). Kept by the archive's size and time: only the first look reads an archive (seconds).
+    A game whose texts cannot be read is {}, with the reason on a log line."""
+    found: dict[str, dict[str, str]] = {key: {} for key in games.KEYS}
     game_dir = config.game_dir()
     if not games.is_game_dir(game_dir):
         return found
     try:
-        finder = arabic_finder()
+        tool = text_languages_tool()
     except game_files.GameFilesError as error:
-        log(f"Arabic: not looked for: {error}")
+        log(f"Languages: not looked for: {error}")
         return found
     update = game_files.update_in_use(config)
-    cache = paths.USER_DIR / ARABIC_CACHE
+    cache = paths.USER_DIR / LANGUAGES_CACHE
     for key in games.KEYS:
-        archive = Path(finder.DATA_DIRS[key]) / "build" / "main" / "core.psarc"
+        archive = Path(tool.DATA_DIRS[key]) / "build" / "main" / "core.psarc"
         root = update if update and (update / archive).is_file() else game_dir
         try:
-            found[key] = finder.find_arabic_language(root, key, cache) is not None
-        except Exception as error:  # a damaged archive: the choice is not offered, nothing else changes
-            log(f"Arabic: {games.by_key(key).name}: the texts could not be read ({error})")
+            found[key] = dict(tool.cached_text_languages(root, key, cache))
+        except Exception as error:  # a damaged archive: the game's languages are not narrowed, nothing else changes
+            log(f"Languages: {games.by_key(key).name}: the texts could not be read ({error})")
     return found
+
+
+def arabic_available(languages: dict[str, dict[str, str]]) -> dict[str, bool]:
+    """Which games' copy holds the Arabic translation."""
+    return {key: ARABIC_CODE in languages.get(key, {}) for key in games.KEYS}
 
 
 def resolution_label(value: str, aspect: str) -> str:
@@ -286,7 +313,8 @@ class Editor:
         self.file = file
         self.card = card
         self.upscalers = upscaling_options()
-        # The games whose copy has the Arabic translation (arabic_available; a game missing from it has none).
+        # The languages each game's copy holds (copy_languages), and from them the games with the Arabic translation.
+        self.languages: dict[str, dict[str, str]] = {}
         # None: not looked for, so every game may choose it, as the released launcher offers it.
         self.arabic = arabic
 
@@ -334,7 +362,8 @@ class Editor:
             # launcher's texts.
             return tuple((value, (t("Arabic (translation)") if value == ARABIC else title) +
                           ("  " + t("(+ voices)") if value in voices else ""))
-                         for value, title in LANGUAGES if value != ARABIC or self.offers_arabic(key, game))
+                         for value, title in LANGUAGES
+                         if (value != ARABIC or self.offers_arabic(key, game)) and self.offers_language(key, game, value))
         if name in ("mouse_sens", "mouse_aim_sens"):
             current = str(game.get(name, "1.0"))
             if current not in dict(setting.options):  # a value the in-game menu set
@@ -348,19 +377,45 @@ class Editor:
             return True
         return key not in self.arabic and str(game.get("language", "")) == ARABIC
 
-    def drop_missing_arabic(self) -> list[str]:
-        """A game set to the Arabic translation whose copy has none (another game folder chosen) goes back to
-        English. Returns those games."""
-        if not self.arabic:
-            return []
+    def offers_language(self, key: str, game: dict[str, Any], value: str) -> bool:
+        """Only the languages the copy holds (a translation in the place of the language it took); while the copy is
+        not read yet, every language. The one chosen is always listed."""
+        held = self.languages.get(key)
+        if not held:
+            return True
+        return LANGUAGE_CODES.get(value, "") in held
+
+    def follow_arabic(self) -> tuple[list[str], list[str]]:
+        """The game folder changed: a game set to the Arabic translation whose copy has none goes to English and
+        remembers it (ARABIC_WANTED); back on a copy with the translation it is Arabic again, unless the player
+        chose another language meanwhile. Any other language the new copy does not hold becomes its other region
+        (English (US) -> English (UK) on a translated copy), else English. Returns (games now English, games Arabic
+        again)."""
+        if not self.arabic and not self.languages:
+            return [], []
         config = self.load()
-        changed = [key for key in games.KEYS
-                   if str(config.game(key).get("language")) == ARABIC and not self.arabic.get(key, False)]
-        for key in changed:
-            config.game(key)["language"] = ENGLISH
-        if changed:
+        dropped, restored, changed = [], [], False
+        for key in games.KEYS:
+            game = config.game(key)
+            if self.arabic:
+                has = self.arabic.get(key, False)
+                if str(game.get("language")) == ARABIC and not has:
+                    game["language"], game[ARABIC_WANTED] = ENGLISH, True
+                    dropped.append(key)
+                elif game.get(ARABIC_WANTED) and has and str(game.get("language")) == ENGLISH:
+                    game["language"] = ARABIC
+                    game.pop(ARABIC_WANTED, None)
+                    restored.append(key)
+            held = self.languages.get(key)
+            chosen = str(game.get("language", ""))
+            if held and chosen != ARABIC and LANGUAGE_CODES.get(chosen) not in held:
+                instead = next((value for value in (SIBLING.get(chosen, ""), ENGLISH, ENGLISH_UK)
+                                if LANGUAGE_CODES.get(value) in held), None)
+                if instead:
+                    game["language"], changed = instead, True
+        if dropped or restored or changed:
             config.save()
-        return changed
+        return dropped, restored
 
     def preset_list(self) -> list[presets.Preset]:
         return presets.all_for(self.card, {name for name, _ in self.upscalers})
@@ -388,6 +443,8 @@ class Editor:
             config.save()
         elif setting.store == GAME:
             game[name] = value
+            if name == "language":
+                game.pop(ARABIC_WANTED, None)  # the player chose: no going back to Arabic by itself
             if name == "resolution":
                 game["preset"] = "custom"
             config.save()

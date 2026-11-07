@@ -80,6 +80,40 @@ for _code, _patches in REWARDS.items():
 # game's own "Infinite Grenades" switch, kept set by run.py (BB_POKE_U3).
 PATCHES[US['eboot.bin']]['grenades'] = (0x734a78, 'e8c319c1ff', NOP * 5)
 PATCHES[US['big2-ps4_Shipping.elf']]['grenades'] = (0x802273, 'e8a87d2e00', NOP * 5)
+# torch (El Dorado's "Torch light follows the torch", Uncharted 2, 1.02 code): the torch update (Flashlight Active
+# 0x69a190) aims the light along the torch joint only in camera mode 9, and every frame the player light (record 0 of
+# the light table 0x1157760) is re-aimed along the camera's forward vector (function 0x698b50 and a copy inlined next
+# to UpdatePadLightBar, 0x3fd78d): turn the camera to face Nate and the light falls on the wall behind him. Both
+# re-aims are skipped (je -> jmp) and the joint path is taken in every camera mode: the light follows the beam.
+PATCHES[US['big2-ps4_Shipping.elf']]['torch'] = [(0x3fd799, '7440', 'eb40'), (0x698b5c, '7440', 'eb40'),
+                                                 (0x69afc4, '0f8534010000', '90e934010000')]
+# exposure<EV> (El Dorado's "Uncharted 3 exposure", 1.02 code; pavlikdcx's patch, GitHub #199: Uncharted 3 too bright
+# on some RTX 30/40 PCs): the filmic exposure bias read from the render settings at [rbx+0x72c] on two paths
+# (0xed9d30 / 0xed9d49) gets <EV> more before the tonemap. The first load jumps to a stub in the code segment's zero
+# padding (0x1648800) that adds the bias; the second path's add of -0.5 (shared constant 0x144b3b8) reads the stub's
+# own (-0.5 + EV) instead. Built per value by exposure_patch(); names "exposure-0.5", "exposure+0.25".
+U3_EXPOSURE_AT, U3_EXPOSURE_CAVE = 0xed9d30, 0x1648800
+
+
+def exposure_patch(name):
+    """[(address, original, replacement)] for a cheat name exposure<EV> (-2 .. +1), or None."""
+    try:
+        bias = float(name[len('exposure'):])
+    except ValueError:
+        return None
+    if not -2.0 <= bias <= 1.0 or abs(bias) < 0.05:
+        return None
+    cave = U3_EXPOSURE_CAVE - U3_EXPOSURE_AT  # from the first load
+    stub = bytes.fromhex('c5fa10932c070000')                                         # vmovss xmm2, [rbx+0x72c]
+    stub += bytes.fromhex('c5ea5815') + struct.pack('<i', 0x40 - (len(stub) + 8))   # vaddss xmm2, xmm2, [cave+0x40]
+    stub += bytes.fromhex('c5f057c9')                                                # vxorps xmm1, xmm1, xmm1
+    stub += b'\xe9' + struct.pack('<i', 12 - (cave + len(stub) + 5))                 # jmp back (first load + 12)
+    stub = stub.ljust(0x40, b'\xcc') + struct.pack('<ff', bias, -0.5 + bias)
+    jump = b'\xe9' + struct.pack('<i', cave - 5) + b'\x90' * 7
+    second = struct.pack('<i', (cave + 0x44) - (0x21 + 8))                           # the second path's add
+    return [(U3_EXPOSURE_AT, 'c5fa10932c070000c5f057c9', jump.hex()),
+            (U3_EXPOSURE_CAVE, '00' * len(stub), stub.hex()),
+            (U3_EXPOSURE_AT + 0x25, '5f165700', second.hex())]
 # text<n> (El Dorado's "Arabic" language, 1.02 code): the games load text1/ps4/<n>.common whatever the console language.
 # The text loader (text.cpp, "%s/%s%i.%s" with "build/main/text1/ps4/") reads the file number from the language's
 # table entry: "mov eax, esi; imul rax, rax, 0x38; lea rdx, [table]; mov r9d, [rdx+rax+0x14]" becomes
@@ -90,6 +124,34 @@ TEXT_FILE_LOADS = {US['eboot.bin']: (0x5ca861, '89f0486bc038488d15eaccab00448b4c
 for _code, (_address, _original) in TEXT_FILE_LOADS.items():
     for _number in range(2, 24):
         PATCHES[_code][f'text{_number}'] = (_address, _original, f'41b9{_number:02x}000000' + NOP * 12)
+
+# Naughty Dog's debug-menu switches, kept set by the runtime (BB_KEEP_BYTES): bytes in memory the game creates, so no
+# patch of the file reaches them. Uncharted 3's menu has "No Reload" and "One Hit Kills" in its cheat block (Infinite
+# Ammo +0x61, Infinite Grenades +0x62, No Reload +0x63, One Hit Kills +0x164); Uncharted 2 reads no-reload from the
+# byte after its Infinite Ammo switch (+0x3b; no menu item). 1.02 addresses by BilalReloaded; the EU 1.00 ones found
+# the same way (the menu items' base + offset).
+KEEP = {
+    US['big2-ps4_Shipping.elf']: {'noreload': [0x104f84b]},
+    EU['big2-ps4_Shipping.elf']: {'noreload': [0xe654bb]},
+    US['big3-ps4_Shipping.elf']: {'noreload': [0x17faa93], 'onehit': [0x17fab94]},
+    EU['big3-ps4_Shipping.elf']: {'noreload': [0x14c0923], 'onehit': [0x14c0a24]},
+}
+
+
+def keep_bytes(path, cheats):
+    """BB_KEEP_BYTES ("offset=1,...") for the enabled switch cheats of one executable; '' when none applies."""
+    if not any(c in ('noreload', 'onehit') for c in cheats):
+        return ''
+    try:
+        table = KEEP.get(code_hash(Path(path).read_bytes()), {})
+    except OSError:
+        return ''
+    keep = []
+    for name in cheats:
+        for offset in table.get(name, []):
+            keep.append(f'{offset:x}=1')
+            print(f'Cheats: {name} on')
+    return ','.join(keep)
 
 
 def code_hash(data):
@@ -124,9 +186,14 @@ def compile_cheats(path, cheats):
     elf, _header, program_headers, _segments, _missing = prepare.parse_self(data)
     writes = []
     for name in cheats:
-        if name not in table:
+        if name.startswith('exposure') and table is PATCHES[US['big3-ps4_Shipping.elf']]:
+            entries = exposure_patch(name)
+            if entries is None:
+                continue
+        elif name not in table:
             continue
-        entries = table[name] if isinstance(table[name], list) else [table[name]]
+        else:
+            entries = table[name] if isinstance(table[name], list) else [table[name]]
         found = []
         for address, original, replacement in entries:
             original, replacement = bytes.fromhex(original), bytes.fromhex(replacement)

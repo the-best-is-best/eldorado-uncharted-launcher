@@ -270,6 +270,7 @@ def main():
         else:
             env.pop('BB_POKE', None)
         patches = cheats.build(game / exe, out, [c for c in env['BB_CHEATS'].split(',') if c])
+        env['BB_KEEP_BYTES'] = cheats.keep_bytes(game / exe, [c for c in env['BB_CHEATS'].split(',') if c])
         env['BB_RESTART_COMMAND'] = subprocess.list2cmdline([sys.executable, *this, '--after', str(os.getpid()), *args])
         command = [str(probe), str(out / 'boot-linked.bin'), '--content-profile', str(out / 'content.bin'),
                    '--app0', str(game), '--user', str(user_dir), '--timeout', env.get('BB_TIMEOUT', '0')]
@@ -293,6 +294,11 @@ def main():
         exe = target
         # Back from U2/U3 the collection menu shows again (the skip is for the first start).
         env.pop('BB_SKIP_COLLECTION_MENU', None)
+        # El Dorado: the game picked goes straight to its main menu too; the collection menu (eboot.bin) takes no taps.
+        if target == 'eboot.bin':
+            env.pop('BB_SKIP_TITLE', None)
+        else:
+            env['BB_SKIP_TITLE'] = '1'
         # The window of the game the player picked takes the focus (window.cpp).
         env['BB_RAISE_WINDOW'] = '1'
         # The arguments given to sceSystemServiceLoadExec are the whole argv, argv[0] included

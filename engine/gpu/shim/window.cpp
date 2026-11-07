@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <SDL3/SDL.h>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -119,6 +120,14 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     if (const char* env = std::getenv("BB_PAD_BACKGROUND"); !(env && env[0] == '0')) {
         SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     }
+    // El Dorado: the close button or Alt+F4 on the game's only window must reach the close question
+    // (SDL_EVENT_WINDOW_CLOSE_REQUESTED); by default SDL also sends SDL_EVENT_QUIT for it, which closes at once.
+    SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0");
+    // Controllers are updated on the runtime's pad thread (runtime_pad.c): a rescan when one is switched off or on held
+    // up this window's event pump, and presenting with it (0.3.6.44). BB_PAD_THREAD=0: the pump updates them.
+    if (const char* env = std::getenv("BB_PAD_THREAD"); !(env && env[0] == '0')) {
+        SDL_SetHint(SDL_HINT_AUTO_UPDATE_JOYSTICKS, "0");
+    }
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         UNREACHABLE_MSG("Failed to initialize SDL video: {}", SDL_GetError());
     }
@@ -215,6 +224,22 @@ void WindowSDL::SetLoadingIcon() {
 bool WindowSDL::PollEvents() {
     if (BbLoadingIcon::TakeNew()) { // taken from this start's first loading screen
         SetLoadingIcon();
+    }
+    // El Dorado: the launcher's STOP writes BB_STOP_FILE; the game then closes the usual way, so the shader cache's
+    // last writes are kept (a kill lost them, and the next start prepared the shaders again). Looked at 4 times a
+    // second; the launcher ends the game itself when this takes too long.
+    {
+        static const char* stop_file = std::getenv("BB_STOP_FILE");
+        static u64 next_look = 0;
+        if (stop_file && *stop_file && SDL_GetTicks() >= next_look) {
+            next_look = SDL_GetTicks() + 250;
+            if (std::filesystem::exists(std::filesystem::u8path(stop_file))) {
+                std::printf("Window closed (the launcher's STOP)\n");
+                std::fflush(stdout);
+                is_open = false;
+                return false;
+            }
+        }
     }
     if (close_question_wanted.exchange(false, std::memory_order_acq_rel) && !close_asked &&
         !BbOverlay::ChoiceOpen()) {

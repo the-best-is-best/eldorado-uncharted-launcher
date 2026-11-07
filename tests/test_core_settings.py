@@ -426,23 +426,27 @@ def test_a_games_keys_can_become_the_all_games_keys(tmp_path, monkeypatch) -> No
     assert editor.own_summary()[1]["ownCount"] == 0
 
 
-def _fake_finder(results: dict[str, Any], calls: list[tuple[Path, str, Path]]) -> Any:
-    """A stand-in for tools/arabic_language.py: find_arabic_language records its calls and answers per game (a
-    text file number, None for no translation, or an exception to raise)."""
+ORIGINAL = {"en-US": "2", "fr": "3", "de": "5", "en-GB": "7"}       # what an untranslated copy holds (part)
+TRANSLATED = {"ar": "2", "fr": "3", "de": "5", "en-GB": "7"}        # the Arabic translation took English (US)'s file
+
+
+def _fake_tool(results: dict[str, Any], calls: list[tuple[Path, str, Path]]) -> Any:
+    """A stand-in for tools/text_languages.py: cached_text_languages records its calls and answers per game (a
+    {language: file} table, or an exception to raise)."""
     import types
 
-    def find_arabic_language(root: Path, key: str, cache: Path) -> str | None:
+    def cached_text_languages(root: Path, key: str, cache: Path) -> dict[str, str]:
         calls.append((Path(root), key, Path(cache)))
-        answer = results.get(key)
+        answer = results.get(key, {})
         if isinstance(answer, BaseException):
             raise answer
         return answer
 
-    return types.SimpleNamespace(find_arabic_language=find_arabic_language,
+    return types.SimpleNamespace(cached_text_languages=cached_text_languages,
                                  DATA_DIRS={"u1": "u1data", "u2": "u2data", "u3": "u3data"})
 
 
-def test_arabic_is_looked_for_in_the_texts_the_engine_gets(tmp_path, monkeypatch) -> None:
+def test_languages_are_read_from_the_texts_the_engine_gets(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(paths, "USER_DIR", tmp_path / "user")
     config = cfg.Config.load(_prepare(tmp_path, "u1"))
     # The update beside the game folder holds Uncharted 2's texts: those count for U2, the game's for the others.
@@ -453,43 +457,66 @@ def test_arabic_is_looked_for_in_the_texts_the_engine_gets(tmp_path, monkeypatch
     (update / "u2data" / "build" / "main").mkdir(parents=True)
     (update / "u2data" / "build" / "main" / "core.psarc").write_bytes(b"")
     calls: list[tuple[Path, str, Path]] = []
-    finder = _fake_finder({"u1": "2", "u2": None, "u3": ValueError("not a PSARC")}, calls)
-    monkeypatch.setattr(settings, "arabic_finder", lambda: finder)
+    tool = _fake_tool({"u1": TRANSLATED, "u2": ORIGINAL, "u3": ValueError("not a PSARC")}, calls)
+    monkeypatch.setattr(settings, "text_languages_tool", lambda: tool)
     lines: list[str] = []
-    assert settings.arabic_available(config, log=lines.append) == {"u1": True, "u2": False, "u3": False}
+    held = settings.copy_languages(config, log=lines.append)
+    assert held == {"u1": TRANSLATED, "u2": ORIGINAL, "u3": {}}
+    assert settings.arabic_available(held) == {"u1": True, "u2": False, "u3": False}
     assert [(root, key) for root, key, _ in calls] == [(config.game_dir(), "u1"), (update, "u2"),
                                                        (config.game_dir(), "u3")]
-    assert {cache for _, _, cache in calls} == {tmp_path / "user" / "arabic-language.json"}
-    assert lines == ["Arabic: Uncharted 3: Drake's Deception: the texts could not be read (not a PSARC)"]
+    assert {cache for _, _, cache in calls} == {tmp_path / "user" / "text-languages.json"}
+    assert lines == ["Languages: Uncharted 3: Drake's Deception: the texts could not be read (not a PSARC)"]
 
 
-def test_arabic_is_not_looked_for_without_a_game_folder(tmp_path, monkeypatch) -> None:
+def test_languages_are_not_looked_for_without_a_game_folder(tmp_path, monkeypatch) -> None:
     file = tmp_path / "launcher.json"
     file.write_text(json.dumps({"game_dir": str(tmp_path / "nowhere")}), encoding="utf-8")
     calls: list[tuple[Path, str, Path]] = []
-    monkeypatch.setattr(settings, "arabic_finder", lambda: _fake_finder({}, calls))
-    assert settings.arabic_available(cfg.Config.load(file)) == {"u1": False, "u2": False, "u3": False}
+    monkeypatch.setattr(settings, "text_languages_tool", lambda: _fake_tool({}, calls))
+    assert settings.copy_languages(cfg.Config.load(file)) == {"u1": {}, "u2": {}, "u3": {}}
     assert calls == []
 
 
-def test_arabic_is_offered_only_where_the_copy_has_it(tmp_path, monkeypatch) -> None:
+def test_the_list_holds_what_the_copy_holds(tmp_path, monkeypatch) -> None:
     import pytest
 
     monkeypatch.setattr(paths, "USER_DIR", tmp_path / "user")
     file = _prepare(tmp_path, "u1")
-    editor = settings.Editor(file, arabic={"u1": True, "u2": False})
-    assert ("ar", "Arabic (translation)") in editor.options("u1", "language")
-    for key in ("u2", "u3"):
-        assert "ar" not in dict(editor.options(key, "language"))
+    editor = settings.Editor(file, arabic={"u1": True, "u2": False, "u3": False})
+    editor.languages = {"u1": TRANSLATED, "u2": ORIGINAL, "u3": ORIGINAL}
+    translated = dict(editor.options("u1", "language"))
+    assert list(translated)[:1] == ["ar"]                      # Arabic first
+    assert "1" not in translated and "18" in translated       # it took English (US)'s place
+    assert "2" in translated and "4" in translated             # French, German
+    assert "3" not in translated                               # Spanish: not in this (made-up) copy
+    original = dict(editor.options("u2", "language"))
+    assert "ar" not in original and "1" in original and "18" in original
     with pytest.raises(ValueError, match="Language: no choice 'ar'"):
         editor.set("u2", "language", "ar")
     editor.set("u1", "language", "ar")
     assert editor.values("u1")["language"] == "ar"
-    # The translation gone (or not found yet): the game that chose it keeps the choice, the others never had it.
-    editor.arabic = {}
-    assert "ar" in dict(editor.options("u1", "language"))
-    assert "ar" not in dict(editor.options("u3", "language"))
-    editor.set("u1", "language", "1")
-    assert "ar" not in dict(editor.options("u1", "language"))
-    # Not looked for at all: every game may choose it, as the released launcher offers it.
+    # English (US) on a copy whose translation took its file: English (UK), the real English text.
+    editor.set("u2", "language", "1")
+    editor.languages = {"u1": TRANSLATED, "u2": TRANSLATED, "u3": ORIGINAL}
+    editor.arabic = settings.arabic_available(editor.languages)
+    editor.follow_arabic()
+    assert editor.values("u2")["language"] == "18"
+    assert editor.values("u1")["language"] == "ar"
+    # Not read yet: every language may be chosen.
     assert "ar" in dict(settings.Editor(file).options("u3", "language"))
+
+
+def test_arabic_goes_and_comes_back_with_the_game_folder(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(paths, "USER_DIR", tmp_path / "user")
+    file = tmp_path / "launcher.json"
+    file.write_text(json.dumps({"games": {"u1": {"language": "ar"}, "u2": {"language": "ar"}}}), encoding="utf-8")
+    editor = settings.Editor(file, arabic={"u1": False, "u2": False, "u3": False})   # an English copy
+    assert editor.follow_arabic() == (["u1", "u2"], [])
+    assert editor.values("u1")["language"] == "1"
+    editor.set("u2", "language", "4")                                               # the player picks German
+    editor.arabic = {"u1": True, "u2": True, "u3": True}                            # back on the Arabic copy
+    assert editor.follow_arabic() == ([], ["u1"])
+    assert editor.values("u1")["language"] == "ar" and editor.values("u2")["language"] == "4"
+
+

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdlib>
+#include <string>
 
 #include "shader_recompiler/ir/basic_block.h"
 #include "shader_recompiler/ir/passes/resource_pass.h"
@@ -31,7 +32,8 @@ void SsaRewritePass(IR::Program& program);
 void SsaRepairPass(IR::Program& program);
 void PhiSimplificationPass(IR::Program& program);
 void InverseBallotEliminationPass(IR::Program& program);
-void SharedMemoryBoundsPass(IR::Program& program, const RuntimeInfo& runtime_info);
+void SharedMemoryBoundsPass(IR::Program& program, const RuntimeInfo& runtime_info,
+                            const Profile& profile);
 void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info,
                            const Profile& profile);
 void LowerHardwareIntrinsics(IR::Program& program);
@@ -62,5 +64,10 @@ void SharedMemoryToStoragePass(IR::Program& program, const RuntimeInfo& runtime_
 /// (effect_loop_clamp_pass.cpp); EffectLoopClamp tells whether a shader gets it (cache names).
 void EffectLoopClampPass(IR::Program& program);
 bool EffectLoopClamp(u64 pgm_hash);
+/// bbport (BilalReloaded 0.8.4): loop counts of the U3 cloth solvers 1c957b01 / 809864d3 capped
+/// in EffectLoopClampPass (BB_SAFE_CLOTH=0: off). SafeClothCacheTag: cache name suffix ("" for
+/// every other shader).
+bool SafeCloth(u64 pgm_hash);
+std::string SafeClothCacheTag(u64 pgm_hash);
 
 } // namespace Shader::Optimization

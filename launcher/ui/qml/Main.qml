@@ -55,6 +55,11 @@ ApplicationWindow {
             }
         }
     }
+    // Prepare shaders (Settings > GAME FILES) shows its progress on the home screen's loading layer.
+    Connections {
+        target: launcher
+        function onChanged() { if (launcher.preparingShaders && window.screen !== 0) window.screen = 0 }
+    }
     // The update's screen goes with the update.
     Connections {
         target: app

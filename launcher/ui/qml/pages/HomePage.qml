@@ -294,7 +294,7 @@ Item {
         anchors.fill: parent
         visible: launcher.loading
         gameNumber: home.game.number
-        gameTitle: home.game.name
+        gameTitle: home.game.title
         status: launcher.status
         stopArmed: home.stopArmed
         onStopRequested: { home.stopArmed = false; launcher.stop() }

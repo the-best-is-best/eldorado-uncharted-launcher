@@ -7,6 +7,7 @@
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -15,6 +16,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <string_view>
 #include <vector>
 #include <fmt/format.h>
 
@@ -29,6 +31,7 @@
 #include <windows.h>
 #endif
 #include "bbport_i18n.h"
+#include "bbport_key_layouts.h"
 #include "bbport_saves.h"
 #include "bbport_settings.h"
 #include "bbport_thumbnail.h"
@@ -42,6 +45,13 @@ extern "C" void runtime_freeze_guest(int on);
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+
+namespace Vulkan {
+// Shader and pipeline compiles since the start (vk_pipeline_cache.cpp): on the GPU thread (the ones a frame waits
+// for) and on the draw-preparation workers.
+extern std::atomic<u32> g_bb_compiles_total, g_bb_worker_compiles_total;
+extern std::atomic<u64> g_bb_compile_ns_total;
+} // namespace Vulkan
 
 // DejaVu Sans (Cyrillic), embedded (third_party/fonts, Bitstream Vera license).
 #ifdef _WIN32
@@ -115,6 +125,68 @@ const char* TI(const char* english) {
         it->second = std::string(text) + "###" + english;
     }
     return it->second.c_str();
+}
+
+// El Dorado: Arabic texts are stored joined and in display order, left to right (tools/arabic_shape.py), since ImGui
+// lays text out left to right only. A line too long for the window is cut into lines from its right end (where the
+// sentence starts), each drawn against the right edge; other languages wrap as ImGui does.
+bool HasArabic(const char* text) {
+    for (const unsigned char* c = reinterpret_cast<const unsigned char*>(text); *c; ++c) {
+        // U+0600..U+06FF (0xD8..0xDB lead bytes) and the presentation forms U+FB50..U+FEFF (0xEF 0xAD..0xBB)
+        if ((*c >= 0xD8 && *c <= 0xDB) || (*c == 0xEF && c[1] >= 0xAD && c[1] <= 0xBB)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void WrappedText(const char* text) {
+    if (!HasArabic(text)) {
+        ImGui::TextWrapped("%s", text);
+        return;
+    }
+    const float avail = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    const float left = ImGui::GetCursorPosX();
+    const auto put = [&](const std::string& line) {
+        const float w = ImGui::CalcTextSize(line.c_str()).x;
+        ImGui::SetCursorPosX(left + std::max(0.0f, avail - w));
+        ImGui::TextUnformatted(line.c_str());
+    };
+    std::string_view rest(text);
+    while (true) { // each stored line on its own (a text's own line breaks)
+        const size_t end = rest.find('\n');
+        const std::string_view stored = rest.substr(0, end);
+        std::vector<std::string_view> words;
+        for (size_t at = 0; at <= stored.size();) {
+            const size_t space = std::min(stored.find(' ', at), stored.size());
+            words.push_back(stored.substr(at, space - at));
+            at = space + 1;
+        }
+        std::string line;
+        for (auto word = words.rbegin(); word != words.rend(); ++word) { // from the sentence's start, at the right
+            std::string longer = line.empty() ? std::string(*word) : std::string(*word) + " " + line;
+            if (!line.empty() && ImGui::CalcTextSize(longer.c_str()).x > avail) {
+                put(line);
+                longer = std::string(*word);
+            }
+            line = std::move(longer);
+        }
+        put(line);
+        if (end == std::string_view::npos) {
+            break;
+        }
+        rest.remove_prefix(end + 1);
+    }
+}
+
+// TextWrapped with a printf format, through WrappedText.
+void Wrapped(const char* format, ...) {
+    char buffer[2048];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    WrappedText(buffer);
 }
 
 std::mutex imgui_mutex; // the ImGui context: window thread (input) and present thread
@@ -434,7 +506,7 @@ void Slider(const char* label, std::atomic<float>& value, float lo, float hi) {
 // A grey note that wraps at the window's edge (TextDisabled does not wrap: translated notes ran off the window).
 void TextGrey(const char* text) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
-    ImGui::TextWrapped("%s", text);
+    Wrapped("%s", text);
     ImGui::PopStyleColor();
 }
 
@@ -470,7 +542,7 @@ void CheckpointsPage() {
     default: break;
     }
 
-    ImGui::TextWrapped(T("Now: %s"), BbSaves::Describe(now).c_str());
+    Wrapped(T("Now: %s"), BbSaves::Describe(now).c_str());
     if (!BbSaves::JumpsAvailable()) {
         ImGui::Spacing();
         TextGrey(T("Checkpoint jumps are not available for this release of the game."));
@@ -478,7 +550,7 @@ void CheckpointsPage() {
     }
     if (BbSaves::Practising()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.3f, 1.0f));
-        ImGui::TextWrapped("%s", T("Practice mode: the game saves to a practice copy until you restart it. Your "
+        Wrapped("%s", T("Practice mode: the game saves to a practice copy until you restart it. Your "
                                    "own save and story save are not touched."));
         ImGui::PopStyleColor();
         static bool confirm_keep = false;
@@ -491,7 +563,7 @@ void CheckpointsPage() {
                    "save. Your save from before is kept in Save slots as \"Before the last load\"."));
         } else {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.3f, 1.0f));
-            ImGui::TextWrapped("%s", T("Make the practice save your save? The game restarts and Continue starts "
+            Wrapped("%s", T("Make the practice save your save? The game restarts and Continue starts "
                                        "there. Your save from before is kept as \"Before the last load\"."));
             ImGui::PopStyleColor();
             if (ImGui::Button(TI("Yes, keep it"))) {
@@ -517,12 +589,13 @@ void CheckpointsPage() {
         }
     }
     if (ImGui::BeginCombo(TI("Chapter"), chapter_label.c_str())) {
-        int last = -1;
+        // Each chapter once: a few checkpoints sit out of order (U3: two of chapter 12 come after chapter 13).
+        std::vector<int> shown;
         for (const auto& c : list) {
-            if (c.chapter == last) {
+            if (std::find(shown.begin(), shown.end(), c.chapter) != shown.end()) {
                 continue;
             }
-            last = c.chapter;
+            shown.push_back(c.chapter);
             const std::string label = std::to_string(c.chapter) + "  " + c.chapter_title;
             if (ImGui::Selectable(label.c_str(), c.chapter == chapter)) {
                 chapter = c.chapter;
@@ -566,7 +639,7 @@ void CheckpointsPage() {
     }
     if (!message.empty()) {
         ImGui::SameLine();
-        ImGui::TextWrapped("%s", message.c_str());
+        Wrapped("%s", message.c_str());
     }
 }
 
@@ -586,7 +659,7 @@ void SaveSlotsPage() {
         return slot.date.empty() ? std::string() : "  (" + slot.date + ")";
     };
 
-    ImGui::TextWrapped(T("Now: %s"), BbSaves::Describe(BbSaves::Current()).c_str());
+    Wrapped(T("Now: %s"), BbSaves::Describe(BbSaves::Current()).c_str());
 
     ImGui::SeparatorText(T("Story save"));
     const BbSaves::Slot& story = BbSaves::GetSlot(BbSaves::StorySlot);
@@ -594,10 +667,10 @@ void SaveSlotsPage() {
     if (!story.used) {
         TextGrey(T("Starts with the game's next save."));
     } else {
-        ImGui::TextWrapped("%s%s", BbSaves::Describe(story.checkpoint).c_str(), when(story).c_str());
+        Wrapped("%s%s", BbSaves::Describe(story.checkpoint).c_str(), when(story).c_str());
         if (away) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.3f, 1.0f));
-            ImGui::TextWrapped("%s", T("Your save has moved away from your story (Chapter Select or a new game). "
+            Wrapped("%s", T("Your save has moved away from your story (Chapter Select or a new game). "
                                        "The story save stays here until you load it, or make the current save "
                                        "your story save to keep the change."));
             ImGui::PopStyleColor();
@@ -638,7 +711,7 @@ void SaveSlotsPage() {
         ImGui::EndDisabled();
         ImGui::SameLine();
         if (slot.used) {
-            ImGui::TextWrapped("%s%s", BbSaves::Describe(slot.checkpoint).c_str(), when(slot).c_str());
+            Wrapped("%s%s", BbSaves::Describe(slot.checkpoint).c_str(), when(slot).c_str());
         } else {
             ImGui::TextDisabled("%s", T("empty"));
         }
@@ -652,7 +725,7 @@ void SaveSlotsPage() {
             pending_slot = BbSaves::UndoSlot;
         }
         ImGui::SameLine();
-        ImGui::TextWrapped(T("Before the last load: %s%s"), BbSaves::Describe(undo.checkpoint).c_str(),
+        Wrapped(T("Before the last load: %s%s"), BbSaves::Describe(undo.checkpoint).c_str(),
                            when(undo).c_str());
         ImGui::PopID();
     }
@@ -683,7 +756,7 @@ void SaveSlotsPage() {
         bool yes = !ask;
         if (ask) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.3f, 1.0f));
-            ImGui::TextWrapped("%s", question.c_str());
+            Wrapped("%s", question.c_str());
             ImGui::PopStyleColor();
             yes = ImGui::Button(TI("Yes"));
             ImGui::SameLine();
@@ -705,7 +778,7 @@ void SaveSlotsPage() {
         }
     }
     if (!message.empty()) {
-        ImGui::TextWrapped("%s", message.c_str());
+        Wrapped("%s", message.c_str());
     }
     ImGui::Spacing();
     TextGrey(T("Copies of this game's campaign save (the one Continue loads). Treasures, "
@@ -821,6 +894,21 @@ void Menu() {
            "limit counts generated frames."));
 
     ImGui::SeparatorText(T("Other"));
+    // El Dorado: whose letters the key pictures show (the keys work by place whatever is chosen).
+    {
+        const auto& layouts = BbKeyLayouts::Names();
+        const int chosen = BbKeyLayouts::Current();
+        if (ImGui::BeginCombo(TI("Key letters"), layouts[size_t(chosen)].c_str())) {
+            for (int i = 0; i < int(layouts.size()); ++i) {
+                if (ImGui::Selectable(layouts[size_t(i)].c_str(), i == chosen)) {
+                    BbKeyLayouts::Set(i);
+                }
+            }
+            ImGui::EndCombo();
+        }
+        Hint(T("The letters on the key pictures in the game: English (US), or one of the keyboards installed in "
+               "Windows. The keys work by their place either way. Kept for the next starts."));
+    }
     Checkbox(TI("FPS counter in the corner"), s.show_fps);
     ImGui::BeginDisabled(!s.show_fps);
     Checkbox(TI("Frame time graph"), s.show_fps_graph);
@@ -1270,46 +1358,108 @@ constexpr float ShotNoticeSeconds = 2.0f;
 std::atomic<long long> shot_notice_at{0}; // steady_clock ticks of the last screenshot; 0 none
 std::atomic<bool> shot_notice_on{false};
 
+// El Dorado's full-screen pages (the loading screen, the shader preparation page) in the launcher's look
+// (launcher/ui/qml/Theme.qml, LoadingOverlay.qml): the dark ground with the game's own color glowing at the top,
+// EL DORADO in gold, UNCHARTED N in the game's color, its name, and a rounded bar of its color.
+struct PageLook {
+    ImDrawList* draw;
+    ImVec2 p0, size;
+    float s, cy;
+    const char *number = "1", *title = "DRAKE'S FORTUNE";
+    int r = 0x34, g = 0xc9, b = 0x8a; // Theme.qml accentU1 / U2 / U3: jungle green, Himalayan ice blue, desert orange
+    ImFont* font = ImGui::GetFont();
+    const ImU32 gold = IM_COL32(0xde, 0xb0, 0x58, 255), ink = IM_COL32(0xee, 0xf1, 0xf6, 255),
+                dim = IM_COL32(0xae, 0xb6, 0xc3, 255), faint = IM_COL32(0x71, 0x7b, 0x8a, 255),
+                track = IM_COL32(0x2c, 0x32, 0x3d, 255);
+
+    explicit PageLook(ImDrawList* list) : draw(list) {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        p0 = viewport->Pos;
+        size = viewport->Size;
+        s = size.y / 1080.0f;
+        cy = size.y * 0.40f;
+        const char* exe = std::getenv("BB_EXE");
+        const std::string name = exe ? exe : "";
+        if (name.find("big2") != std::string::npos) {
+            number = "2", title = "AMONG THIEVES";
+            r = 0x5a, g = 0xae, b = 0xff;
+        } else if (name.find("big3") != std::string::npos) {
+            number = "3", title = "DRAKE'S DECEPTION";
+            r = 0xff, g = 0x94, b = 0x47;
+        }
+    }
+    ImU32 Accent(int alpha = 255) const {
+        return IM_COL32(r, g, b, alpha);
+    }
+    // Theme.baseTop at the top to Theme.base at the bottom; many faint rings, each a step smaller, make a smooth glow
+    // of the game's color (the launcher paints the same radial gradient).
+    void Ground() const {
+        const ImU32 top = IM_COL32(0x15, 0x19, 0x20, 255), bottom = IM_COL32(0x0c, 0x0e, 0x12, 255);
+        draw->AddRectFilledMultiColor(p0, ImVec2(p0.x + size.x, p0.y + size.y), top, top, bottom, bottom);
+        const ImVec2 glow(p0.x + size.x * 0.5f, p0.y + size.y * 0.30f);
+        for (int ring = 0; ring < 48; ++ring) {
+            draw->AddCircleFilled(glow, (760.0f - ring * 15.5f) * s, Accent(ring < 26 ? 1 : 2), 128);
+        }
+    }
+    // Text in the middle; `spacing` spreads the letters like the launcher's small capitals (Latin only).
+    void Centred(const std::string& text, float y, float px, ImU32 colour, float spacing = 0.0f) const {
+        float width = font->CalcTextSizeA(px, FLT_MAX, 0.0f, text.c_str()).x;
+        if (spacing <= 0.0f) {
+            draw->AddText(font, px, ImVec2(p0.x + (size.x - width) * 0.5f, p0.y + y), colour, text.c_str());
+            return;
+        }
+        width += spacing * float(text.size() - 1);
+        float x = p0.x + (size.x - width) * 0.5f;
+        for (const char ch : text) {
+            const char one[2] = {ch, 0};
+            draw->AddText(font, px, ImVec2(x, p0.y + y), colour, one);
+            x += font->CalcTextSizeA(px, FLT_MAX, 0.0f, one).x + spacing;
+        }
+    }
+    // EL DORADO, UNCHARTED N, the game's name and a short line of its color under it.
+    void Heading() const {
+        Centred("EL DORADO", cy - 132.0f * s, 20.0f * s, gold, 7.0f * s);
+        Centred(std::string("UNCHARTED ") + number, cy - 46.0f * s, 24.0f * s, Accent(), 6.0f * s);
+        Centred(title, cy - 8.0f * s, 66.0f * s, ink);
+        const float lw = 56.0f * s, lh = std::max(2.0f, 3.0f * s);
+        draw->AddRectFilled(ImVec2(p0.x + (size.x - lw) * 0.5f, p0.y + cy + 82.0f * s),
+                            ImVec2(p0.x + (size.x + lw) * 0.5f, p0.y + cy + 82.0f * s + lh), Accent(), lh);
+    }
+    // The rounded bar under the heading: filled to `fraction` (0..1), or with fraction < 0 a run sliding along it
+    // (`slide` 0..1 is where).
+    void Bar(float fraction, float slide = 0.0f) const {
+        const float bw = 440.0f * s, bh = std::max(4.0f, 6.0f * s);
+        const float bx = p0.x + (size.x - bw) * 0.5f, by = p0.y + cy + 150.0f * s;
+        draw->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), track, bh * 0.5f);
+        float from = bx, to = bx + bw * std::clamp(fraction, 0.0f, 1.0f);
+        if (fraction < 0.0f) {
+            const float run = bw * 0.28f, x = bx + slide * (bw + run) - run;
+            from = std::max(bx, x);
+            to = std::min(bx + bw, x + run);
+        }
+        if (to - from > 1.0f) {
+            draw->AddRectFilled(ImVec2(from, by), ImVec2(to, by + bh), Accent(), bh * 0.5f);
+        }
+    }
+};
+
 // El Dorado's loading screen: from the start until the game shows its first picture (its title screen, with its
-// music; the window is black until then): the game's name, a gold bar running along and the seconds.
+// music; the window is black until then). The launcher's look (launcher/ui/qml/Theme.qml and LoadingOverlay.qml,
+// which shows the same screen until this window is up): the dark ground with the game's own color glowing at the
+// top, EL DORADO in gold, the game's number in its color, its name, and a run of its color sliding along a track.
 void LoadingScreen() {
     if (!BbThumbnail::Loading()) {
         return;
     }
     static const auto started = std::chrono::steady_clock::now();
     const float t = std::chrono::duration<float>(std::chrono::steady_clock::now() - started).count();
-    const char* exe = std::getenv("BB_EXE");
-    const std::string name = exe ? exe : "";
-    const char *number = "1", *title = "DRAKE'S FORTUNE";
-    if (name.find("big2") != std::string::npos) {
-        number = "2", title = "AMONG THIEVES";
-    } else if (name.find("big3") != std::string::npos) {
-        number = "3", title = "DRAKE'S DECEPTION";
-    }
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImDrawList* draw = ImGui::GetForegroundDrawList();
-    const ImVec2 p0 = viewport->Pos, size = viewport->Size;
-    draw->AddRectFilled(p0, ImVec2(p0.x + size.x, p0.y + size.y), IM_COL32(18, 13, 8, 255));
-    const float s = size.y / 1080.0f;
-    ImFont* font = ImGui::GetFont();
-    const ImU32 gold = IM_COL32(222, 176, 88, 255), parchment = IM_COL32(239, 224, 191, 255),
-                dim = IM_COL32(150, 130, 98, 255);
-    const auto centred = [&](const std::string& text, float y, float px, ImU32 colour) {
-        const ImVec2 w = font->CalcTextSizeA(px, FLT_MAX, 0.0f, text.c_str());
-        draw->AddText(font, px, ImVec2(p0.x + (size.x - w.x) * 0.5f, p0.y + y), colour, text.c_str());
-    };
-    const float cy = size.y * 0.42f;
-    centred("EL DORADO", cy - 120.0f * s, 26.0f * s, gold);
-    centred(std::string("UNCHARTED ") + number, cy - 30.0f * s, 30.0f * s, gold);
-    centred(title, cy + 10.0f * s, 64.0f * s, parchment);
-    // The bar: a gold run sliding along a dark track.
-    const float bw = 520.0f * s, bh = std::max(3.0f, 5.0f * s);
-    const float bx = p0.x + (size.x - bw) * 0.5f, by = p0.y + cy + 110.0f * s;
-    draw->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), IM_COL32(52, 39, 26, 255));
-    const float run = bw * 0.25f;
-    const float x = bx + std::fmod(t * 0.55f, 1.0f) * (bw + run) - run;
-    draw->AddRectFilled(ImVec2(std::max(bx, x), by), ImVec2(std::min(bx + bw, x + run), by + bh), gold);
-    centred(T("Loading"), cy + 135.0f * s, 22.0f * s, dim);
+    const PageLook look(ImGui::GetForegroundDrawList());
+    look.Ground();
+    look.Heading();
+    // The bar: a rounded run of the game's color sliding along a rounded track, slow at the ends.
+    const float phase = std::fmod(t * 0.6f, 1.0f);
+    look.Bar(-1.0f, phase * phase * (3.0f - 2.0f * phase));
+    look.Centred(T("Loading"), look.cy + 178.0f * look.s, 20.0f * look.s, look.dim);
 }
 
 void ScreenshotNotice() {
@@ -1393,7 +1543,8 @@ bool HandleChoiceEvent(const SDL_Event& event) {
     bool erase = false;
     if (event.type == SDL_EVENT_KEY_DOWN) {
         const SDL_Keycode key = event.key.key;
-        move = key == SDLK_UP || key == SDLK_W ? -1 : key == SDLK_DOWN || key == SDLK_S ? 1 : 0;
+        const SDL_Scancode place = event.key.scancode; // W/S by place (US QWERTY), whatever the keyboard layout
+        move = key == SDLK_UP || place == SDL_SCANCODE_W ? -1 : key == SDLK_DOWN || place == SDL_SCANCODE_S ? 1 : 0;
         finish = key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE ? 1
                  : key == SDLK_ESCAPE || key == SDLK_BACKSPACE                   ? 2
                                                                                  : 0;
@@ -1840,22 +1991,11 @@ void FullScreenPreparation() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->Pos);
     ImGui::SetNextWindowSize(viewport->Size);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.055f, 0.06f, 0.07f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.85f, 0.62f, 0.25f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.16f, 0.17f, 0.19f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.047f, 0.055f, 0.071f, 1.0f));
     ImGui::Begin("##prep_screen", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
-    const float w = viewport->Size.x;
-    const float h = viewport->Size.y;
-    const auto centered = [&](const char* text, float scale, ImVec4 color) {
-        ImGui::SetWindowFontScale(scale);
-        const float tw = ImGui::CalcTextSize(text).x;
-        ImGui::SetCursorPosX((w - tw) * 0.5f);
-        ImGui::TextColored(color, "%s", text);
-    };
-    const ImVec4 white{0.95f, 0.95f, 0.95f, 1.0f};
-    const ImVec4 grey{0.62f, 0.64f, 0.67f, 1.0f};
+    const PageLook look(ImGui::GetWindowDrawList());
     const int phase = prep_phase.load(std::memory_order_acquire);
     const u32 done = prep_done.load(std::memory_order_relaxed);
     const u32 total = prep_total.load(std::memory_order_relaxed);
@@ -1866,15 +2006,11 @@ void FullScreenPreparation() {
     const bool finishing = phase == 0 && seen_step2;
     const bool between = phase == 0 && had_step && !seen_step2;  // step 1 done, step 2 not started yet
 
-    ImGui::SetCursorPosY(h * 0.36f);
-    centered(T("Preparing shaders"), 2.4f, white);
-    ImGui::Dummy(ImVec2(0.0f, 8.0f * base_scale));
-    centered(prep_rebuild.load(std::memory_order_acquire)
-                 ? T("Your graphics driver is compiling the shaders again (after a driver update or when its "
-                     "cache was cleared). The game continues when this is done.")
-                 : T("This happens once, before your first launch. Later launches start straight away."),
-             1.15f, grey);
-    ImGui::Dummy(ImVec2(0.0f, 28.0f * base_scale));
+    // The launcher's look: the game's heading, then what is prepared, the bar, the step, the count, why.
+    look.Ground();
+    look.Heading();
+    const float s = look.s, cy = look.cy;
+    look.Centred(T("Preparing shaders"), cy + 104.0f * s, 24.0f * s, look.ink);
 
     const char* step = phase == 3   ? T("Step 1 of 2: loading shaders")
                        : phase == 1 ? T("Step 1 of 2: building shaders from your game files")
@@ -1883,30 +2019,33 @@ void FullScreenPreparation() {
                                     : T("Starting...");
     const u32 scan_of = scan_total.load(std::memory_order_acquire);
     const u32 scan_at = std::min(scan_done.load(std::memory_order_relaxed), scan_of);
-    centered(scan_of ? T(ScanStep) : step, 1.2f, white);
-    ImGui::Dummy(ImVec2(0.0f, 10.0f * base_scale));
-    const float bar_w = std::min(w * 0.55f, 900.0f * base_scale);
-    ImGui::SetCursorPosX((w - bar_w) * 0.5f);
-    const float fraction = scan_of ? float(scan_at) / float(scan_of)  // the scan fills the bar on its own
-                                   : PreparationFraction(phase, done, total, finishing, between);
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::ProgressBar(fraction, ImVec2(bar_w, 22.0f * base_scale), "");
-    ImGui::Dummy(ImVec2(0.0f, 8.0f * base_scale));
+    // The bar follows the step shown under it, so it matches the count: each step fills it once.
+    const float step_part = total ? float(std::min(done, total)) / float(total) : 0.0f;
+    const float fraction = scan_of               ? float(scan_at) / float(scan_of)
+                           : finishing            ? 1.0f
+                           : between || phase == 0 ? 0.0f
+                                                   : step_part;
+    look.Bar(fraction);
+    look.Centred(scan_of ? T(ScanStep) : step, cy + 172.0f * s, 19.0f * s, look.dim);
     // the countdown only in step 2: before it the remaining time cannot be told
     const std::string count =
         scan_of ? fmt::format("{:.1f} / {:.1f} GB{}", scan_at / 1024.0, scan_of / 1024.0, ScanEta(scan_at, scan_of))
         : !finishing && total
             ? fmt::format("{} / {}{}", done, total, phase == 2 ? PreparationEta(done, total) : std::string{})
             : std::string{};
-    centered(count.c_str(), 1.1f, grey);
-    // Where it is switched off (the launcher's Advanced page). For now also the way out if a large shader cache
-    // causes trouble (temporary, while shader preparation is being polished).
-    ImGui::SetCursorPosY(h * 0.86f);
-    centered(T("If a large shader cache causes problems: in the launcher, clear the shader cache and turn off"),
-             1.0f, grey);
-    centered(T("Advanced > Shader preparation."), 1.0f, grey);
+    look.Centred(count, cy + 202.0f * s, 18.0f * s, look.faint);
+    look.Centred(prep_rebuild.load(std::memory_order_acquire)
+                     ? T("Your graphics driver is compiling the shaders again (after a driver update or when its "
+                         "cache was cleared). The game continues when this is done.")
+                     : T("This happens once, before your first launch. Later launches start straight away."),
+                 cy + 262.0f * s, 17.0f * s, look.faint);
+    // The way out if a large shader cache causes trouble.
+    look.Centred(T("If a large shader cache causes problems, clear it in the launcher:"), look.size.y * 0.88f,
+                 15.0f * s, look.faint);
+    look.Centred(T("SETTINGS > GAME FILES > Clear shader cache"), look.size.y * 0.88f + 22.0f * s, 15.0f * s,
+                 look.faint);
     ImGui::End();
-    ImGui::PopStyleColor(3);
+    ImGui::PopStyleColor(1);
 }
 
 // "PREP 37 1240 4496 2|  about 25 s left": the launcher's bar while preparing without a window (one thread, the
@@ -2118,7 +2257,9 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     if (menu_open) {
         Menu();
     }
-    if (BbSettings::Get().show_fps && !menu_open) {
+    // Not over the preparation page or the loading screen: a "0 FPS" there says nothing.
+    if (BbSettings::Get().show_fps && !menu_open && !prep_screen.load(std::memory_order_relaxed) &&
+        !BbThumbnail::Loading()) {
         FpsCounter();
     }
     if (text_entry_active) {

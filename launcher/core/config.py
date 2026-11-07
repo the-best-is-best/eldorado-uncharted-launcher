@@ -16,6 +16,7 @@ CONFIG_VERSION = 9
 
 LAUNCHER_DEFAULTS: dict[str, Any] = {"game": "u1", "diagnostics": True, "game_dir": "", "unlock": False,
                                      "job_sleep": "auto", "anisotropy": "0", "no_dof": False,
+                                     "torch_forward": True, "u3_exposure": "0", "hires_shadows": False,
                                      "check_updates": True}
 # Each game's own launcher settings. The controls (controls .. vibration) are also written into the game's ini,
 # where tools/probe_uncharted.py reads them; launcher.json keeps a copy as the released launcher does.
@@ -42,7 +43,8 @@ RESOLUTIONS: tuple[str, ...] = ("960x540", "1280x720", "1600x900", "1920x1080", 
 ASPECTS: tuple[str, ...] = ("16:10", "16:9", "21:9", "32:9")
 MAX_FPS = 120
 FPS_LIMITS: tuple[str, ...] = ("30", "40", "45", "50", "55", "60", "75", "90", "100", str(MAX_FPS))
-CHEATS: tuple[str, ...] = ("skipintro", "invincible", "ammo", "grenades", "treasures", "rewards")
+CHEATS: tuple[str, ...] = ("skipintro", "invincible", "ammo", "noreload", "grenades", "onehit", "treasures",
+                           "rewards")
 DEFAULT_GAME_DIR = paths.ROOT / "game" / "CUSA02344" / "uroot"
 
 

@@ -35,6 +35,8 @@ FILES_LAYOUT: tuple[Any, ...] = (
     ("button", "Install game update", "From the update's .pkg file (also a translation's).", "installUpdatePkg", "",
      "INSTALL"),
     ("section", "TROUBLESHOOTING"),
+    ("button", "Prepare shaders", "Prepares the three games' shaders now (a few minutes), so each game opens "
+     "straight away the first time.", "prepareShaders", "", "PREPARE"),
     ("button", "Clear shader cache", "The shaders are prepared again at the next start.", "clearShaderCache", "",
      "CLEAR"),
 )
@@ -53,6 +55,8 @@ LAUNCHER_LAYOUT: tuple[Any, ...] = (
     ("button", "Save folder", "", "openFolder", "saves", "OPEN"),
     ("button", "Screenshot folder", "", "openFolder", "screenshots", "OPEN"),
     ("section", "TROUBLESHOOTING"), "diagnostics",
+    ("button", "Problem report", "The logs and settings in one zip on your Desktop, to attach to a report.",
+     "problemReport", "", "CREATE"),
     ("button", "Reset all settings", "Back to the Medium preset and the default controls.", "resetSettings", "",
      "RESET"),
 )
@@ -67,6 +71,8 @@ _SCANCODE_NAMES: dict[int, str] = {
     **{code: name for code, name in zip(range(30, 39), "ASDFGHJKL")},
     **{code: name for code, name in zip(range(44, 51), "ZXCVBNM")},
     42: "Left Shift", 54: "Right Shift", 29: "Left Ctrl", 285: "Right Ctrl", 56: "Left Alt", 312: "Right Alt",
+    # The punctuation keys by their place too (another layout prints other characters on them).
+    12: "-", 13: "=", 26: "[", 27: "]", 43: "\\", 39: ";", 40: "'", 41: "`", 51: ",", 52: ".", 53: "/",
 }
 _K = Qt.Key
 _KEY_NAMES: dict[int, str] = {key.value: name for key, name in (
@@ -105,6 +111,14 @@ def _options(pairs: settings.Options, translate: bool = True) -> list[dict[str, 
     return [{"value": value, "label": t(label) if translate else label} for value, label in pairs]
 
 
+def _send(signal: Signal, value: object) -> None:
+    """A background look's answer; the window may have closed meanwhile (its objects are gone, nothing to tell)."""
+    try:
+        signal.emit(value)
+    except RuntimeError:
+        pass
+
+
 class SettingsModel(QObject):
     changed = Signal()
     notice = Signal(str)
@@ -134,7 +148,7 @@ class SettingsModel(QObject):
         self._capture_timer.timeout.connect(self.cancelCapture)
         self._detected.connect(self._on_detected)
         self._arabic_found.connect(self._on_arabic_found)
-        threading.Thread(target=lambda: self._detected.emit(gpu.detect()), daemon=True).start()
+        threading.Thread(target=lambda: _send(self._detected, gpu.detect()), daemon=True).start()
         self._check_arabic(config)
 
     # --- what QML reads ---------------------------------------------------------------------------------------
@@ -374,19 +388,20 @@ class SettingsModel(QObject):
         if source == self._arabic_source:
             return
         self._arabic_source = source
-        threading.Thread(target=lambda: self._arabic_found.emit((source, settings.arabic_available(config))),
+        threading.Thread(target=lambda: _send(self._arabic_found, (source, settings.copy_languages(config))),
                          daemon=True).start()
 
     def _on_arabic_found(self, packet: tuple[tuple[str, str], dict[str, bool]]) -> None:
-        source, found = packet
+        source, held = packet
         if source != self._arabic_source:
             return  # the folders changed again while this look ran; the newer look answers
-        self._editor.arabic = found
+        self._editor.languages = held
+        self._editor.arabic = settings.arabic_available(held)
         try:
-            moved = self._editor.drop_missing_arabic()
+            moved, back = self._editor.follow_arabic()
         except OSError as error:
             self.notice.emit(t("Could not save the settings: {error}", error=error))
-            moved = []
+            moved, back = [], []
         if moved:
             names = ", ".join(f"Uncharted {games.by_key(key).number}" for key in moved)
             self.notice.emit(t("This copy of the game has no Arabic translation: {games} now in English.",

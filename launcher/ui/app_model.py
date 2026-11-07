@@ -22,13 +22,16 @@ from typing import Any
 from PySide6.QtCore import Property, QCoreApplication, QObject, QTimer, QUrl, Signal, Slot
 
 from core import config as cfg
-from core import game_files, games, paths, shortcuts, steam, updater
+from core import game_files, games, paths, report, shortcuts, steam, updater
 from core.i18n import t
 
 # Errors core/ raises for the player; anything else is shown with its type (a bug, but never swallowed).
 PLAYER_ERRORS = (updater.UpdateError, game_files.GameFilesError, steam.SteamError, shortcuts.ShortcutError, OSError)
 START_CHECK_DELAY_MS = 1500
 
+
+REPORT_DONE = ("{file} is on your Desktop: attach it to your report. It holds the logs and the settings, no game "
+               "files and no saves.")
 
 class AppModel(QObject):
     changed = Signal()
@@ -238,6 +241,18 @@ class AppModel(QObject):
         self._run(t("Deleting the shader cache..."),
                   lambda: t("Shader cache cleared.") if game_files.clear_shader_cache() else
                   t("There is no shader cache."))
+
+    @Slot()
+    def problemReport(self) -> None:
+        """Settings > LAUNCHER > Problem report: the logs and settings in one zip on the Desktop, shown in Explorer."""
+        def done(target: Path) -> None:
+            self.message.emit(t(REPORT_DONE, file=target.name))
+            try:
+                import subprocess
+                subprocess.Popen(["explorer", "/select,", str(target)])
+            except OSError:
+                pass
+        self._run(t("Making the problem report..."), report.write, done)
 
     @Slot(str)
     def openFolder(self, name: str) -> None:

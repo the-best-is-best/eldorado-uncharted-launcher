@@ -116,6 +116,9 @@ void __attribute__((ms_abi)) runtime_exit_menu_u1_eu_add(uint64_t rdi, uint64_t 
 void runtime_menu_watch(int game, const unsigned char *host);
 /* True while a game's main menu is on screen (its back button then asks to close the game, runtime_pad.c). */
 int runtime_menu_at_main(void);
+/* runtime_menu_watch.c, BB_SKIP_TITLE=1: the Cross taps that move the title page and the start screens on, up to
+ * the main menu (or-ed into the pad, runtime_pad.c). */
+uint32_t runtime_continue_buttons(void);
 /* gpu/shim/window.cpp: puts the "Close the game?" question on screen (from the game's thread). */
 void bbgpu_ask_close(void);
 extern const unsigned char *volatile runtime_menu_host[3]; /* runtime_exit_menu.c: U1, U2, U3 menu hosts */

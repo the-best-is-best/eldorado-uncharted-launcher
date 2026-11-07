@@ -4,7 +4,7 @@ gpu/shim/bbport_overlay_i18n.inc (checked in: the build needs no Python), and ch
 
     python tools/make_overlay_i18n.py           writes the .inc
     python tools/make_overlay_i18n.py --check   checks only (exit 1 on a problem): every text marked in the C++
-                                                files has all six languages with the same placeholders, and the
+                                                files has the six menu languages with the same placeholders, and the
                                                 .inc is up to date
     python tools/make_overlay_i18n.py --list    prints the marked texts
     python tools/make_overlay_i18n.py --chars   prints the characters the Japanese texts use (the font subset)
@@ -18,12 +18,17 @@ import re
 import sys
 from pathlib import Path
 
+from arabic_shape import visual
+
 ROOT = Path(__file__).resolve().parent.parent
 SHIM = ROOT / 'gpu' / 'shim'
-SOURCES = [SHIM / 'bbport_overlay.cpp', SHIM / 'bbport_saves.cpp']
+SOURCES = [SHIM / 'bbport_overlay.cpp', SHIM / 'bbport_saves.cpp', SHIM / 'window.cpp']
 DATA = SHIM / 'overlay_i18n.py'
 OUTPUT = SHIM / 'bbport_overlay_i18n.inc'
-LANGUAGES = ('es', 'pt', 'fr', 'de', 'it', 'ja')  # the order bbport_i18n.cpp reads
+MENU_LANGUAGES = ('es', 'pt', 'fr', 'de', 'it', 'ja')  # every text in these
+# The launcher's other languages: only the texts over the game outside the menu (overlay_i18n.MORE).
+OTHER_LANGUAGES = ('ar', 'nl', 'da', 'no', 'sv', 'fi', 'pl', 'cs', 'el', 'ru', 'tr')
+LANGUAGES = MENU_LANGUAGES + OTHER_LANGUAGES  # the order bbport_i18n.cpp reads
 
 MARK = re.compile(r'\b(?:T|TI|N_|tr)\(\s*(?=")')
 LITERAL = re.compile(r'"((?:[^"\\\n]|\\.)*)"\s*')
@@ -79,7 +84,21 @@ def load_data():
     spec = importlib.util.spec_from_file_location('overlay_i18n', DATA)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.TRANSLATIONS
+    assert tuple(module.OTHER_LANGUAGES) == OTHER_LANGUAGES
+    data = {text: dict(row) for text, row in module.TRANSLATIONS.items()}
+    for text, row in module.MORE.items():
+        data.setdefault(text, {}).update(row)
+    # The whole menu in the launcher's other languages: one file per group (overlay_i18n_ar.py, overlay_i18n_more.py),
+    # each a MENU dict {English: {language: text}}; the rows above win where both have one.
+    for extra in sorted(SHIM.glob('overlay_i18n_*.py')):
+        spec = importlib.util.spec_from_file_location(extra.stem, extra)
+        part = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(part)
+        for text, row in part.MENU.items():
+            target = data.setdefault(text, {})
+            for lang, translated in row.items():
+                target.setdefault(lang, translated)
+    return data
 
 
 def placeholders(text):
@@ -93,7 +112,7 @@ def problems(found, data):
         if row is None:
             out.append(f'{where}: no translations for {text!r}')
             continue
-        for lang in LANGUAGES:
+        for lang in MENU_LANGUAGES:
             if not row.get(lang):
                 out.append(f'{where}: no {lang} for {text!r}')
     for text, row in data.items():
@@ -117,7 +136,9 @@ def render(data):
              '// tool. {English, ' + ', '.join(LANGUAGES) + '}; "" = not translated (English is shown).']
     for text in sorted(data):
         row = data[text]
-        cells = [c_string(text)] + [c_string(row.get(lang, '')) for lang in LANGUAGES]
+        # Arabic: joined letters in display order (tools/arabic_shape.py), as the menu draws text.
+        cells = [c_string(text)] + [c_string(visual(row.get(lang, '')) if lang == 'ar' else row.get(lang, ''))
+                                    for lang in LANGUAGES]
         lines.append('{' + cells[0] + ', {' + ', '.join(cells[1:]) + '}},')
     return '\n'.join(lines) + '\n'
 

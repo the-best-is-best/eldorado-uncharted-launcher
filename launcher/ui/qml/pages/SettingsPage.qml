@@ -83,6 +83,7 @@ Page {
     function run(action, argument) {
         if (action === "resetControls") { settings.resetControls(); return }
         if (action === "useAllGamesKeys") { settings.dropOwn(); return }
+        if (action === "prepareShaders") { launcher.prepareShaders(); return }
         if (typeof app === "undefined") return
         if (action === "openFolder") app.openFolder(argument)
         else if (action === "chooseGameFolder") app.chooseGameFolder()
@@ -94,6 +95,7 @@ Page {
         else if (action === "addToSteam") app.addToSteam(argument === "games")
         else if (action === "checkForUpdates") app.checkForUpdates()
         else if (action === "resetSettings") app.resetSettings()
+        else if (action === "problemReport") app.problemReport()
     }
     function startCapture(action, slot) {
         focusBefore = Window.activeFocusItem

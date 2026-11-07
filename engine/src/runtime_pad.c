@@ -21,6 +21,7 @@
 #include "gpu/bbgpu.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
@@ -161,15 +162,160 @@ static void pad_rumble(SDL_Gamepad *g, uint16_t low, uint16_t high, uint32_t ms)
     SDL_RumbleGamepad(g,low,high,ms);
     pad_slow("rumble",start);
 }
+/* ---- the pad thread (BB_PAD_THREAD=0: off) ------------------------------------------------------------------------
+ * Switching a controller off or on makes SDL rescan the input devices for 100-300 ms with its joystick lock held.
+ * Every SDL controller call waits for that lock: the window's event pump (which updated the controllers) and then the
+ * game's pad reads stalled, one hitch per switch (0.3.6.44, measured 190-260 ms). SDL's controller update, opening and
+ * closing the pad, reading it, rumble and the light bar now all run on a thread of their own; the game reads a copy of
+ * the pad taken after each update (at most ~2 ms old), and rumble and the light bar are requests the thread carries
+ * out. A rescan then holds up only this thread: the game keeps the last state it saw. */
+typedef struct {
+    int present, device;           /* device: the button pictures (prompts_pad_device) */
+    unsigned long long buttons;    /* bit = SDL_GamepadButton */
+    int16_t axes[SDL_GAMEPAD_AXIS_COUNT];
+    int touch_count;
+    struct { float x, y; uint8_t id; } touch[2];
+} PadSnap;
+static int pad_thread_on(void) {
+    static int value=-1;
+    if (value<0) { const char *e=getenv("BB_PAD_THREAD"); value=!(e && e[0]=='0'); }
+    return value;
+}
+static int prompts_pad_device(SDL_Gamepad *g);
+static SDL_Gamepad *current_gamepad(void);
+/* The pad's state through SDL (on the pad thread, or on the game's thread with the thread off). */
+static void pad_fill(SDL_Gamepad *g, PadSnap *s) {
+    memset(s,0,sizeof(*s));
+    if (!g) return;
+    s->present=1;
+    for (int b=0;b<SDL_GAMEPAD_BUTTON_COUNT && b<64;++b)
+        if (SDL_GetGamepadButton(g,(SDL_GamepadButton)b)) s->buttons|=1ull<<b;
+    for (int a=0;a<SDL_GAMEPAD_AXIS_COUNT;++a) s->axes[a]=SDL_GetGamepadAxis(g,(SDL_GamepadAxis)a);
+    if (SDL_GetNumGamepadTouchpads(g)>0) {
+        const int fingers=SDL_GetNumGamepadTouchpadFingers(g,0);
+        for (int finger=0;finger<fingers && s->touch_count<2;++finger) {
+            bool down=false;
+            float x=0, y=0;
+            if (SDL_GetGamepadTouchpadFinger(g,0,finger,&down,&x,&y,NULL) && down) {
+                s->touch[s->touch_count].x=x; s->touch[s->touch_count].y=y; s->touch[s->touch_count].id=(uint8_t)finger;
+                ++s->touch_count;
+            }
+        }
+    }
+    s->device=prompts_pad_device(g);
+}
+static pthread_mutex_t snap_lock=PTHREAD_MUTEX_INITIALIZER;
+static PadSnap snap_shared;
+static char snap_name[96];          /* the open pad's name (runtime_pad_report) */
+/* Requests for the thread: rumble and the light bar (a sequence number each: the latest wins). */
+static pthread_mutex_t request_lock=PTHREAD_MUTEX_INITIALIZER;
+static unsigned rumble_seq, led_seq;
+static uint16_t rumble_low, rumble_high;
+static uint32_t rumble_ms;
+static uint8_t led_rgb[3];
+static void *pad_thread_main(void *arg) {
+    (void)arg;
+    unsigned rumble_done=0, led_done=0;
+    for (;;) {
+        const uint64_t start=now_us();
+        SDL_UpdateJoysticks();
+        const uint64_t took=now_us()-start;
+        if (took>20000) {
+            static unsigned noted;
+            if (noted++<20) printf("Runtime: controller update took %.0f ms (on the pad thread; the game went on)\n",took/1000.0);
+        }
+        SDL_Gamepad *g=current_gamepad();
+        PadSnap snap;
+        pad_fill(g,&snap);
+        pthread_mutex_lock(&snap_lock);
+        snap_shared=snap;
+        if (g) { const char *name=SDL_GetGamepadName(g); snprintf(snap_name,sizeof(snap_name),"%s",name ? name : "Game controller"); }
+        else snap_name[0]=0;
+        pthread_mutex_unlock(&snap_lock);
+        pthread_mutex_lock(&request_lock);
+        const unsigned rs=rumble_seq, ls=led_seq;
+        const uint16_t low=rumble_low, high=rumble_high;
+        const uint32_t ms=rumble_ms;
+        const uint8_t r=led_rgb[0], gg=led_rgb[1], b=led_rgb[2];
+        pthread_mutex_unlock(&request_lock);
+        if (rs!=rumble_done) { rumble_done=rs; pad_rumble(g,low,high,ms); }
+        if (ls!=led_done && g && now_us()>=pad_writes_after_us) {
+            led_done=ls;
+            const uint64_t led_start=now_us();
+            SDL_SetGamepadLED(g,r,gg,b);
+            pad_slow("light bar",led_start);
+        } else if (ls!=led_done && !g) led_done=ls;
+        SDL_Delay(2);
+    }
+    return NULL;
+}
+/* Started on the first pad read once SDL's gamepad part is up; SDL's own update in the event pump is turned off
+ * (window.cpp sets the same hint before SDL starts). */
+static int pad_thread_started;
+static void pad_thread_start(void) {
+    if (pad_thread_started) return;
+    pad_thread_started=1;
+    SDL_SetHint(SDL_HINT_AUTO_UPDATE_JOYSTICKS,"0");
+    pthread_t thread;
+    if (pthread_create(&thread,NULL,pad_thread_main,NULL)==0) {
+        pthread_detach(thread);
+        printf("Runtime: controllers are updated and read on a thread of their own (BB_PAD_THREAD=0: off)\n");
+    } else {
+        SDL_SetHint(SDL_HINT_AUTO_UPDATE_JOYSTICKS,"1");
+        pad_thread_started=-1;
+        printf("Runtime: the pad thread could not start: controllers are read on the game's thread\n");
+    }
+}
+/* The pad as the game sees it this read. */
+static void pad_snapshot(PadSnap *s) {
+    if (pad_thread_on() && pad_thread_started>=0) {
+        if (!pad_thread_started) {
+            /* (sdl_ready and SDL's event watches are set up by current_gamepad, on the pad thread) */
+            if (!SDL_WasInit(SDL_INIT_GAMEPAD) && !SDL_InitSubSystem(SDL_INIT_GAMEPAD)) { memset(s,0,sizeof(*s)); return; }
+            pad_thread_start();
+        }
+        if (pad_thread_started>0) {
+            pthread_mutex_lock(&snap_lock);
+            *s=snap_shared;
+            pthread_mutex_unlock(&snap_lock);
+            return;
+        }
+    }
+    pad_fill(current_gamepad(),s);
+}
+/* Rumble and the light bar: through the thread, or at once with it off. */
+static void pad_request_rumble(uint16_t low, uint16_t high, uint32_t ms) {
+    if (pad_thread_on() && pad_thread_started>0) {
+        pthread_mutex_lock(&request_lock);
+        rumble_low=low; rumble_high=high; rumble_ms=ms; ++rumble_seq;
+        pthread_mutex_unlock(&request_lock);
+        return;
+    }
+    pad_rumble(current_gamepad(),low,high,ms);
+}
+static void pad_request_led(uint8_t r, uint8_t g, uint8_t b) {
+    if (pad_thread_on() && pad_thread_started>0) {
+        pthread_mutex_lock(&request_lock);
+        led_rgb[0]=r; led_rgb[1]=g; led_rgb[2]=b; ++led_seq;
+        pthread_mutex_unlock(&request_lock);
+        return;
+    }
+    SDL_Gamepad *pad=current_gamepad();
+    if (pad && now_us()>=pad_writes_after_us) {
+        const uint64_t start=now_us();
+        SDL_SetGamepadLED(pad,r,g,b);
+        pad_slow("light bar",start);
+    }
+}
 /* Degrees of camera turn per mouse pixel at sensitivity 1 (0.08 felt "very slow", issue #18; the
  * launcher's slider and box go from 0.1 to 10 times this). */
 #define MOUSE_DEGREES_PER_PIXEL 0.15f
 
 /* ---- bindings (input.ini) ---------------------------------------------------------------- */
-/* BIND_KEY: a physical key (SDL scancode, US position). BIND_LAYOUT: a character key the player
- * chose, found in the current keyboard layout (SDL keycode), so "Z" is the key labelled Z on an
- * AZERTY keyboard too. The default letters stay positions: WASD is ZQSD on AZERTY. */
-enum { BIND_KEY=1, BIND_MOUSE, BIND_WHEEL, BIND_LAYOUT };
+/* BIND_KEY: a physical key (SDL scancode). Every key name in input.ini, letters included, is the key
+ * at that place on a US QWERTY keyboard, whatever the Windows keyboard layout prints on it (El Dorado:
+ * an Arabic or AZERTY layout no longer moves a binding; the prompts name the US key too). */
+enum { BIND_KEY=1, BIND_MOUSE, BIND_WHEEL };
 typedef struct { uint8_t kind; int32_t code; } Bind;
 typedef struct { const char *name; uint32_t ps; const char *keys; const char *pad; } Action;
 /* The first 16 actions are the pad's buttons. touchpad_right is the touchpad click's right side (the games'
@@ -198,28 +344,13 @@ static struct {
     float mouse_sensitivity;
 } input;
 
-/* Whether `name` is one of the keys in `defaults` ("Escape|Return"). */
-static int default_key(const char *name, const char *defaults) {
-    const size_t length=strlen(name);
-    for (const char *d=defaults; d && *d; ) {
-        const char *end=strchr(d,'|');
-        const size_t n=end ? (size_t)(end-d) : strlen(d);
-        if (n==length && !SDL_strncasecmp(d,name,n)) return 1;
-        d=end ? end+1 : NULL;
-    }
-    return 0;
-}
-static Bind parse_bind(const char *name, const char *defaults) {
+static Bind parse_bind(const char *name) {
     static const struct { const char *name; uint8_t kind; int16_t code; } mouse[]={
         {"Mouse Left",BIND_MOUSE,1}, {"Mouse Right",BIND_MOUSE,2}, {"Mouse Middle",BIND_MOUSE,4},
         {"Mouse 4",BIND_MOUSE,8}, {"Mouse 5",BIND_MOUSE,16}, {"Wheel Up",BIND_WHEEL,1}, {"Wheel Down",BIND_WHEEL,-1},
     };
     for (size_t i=0;i<sizeof(mouse)/sizeof(*mouse);++i)
         if (!SDL_strcasecmp(name,mouse[i].name)) return (Bind){mouse[i].kind,mouse[i].code};
-    if (name[0]>' ' && name[0]<127 && !name[1] && !default_key(name,defaults)) {
-        const SDL_Keycode key=SDL_GetKeyFromName(name);
-        if (key!=SDLK_UNKNOWN) return (Bind){BIND_LAYOUT,(int32_t)key};
-    }
     const SDL_Scancode code=SDL_GetScancodeFromName(name);
     return code==SDL_SCANCODE_UNKNOWN ? (Bind){0,0} : (Bind){BIND_KEY,(int32_t)code};
 }
@@ -229,8 +360,8 @@ static void set_keys(int action, const char *value) {
     input.keys[action][0]=input.keys[action][1]=(Bind){0,0};
     char *second=strchr(text,'|');
     if (second) *second++=0;
-    if (*text) input.keys[action][0]=parse_bind(text,actions[action].keys);
-    if (second && *second) input.keys[action][1]=parse_bind(second,actions[action].keys);
+    if (*text) input.keys[action][0]=parse_bind(text);
+    if (second && *second) input.keys[action][1]=parse_bind(second);
 }
 static int parse_pad(const char *value) {
     if (!SDL_strcasecmp(value,"lefttrigger")) return PAD_TRIGGER_LEFT;
@@ -294,36 +425,22 @@ static uint8_t mouse_axis(float rate) {
 static int bind_down(const Bind *b, const bool *k, uint32_t mouse, uint64_t now) {
     switch (b->kind) {
     case BIND_KEY: return k && k[b->code];
-    case BIND_LAYOUT: {
-        const SDL_Scancode code=k ? SDL_GetScancodeFromKey((SDL_Keycode)b->code,NULL) : SDL_SCANCODE_UNKNOWN;
-        return code!=SDL_SCANCODE_UNKNOWN && k[code];
-    }
     case BIND_MOUSE: return (mouse & (uint32_t)b->code)!=0;
     case BIND_WHEEL: return now<wheel_until_us[b->code>0 ? 0 : 1];
     default: return 0;
     }
 }
-/* Once the keyboard is up: where the layout put each character key the player chose. */
-static void log_layout_keys(void) {
-    for (int a=0;a<ACTIONS;++a) for (int i=0;i<2;++i) {
-        const Bind *b=&input.keys[a][i];
-        if (b->kind!=BIND_LAYOUT) continue;
-        const SDL_Scancode code=SDL_GetScancodeFromKey((SDL_Keycode)b->code,NULL);
-        printf("Runtime: key.%s %s: the key labelled so in this keyboard layout (US position %s)\n",
-               actions[a].name,SDL_GetKeyName((SDL_Keycode)b->code),
-               code==SDL_SCANCODE_UNKNOWN ? "none" : SDL_GetScancodeName(code));
-    }
-}
 static int action_down(int a, const bool *k, uint32_t mouse, uint64_t now) {
     return bind_down(&input.keys[a][0],k,mouse,now) || bind_down(&input.keys[a][1],k,mouse,now);
 }
-/* The touchpad click's right side (touchpad_right): its keys, or its pad button or trigger (g is NULL
- * without a controller in the foreground). */
-static int touchpad_right_down(SDL_Gamepad *g, unsigned long long taps, const bool *k, uint32_t mouse, uint64_t now) {
+/* The touchpad click's right side (touchpad_right): its keys, or its pad button or trigger (pad is NULL
+ * without a controller in the foreground; its state as read on the pad thread). */
+static int touchpad_right_down(const PadSnap *pad, unsigned long long taps, const bool *k, uint32_t mouse,
+                               uint64_t now) {
     const int b=input.pad[A_TOUCHPAD_RIGHT];
-    if (g && b>=0 && (SDL_GetGamepadButton(g,(SDL_GamepadButton)b) || (b<64 && (taps>>b & 1ull)))) return 1;
-    if (g && (b==PAD_TRIGGER_LEFT || b==PAD_TRIGGER_RIGHT) &&
-        trigger(SDL_GetGamepadAxis(g,b==PAD_TRIGGER_LEFT ? SDL_GAMEPAD_AXIS_LEFT_TRIGGER : SDL_GAMEPAD_AXIS_RIGHT_TRIGGER))>30) return 1;
+    if (pad && b>=0 && b<64 && ((pad->buttons>>b & 1ull) || (taps>>b & 1ull))) return 1;
+    if (pad && (b==PAD_TRIGGER_LEFT || b==PAD_TRIGGER_RIGHT) &&
+        trigger(pad->axes[b==PAD_TRIGGER_LEFT ? SDL_GAMEPAD_AXIS_LEFT_TRIGGER : SDL_GAMEPAD_AXIS_RIGHT_TRIGGER])>30) return 1;
     return action_down(A_TOUCHPAD_RIGHT,k,mouse,now);
 }
 
@@ -1290,6 +1407,103 @@ static const unsigned char u2_focus_reset[]={
     0xcd,0x41,                                    /* trap: int 0x41 */
 };
 _Static_assert(sizeof(u2_focus_reset)==sizeof(u2_focus_assert_code),"same size");
+/* U2 Chapter Select weapons (issue #16, 2026-11-06): the menu's Chapter Select plays the chapter's
+ * task group (PlayTask, mode 1). PlayTask first resets the player's settings to the default set
+ * (459d0e4e: only the .45 Defender, 40 rounds) and then applies the weapon set of the task it played
+ * or its parents; a group has none. The chapter's first checkpoint applies its own set when it
+ * activates only if its tasks.bin flags carry 0x20, and the first checkpoints of chapters 8 and 13
+ * (war-temple-1-inside-temple, valley-start) do not: Nate starts with the Defender, whose model
+ * those levels never load, so it is invisible and silent (the overlay's checkpoint jump plays the
+ * checkpoint itself and gets its Beretta, rifle and grenade). Here, after PlayTask(mode 1) of a task
+ * without data (a group), the first playable task that activates gets its set as flag 0x20 would
+ * give it (when the set has a gun); once. Continue (mode 2), checkpoint restarts and jumps to a
+ * checkpoint do not arm it. Chapters it changes: 6-10, 13, 14, 18, 20, 23, 24, 26.
+ * BB_CHAPTER_WEAPONS=0: off. */
+typedef void (__attribute__((sysv_abi)) *U2ApplySettings)(uint32_t set);
+static _Atomic int u2_chapter_start; /* armed by a group's PlayTask(mode 1) */
+static int u2_chapter_weapons_on(void) {
+    static int on=-1;
+    if (on<0) { const char *e=getenv("BB_CHAPTER_WEAPONS"); on=!(e && e[0]=='0'); }
+    return on;
+}
+static void u2_chapter_play(uint64_t task, uint64_t mode) {
+    if (!u2_chapter_weapons_on() || task<0x10000) return;
+    const int group=*(const uint64_t *)(uintptr_t)(task+0x50)==0;
+    atomic_store(&u2_chapter_start,(uint32_t)mode==1 && group);
+}
+static const unsigned char u2_apply_settings_eu[]={0x55,0x48,0x89,0xe5,0x31,0xf6,0xe8,0x25,0x2c,0xfd,0xff,0x48,0x85,
+                                                   0xc0,0x74,0x12,0x48,0x8d,0x3d,0xf1,0xd9,0xb9,0x00,0xb9};
+static const unsigned char u2_apply_settings_us[]={0x55,0x48,0x89,0xe5,0xe8,0x97,0x4e,0xfb,0xff,0x48,0x85,0xc0,0x74,
+                                                   0x17,0x48,0x8b,0x30,0x48,0x85,0xf6,0x74,0x0f,0x48,0x8d};
+static void u2_chapter_activate(uint64_t task, uint64_t image, uint64_t apply, const unsigned char *code, size_t size) {
+    if (!atomic_load(&u2_chapter_start) || task<0x10000) return;
+    if (memcmp((const void *)(uintptr_t)(image+apply),code,size)) {
+        atomic_store(&u2_chapter_start,0);
+        printf("Chapter weapons: the settings function is not where expected; nothing applied\n");
+        return;
+    }
+    const unsigned char *t=(const unsigned char *)(uintptr_t)task;
+    const unsigned char *data=*(const unsigned char *const *)(t+0x50);
+    if (!data || !(*(const uint32_t *)(data+0xd0)&6)) return; /* not playable (a group): wait */
+    atomic_store(&u2_chapter_start,0);
+    const uint32_t flags=*(const uint32_t *)(t+0x48), set=*(const uint32_t *)(data+0xc8);
+    if (flags&0x20 || !set) return; /* the game applies it itself */
+    /* Only a set with a gun: some first checkpoints name the empty set (65759d0e, the unarmed openings'),
+     * where the Defender is better than nothing (chapter 12, war-escape-watertower-fight). The set: five
+     * slots {name, weapon id +8, ammo +0x10} of 0x18 bytes; guns in the first three, f114b39d = none.
+     * The lookup is the one the settings function calls (EU: (id, 0) -> set; 1.02: (id) -> &set). */
+    const unsigned char *found=NULL;
+    if (apply==0x43b7e0) {
+        found=((const unsigned char *(__attribute__((sysv_abi)) *)(uint32_t, int))(uintptr_t)(image+0x40e410))(set,0);
+    } else {
+        const unsigned char *const *p=
+            ((const unsigned char *const *(__attribute__((sysv_abi)) *)(uint32_t))(uintptr_t)(image+0xa15300))(set);
+        found=p ? *p : NULL;
+    }
+    int gun=0;
+    for (int i=0;found && i<3;++i) {
+        const uint32_t weapon=*(const uint32_t *)(found+8+0x18*i);
+        if (weapon && weapon!=0xf114b39du) gun=1;
+    }
+    if (!gun) {
+        printf("Chapter weapons: Chapter Select start at task %08x: its set %08x has no gun; the game's "
+               "default kept\n",*(const uint32_t *)(t+8),set);
+        return;
+    }
+    printf("Chapter weapons: Chapter Select start at task %08x: its weapon set %08x applied (the game "
+           "leaves the default .45 Defender there)\n",*(const uint32_t *)(t+8),set);
+    fflush(stdout);
+    ((U2ApplySettings)(uintptr_t)(image+apply))(set);
+}
+static void __attribute__((ms_abi)) u2_chapter_play_hook(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                                       const uint64_t *regs) {
+    (void)image; (void)r14; (void)regs;
+    u2_chapter_play(rdi,rsi);
+}
+static void __attribute__((ms_abi)) u2_chapter_activate_eu(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                                           const uint64_t *regs) {
+    (void)rsi; (void)r14; (void)regs;
+    u2_chapter_activate(rdi,image,0x43b7e0,u2_apply_settings_eu,sizeof(u2_apply_settings_eu));
+}
+static void __attribute__((ms_abi)) u2_chapter_activate_us(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                                           const uint64_t *regs) {
+    (void)rsi; (void)r14; (void)regs;
+    u2_chapter_activate(rdi,image,0xa60460,u2_apply_settings_us,sizeof(u2_apply_settings_us));
+}
+/* PlayTask and TaskActivate: their first 40 bytes in each release (the settings function is checked
+ * before it is called). */
+static const unsigned char u2_play_task_eu[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,
+    0x81,0xe4,0xe0,0xff,0xff,0xff,0x48,0x81,0xec,0x60,0x01,0x00,0x00,0x89,0xf3,0x49,0x89,0xfd,0x4c,0x8b,0x3d,0x11,
+    0xc0,0xa2,0x00,0x49};
+static const unsigned char u2_play_task_us[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,
+    0x81,0xe4,0xe0,0xff,0xff,0xff,0x48,0x81,0xec,0x80,0x01,0x00,0x00,0x41,0x89,0xf6,0x48,0x89,0xfb,0x4c,0x8b,0x3d,
+    0x18,0x2e,0x5f,0x00};
+static const unsigned char u2_task_activate_eu[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,
+    0x48,0x81,0xe4,0xe0,0xff,0xff,0xff,0x48,0x81,0xec,0xa0,0x02,0x00,0x00,0x49,0x89,0xfd,0x48,0x8b,0x05,0x73,0x81,
+    0xa2,0x00,0x48,0x8b,0x00};
+static const unsigned char u2_task_activate_us[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,
+    0x48,0x81,0xe4,0xe0,0xff,0xff,0xff,0x48,0x81,0xec,0xa0,0x02,0x00,0x00,0x48,0x89,0xfb,0x48,0x8b,0x05,0xbb,0xe8,
+    0x5e,0x00,0x48,0x8b,0x00};
 /* U2 "pAction != NULL" (moveactioncontroller.cpp:40): the player's move actions come from a pool
  * of 64 slots of 0x300 bytes (the object at character+0x2e8, pool at +0xf0). Two move states
  * swapping every frame (landing into a fight) keep one action each swap; at 144 fps bursts took
@@ -1502,6 +1716,41 @@ static const unsigned char u1_menu_handler_eu_code[]={0x55,0x48,0x89,0xe5,0x41,0
                                                       0x48,0x81,0xec,0xd8,0x00,0x00,0x00,0x89,0xf3,0x49,0x89,0xfe};
 static const unsigned char u1_menu_handler_us_code[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,
                                                       0x48,0x81,0xec,0xc8,0x00,0x00,0x00,0x89,0xf3,0x49,0x89,0xfe};
+/* U3 restart fall (BB_U3_PLATFORM_DELTA=0 = off). The character controller (1.02 0x1194ed0, 1.00 EU+US 0x7e0ce0;
+ * rbx = the controller) stores the motion of the platform its owner stands on for this frame: +0x90 = the platform's
+ * displacement / dt, +0xa0 its rotation (from the owner's attach struct). On a frame where the owner stands on a
+ * different platform than on the last frame, that "motion" is the jump between the two platforms' poses: at a cruise
+ * ship checkpoint restart Drake touches two spawn platforms in his first frames above ~70 fps and the controller reports
+ * ~3000 m/s and a 40 degree turn. The follow camera rides that delta and swings 16 m off; the level scripts test the
+ * camera against the level regions, drop the deck cargo for ~0.1 s, and Drake loses his floor and falls through the
+ * ship. Stepping onto another platform is not platform motion: the delta of such a frame is zero here (+0x90 xyz 0,
+ * +0xa0 identity). Hooked after the stores (1.02: lea r14, [rbx+0x10]; 1.00: lea r12, [rbx+0x10]; then lea r13,
+ * [rbx+0x20]). */
+static const unsigned char u3_platdelta_code[]={0x4c,0x8d,0x73,0x10,0x4c,0x8d,0x6b,0x20};
+static const unsigned char u3_platdelta_code_100[]={0x4c,0x8d,0x63,0x10,0x4c,0x8d,0x6b,0x20};
+static void __attribute__((ms_abi)) u3_platdelta(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14, const uint64_t *regs) {
+    (void)rdi; (void)rsi; (void)r14; (void)image;
+    static int on=-1;
+    if (on<0) { const char *e=getenv("BB_U3_PLATFORM_DELTA"); on=!(e && e[0]=='0'); }
+    if (!on) return;
+    const uint64_t ctrl=regs[0];
+    if (ctrl<0x10000) return;
+    /* the owner (handle +0xc0 slot / +0xc8 id) and its platform handle (owner +0xb8 slot, +0xc0 id) */
+    const uint64_t oslot=*(const uint64_t *)(uintptr_t)(ctrl+0xc0); const uint32_t oid=*(const uint32_t *)(uintptr_t)(ctrl+0xc8);
+    const uint64_t owner=oslot>0x10000 ? *(const uint64_t *)(uintptr_t)oslot : 0;
+    if (owner<0x10000 || !oid || *(const uint32_t *)(uintptr_t)(owner+0x7c)!=oid) return;
+    const uint64_t pslot=*(const uint64_t *)(uintptr_t)(owner+0xb8); const uint32_t pid=*(const uint32_t *)(uintptr_t)(owner+0xc0);
+    /* the last platform per owner id (owners move in memory; their id does not) */
+    static struct { uint32_t oid, pid; uint64_t pslot; } last[64];
+    int i=0, free_i=-1;
+    for (;i<64;++i) { if (last[i].oid==oid) break; if (!last[i].oid && free_i<0) free_i=i; }
+    if (i==64) { if (free_i<0) free_i=(int)(oid%64u); i=free_i; last[i].oid=oid; last[i].pid=pid; last[i].pslot=pslot; return; }
+    const int changed=last[i].pid!=pid || last[i].pslot!=pslot;
+    last[i].pid=pid; last[i].pslot=pslot;
+    if (!changed) return;
+    float *d=(float *)(uintptr_t)(ctrl+0x90), *q=(float *)(uintptr_t)(ctrl+0xa0);
+    d[0]=d[1]=d[2]=0.0f; q[0]=q[1]=q[2]=0.0f; q[3]=1.0f;
+}
 /* "Quit" in Uncharted 2's and 3's main menus (runtime_exit_menu.c): the store of the menu data's pointer after its
  * lookup (7 bytes moved) and the menu handler (13 push bytes moved), per game and code version. */
 static const unsigned char u2_eu_menu_store[]={0x49,0x89,0x86,0xa8,0x17,0x00,0x00,0x83,0x38,0x00,0x0f,0x8e};
@@ -1581,6 +1830,14 @@ static const RuntimeGuestCallback guest_callbacks[]={
      sizeof(u2_focus_reset_us),NULL,u2_focus_reset_us},
     {"U2 leg IK NaN delta (US)",0x4713b9,u2_leg_ik_assert_code_us,sizeof(u2_leg_ik_assert_code_us),
      sizeof(u2_leg_ik_zero_us),NULL,u2_leg_ik_zero_us},
+    {"U2 Chapter Select weapons: PlayTask (EU)",0x4354f0,u2_play_task_eu,sizeof(u2_play_task_eu),6,
+     u2_chapter_play_hook,NULL},
+    {"U2 Chapter Select weapons: TaskActivate (EU)",0x439390,u2_task_activate_eu,sizeof(u2_task_activate_eu),6,
+     u2_chapter_activate_eu,NULL},
+    {"U2 Chapter Select weapons: PlayTask (1.02)",0xa57dc0,u2_play_task_us,sizeof(u2_play_task_us),6,
+     u2_chapter_play_hook,NULL},
+    {"U2 Chapter Select weapons: TaskActivate (1.02)",0xa5c320,u2_task_activate_us,sizeof(u2_task_activate_us),6,
+     u2_chapter_activate_us,NULL},
     {"U2 move action pool 256 slots",0x33872c,u2_move_pool_code,sizeof(u2_move_pool_code),
      sizeof(u2_move_pool_256),NULL,u2_move_pool_256},
     {"U1 move action pool 256 slots",0x2668fe,u1_move_pool_code,sizeof(u1_move_pool_code),
@@ -1608,6 +1865,8 @@ static const RuntimeGuestCallback guest_callbacks[]={
     /* Rows with a callback added later go last: the loop stops at the first thunk the pool cannot hold
      * (install_game_callbacks), so a full pool never skips the rows above. */
     {"U1 1.02 rail vehicle gun (mouse)",0x2a9690,u1_102_rail_look_code,sizeof(u1_102_rail_look_code),6,u1_102_rail_look,NULL},
+    {"U3 platform change is not platform motion (1.02)",0x1195038,u3_platdelta_code,8,8,u3_platdelta,NULL},
+    {"U3 platform change is not platform motion (1.00)",0x7e0df8,u3_platdelta_code_100,8,8,u3_platdelta,NULL},
 };
 const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count) {
     *count=sizeof(guest_callbacks)/sizeof(*guest_callbacks);
@@ -1635,7 +1894,9 @@ static void sample_host(PadData *d) {
     d->timestamp=runtime_guest_monotonic_us(); /* the game's clock (BB_TIME_SCALE) */
     static int loaded;
     if (!loaded) { load_input(); loaded=1; }
-    SDL_Gamepad *g=current_gamepad();
+    PadSnap pad;
+    pad_snapshot(&pad);
+    int g=pad.present;   /* a controller is there (its state: pad, read on the pad thread) */
     float mdx=0, mdy=0;
     uint32_t mouse=0;
     int wheel=0, captured=bbgpu_mouse_sample(&mdx,&mdy,&mouse,&wheel);
@@ -1654,43 +1915,33 @@ static void sample_host(PadData *d) {
         if (wheel>0) wheel_until_us[0]=now+80000;
         if (wheel<0) wheel_until_us[1]=now+80000;
         const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
-    static int layout_logged;
-    if (k && !layout_logged) { layout_logged=1; log_layout_keys(); }
         /* SDL delivers gamepad events in the background too (window.cpp): the game takes them
          * only while its window is in front. */
         const unsigned long long taps=__atomic_exchange_n(&pad_taps,0ull,__ATOMIC_RELAXED);
-        if (g && !bbgpu_window_foreground()) g=NULL;
+        if (g && !bbgpu_window_foreground()) g=0;
         if (g) {
             for (int a=0;a<16;++a) {
                 const int b=input.pad[a];
-                if (b>=0 && (SDL_GetGamepadButton(g,(SDL_GamepadButton)b) || (b<64 && (taps>>b & 1ull))))
+                if (b>=0 && ((b<64 && (pad.buttons>>b & 1ull)) || (b<64 && (taps>>b & 1ull))))
                     d->buttons|=actions[a].ps;
                 else if (b==PAD_TRIGGER_LEFT || b==PAD_TRIGGER_RIGHT) {
-                    const uint8_t v=trigger(SDL_GetGamepadAxis(g,b==PAD_TRIGGER_LEFT ? SDL_GAMEPAD_AXIS_LEFT_TRIGGER
-                                                                                  : SDL_GAMEPAD_AXIS_RIGHT_TRIGGER));
+                    const uint8_t v=trigger(pad.axes[b==PAD_TRIGGER_LEFT ? SDL_GAMEPAD_AXIS_LEFT_TRIGGER
+                                                                         : SDL_GAMEPAD_AXIS_RIGHT_TRIGGER]);
                     if (v>30) d->buttons|=actions[a].ps;
                     if (actions[a].ps==BTN_L2 && v>d->l2) d->l2=v;
                     if (actions[a].ps==BTN_R2 && v>d->r2) d->r2=v;
                 }
             }
-            if (SDL_GetGamepadButton(g,SDL_GAMEPAD_BUTTON_TOUCHPAD) || (taps>>SDL_GAMEPAD_BUTTON_TOUCHPAD & 1ull))
+            if ((pad.buttons>>SDL_GAMEPAD_BUTTON_TOUCHPAD & 1ull) || (taps>>SDL_GAMEPAD_BUTTON_TOUCHPAD & 1ull))
                 d->buttons|=BTN_TOUCHPAD; /* DualSense/DS4 click */
             if ((d->buttons & BTN_L2) && !d->l2) d->l2=255;
             if ((d->buttons & BTN_R2) && !d->r2) d->r2=255;
-            d->left_x=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTX)); d->left_y=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTY));
-            d->right_x=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTX)); d->right_y=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTY));
+            d->left_x=axis(pad.axes[SDL_GAMEPAD_AXIS_LEFTX]); d->left_y=axis(pad.axes[SDL_GAMEPAD_AXIS_LEFTY]);
+            d->right_x=axis(pad.axes[SDL_GAMEPAD_AXIS_RIGHTX]); d->right_y=axis(pad.axes[SDL_GAMEPAD_AXIS_RIGHTY]);
             if (input.pad_invert_y) d->right_y=(uint8_t)(255-d->right_y);
-            if (SDL_GetNumGamepadTouchpads(g)>0) {
-                const int fingers=SDL_GetNumGamepadTouchpadFingers(g,0);
-                for (int finger=0;finger<fingers && d->touch_count<2;++finger) {
-                    bool down=false;
-                    float x=0, y=0;
-                    if (SDL_GetGamepadTouchpadFinger(g,0,finger,&down,&x,&y,NULL) && down) {
-                        d->touches[d->touch_count++]=(PadTouch){.x=touch_axis(x,1919),
-                            .y=touch_axis(y,942),.id=(uint8_t)finger};
-                    }
-                }
-            }
+            for (int t=0;t<pad.touch_count && d->touch_count<2;++t)
+                d->touches[d->touch_count++]=(PadTouch){.x=touch_axis(pad.touch[t].x,1919),
+                    .y=touch_axis(pad.touch[t].y,942),.id=pad.touch[t].id};
         }
     /* The device used last picks the button prompts: the game's PlayStation buttons or pictures
      * of the bound keys (bbgpu_prompts_controller). A stick counts past half way, the mouse when
@@ -1701,12 +1952,12 @@ static void sample_host(PadData *d) {
     for (int a=0;a<ACTIONS && !keys_used;++a) keys_used=action_down(a,k,mouse,now);
     static int prompts_device=-1;
     if (pad_used!=keys_used) {
-        const int device=pad_used ? prompts_pad_device(g) : 0;
+        const int device=pad_used ? pad.device : 0;
         if (device!=prompts_device) {
             prompts_device=device;
             bbgpu_prompts_controller(device);
             keyboard_in_use=device==0;
-            if (keyboard_in_use && g) pad_rumble(g,0,0,0); /* the pad put down stops shaking */
+            if (keyboard_in_use && g) pad_request_rumble(0,0,0); /* the pad put down stops shaking */
         }
     }
         /* Keyboard and mouse, together with the controller. */
@@ -1714,7 +1965,7 @@ static void sample_host(PadData *d) {
         if (d->buttons & BTN_L2) d->l2=255;
         if (d->buttons & BTN_R2) d->r2=255;
         // The touchpad button without a finger on a touch surface is a left-side click; touchpad_right the right one.
-        if (touchpad_right_down(g,taps,k,mouse,now)) touch_click(d,1);
+        if (touchpad_right_down(g ? &pad : NULL,taps,k,mouse,now)) touch_click(d,1);
         else if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
         const int lx=action_down(A_LS_RIGHT,k,mouse,now)-action_down(A_LS_LEFT,k,mouse,now);
         const int ly=action_down(A_LS_DOWN,k,mouse,now)-action_down(A_LS_UP,k,mouse,now);
@@ -1978,6 +2229,7 @@ static void sample(PadData *d) {
     read_inject();
     replay_sample(d);
     d->buttons|=injected.buttons;
+    d->buttons|=runtime_continue_buttons(); /* BB_SKIP_TITLE: past the start page (runtime_menu_watch.c) */
     {
         /* El Dorado: Circle (back, whatever key or button it is bound to) on the main menu asks "Close the game?"
          * instead of going back to the title page, which never sees the press (runtime_menu_watch.c). */
@@ -2084,7 +2336,7 @@ static ABI int32_t pad_info(int32_t handle, ControllerInfo *info) {
     info->dead_zone_left=info->dead_zone_right=2;
     info->connection_type=0; info->connected=1; info->device_class=0;
     pthread_mutex_lock(&lock);
-    current_gamepad();
+    if (!(pad_thread_on() && pad_thread_started>0)) current_gamepad();
     info->connected_count=connected_count ? connected_count : 1;
     pthread_mutex_unlock(&lock);
     return 0;
@@ -2093,12 +2345,11 @@ static ABI int32_t pad_vibration(int32_t handle, const uint8_t *param) {
     if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
     if (!param) return ERR_INVALID_ARG;
     pthread_mutex_lock(&lock);
-    SDL_Gamepad *g=input.pad_vibration && !keyboard_in_use ? current_gamepad() : NULL;
-    if (g) {
+    if (input.pad_vibration && !keyboard_in_use) {
         const unsigned strength=(unsigned)input.pad_vibration_strength;
         const uint16_t low=(uint16_t)((param[0]*257u*strength+50u)/100u);
         const uint16_t high=(uint16_t)((param[1]*257u*strength+50u)/100u);
-        pad_rumble(g,low,high,1000);
+        pad_request_rumble(low,high,1000);
     }
     pthread_mutex_unlock(&lock);
     return 0;
@@ -2106,12 +2357,7 @@ static ABI int32_t pad_vibration(int32_t handle, const uint8_t *param) {
 /* Light bar {r, g, b}: shown on controllers that have one (DualShock 4, DualSense). */
 static void set_led(uint8_t r, uint8_t g, uint8_t b) {
     pthread_mutex_lock(&lock);
-    SDL_Gamepad *pad=current_gamepad();
-    if (pad && now_us()>=pad_writes_after_us) {
-        const uint64_t start=now_us();
-        SDL_SetGamepadLED(pad,r,g,b);
-        pad_slow("light bar",start);
-    }
+    pad_request_led(r,g,b);
     pthread_mutex_unlock(&lock);
 }
 static ABI int32_t pad_light_bar(int32_t handle, const uint8_t *rgb) {
@@ -2138,7 +2384,17 @@ static const RuntimeExport exports[]={
     {"scePadSetLightBar",pad_light_bar}, {"scePadResetLightBar",pad_reset_light_bar},
 };
 uintptr_t runtime_pad_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
-void runtime_pad_report(void) { printf("Runtime: pad reads=%zu, gamepad=%s\n",reads,gamepad ? SDL_GetGamepadName(gamepad) : "none"); }
+void runtime_pad_report(void) {
+    if (pad_thread_on() && pad_thread_started>0) {
+        char name[sizeof(snap_name)];
+        pthread_mutex_lock(&snap_lock);
+        snprintf(name,sizeof(name),"%s",snap_name[0] ? snap_name : "none");
+        pthread_mutex_unlock(&snap_lock);
+        printf("Runtime: pad reads=%zu, gamepad=%s\n",reads,name);
+        return;
+    }
+    printf("Runtime: pad reads=%zu, gamepad=%s\n",reads,gamepad ? SDL_GetGamepadName(gamepad) : "none");
+}
 
 /* A loader command used by the launcher before the game starts: no Vulkan or guest memory. */
 int runtime_pad_tool(int test, int strength) {

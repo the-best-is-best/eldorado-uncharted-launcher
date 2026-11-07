@@ -9,7 +9,10 @@
 
 namespace {
 
-constexpr const char* languages[] = {"es", "pt", "fr", "de", "it", "ja"};
+// The menu's six, then the launcher's others (only the texts over the game outside the menu: the close question,
+// the save list, the loading screen). Arabic rows are stored joined, in display order (tools/arabic_shape.py).
+constexpr const char* languages[] = {"es", "pt", "fr", "de", "it", "ja", "ar", "nl", "da",
+                                     "no", "sv", "fi", "pl", "cs", "el", "ru", "tr"};
 constexpr int language_count = sizeof(languages) / sizeof(languages[0]);
 
 struct Row {

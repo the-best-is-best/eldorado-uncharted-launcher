@@ -17,8 +17,18 @@ from core.i18n import t
 from ui import windows
 from ui.saves_model import picture_url, shown
 
-# The start script's lines worth showing under PLAY while the game prepares (the rest is for the log).
-STATUS_PREFIXES = ("Prepar", "Shader", "Starting", "Linking", "Patching")
+# The start script's lines worth showing while the game prepares, as a sentence in the launcher's language (the
+# lines themselves are for the log).
+SHADERS_TEXT = "Preparing the shaders..."
+PREPARING_TEXT = "Preparing the game..."
+# The launcher's Prepare shaders (Settings > GAME FILES): each game's shaders with no window, one game after another.
+PREPARE_TEXT = "Preparing the shaders of {game}: {percent}%"
+PREPARE_START_TEXT = "Preparing the shaders of {game}..."
+PREPARED_TEXT = "The shaders of the three games are ready: the games start straight away."
+PREPARE_FAILED_TEXT = "The shaders of {game} could not be prepared (code {code})."
+STATUS_TEXTS = (SHADERS_TEXT, PREPARING_TEXT, PREPARE_TEXT, PREPARE_START_TEXT, PREPARED_TEXT, PREPARE_FAILED_TEXT)
+STATUS_LINES = (("Shader", SHADERS_TEXT), ("Prepar", PREPARING_TEXT), ("Starting", PREPARING_TEXT),
+                ("Linking", PREPARING_TEXT), ("Patching", PREPARING_TEXT))
 LOG_ROWS = 5           # the expedition log's length
 NO_SAVE = "No save yet. The expedition starts here."
 NO_WINDOW_NOTE = "The log is analysis\\uncharted-user\\launcher-last-run.log."
@@ -57,6 +67,9 @@ class Launcher(QObject):
         self._game_window = False
         self._switching = False      # the Collection menu starts another game: no window for a while
         self._stopping = False       # STOP pressed: the exit code it causes is not an error
+        self._prepare_queue: list[str] = []  # Prepare shaders: the games still to prepare after this one
+        self._preparing = ""                 # the game whose shaders are being prepared ("" when none)
+        self._chosen_before = ""             # the chosen game, shown again when the preparation ends
         self._started = 0.0
         # Started with --play: no window, the launcher ends with the game.
         self._direct = False
@@ -203,6 +216,39 @@ class Launcher(QObject):
         self._watch.start()
         self.changed.emit()
 
+    @Slot()
+    def prepareShaders(self) -> None:
+        """Settings > GAME FILES > Prepare shaders: the three games' shaders, one game after another, with no window
+        (the start's own preparation page then has nothing left to do). The home screen's loading layer shows each
+        game and its progress; STOP ends it."""
+        if self._session is not None:
+            return
+        self._chosen_before = self._selected
+        self._prepare_queue = list(games.KEYS)
+        self._prepare_next()
+
+    def _prepare_next(self) -> None:
+        key = self._prepare_queue.pop(0)
+        self._config = cfg.Config.load()
+        game = games.by_key(key)
+        try:
+            self._session = launch.Session(self._config, game, self._line.emit, self._ended.emit, prepare=True)
+        except launch.LaunchError as error:
+            self._prepare_queue, self._preparing = [], ""
+            self.message.emit(str(error))
+            return
+        self._preparing = key
+        self._selected = key  # the loading layer shows the game being prepared (not kept as the chosen one)
+        self._started = time.time()
+        self._stopping = False
+        self._switching = False
+        self._status = t(PREPARE_START_TEXT, game=game.name)
+        self.changed.emit()
+
+    @Property(bool, notify=changed)
+    def preparingShaders(self) -> bool:
+        return bool(self._preparing)
+
     def play_direct(self, key: str) -> None:
         """--play u1|u2|u3 (desktop and Steam shortcuts): the game starts at once with the saved settings."""
         self._direct = True
@@ -241,15 +287,26 @@ class Launcher(QObject):
     # --- the running game ---------------------------------------------------------------------------------------
 
     def _on_line(self, line: str) -> None:
+        if self._preparing:
+            # "PREP 37 1240 4496 2|  about 25 s left": the whole preparation's percent first.
+            if line.startswith("PREP "):
+                parts = line[5:].split(" ", 1)
+                if parts and parts[0].isdigit():
+                    self._status = t(PREPARE_TEXT, game=games.by_key(self._preparing).name,
+                                     percent=min(100, int(parts[0])))
+                    self.changed.emit()
+            return
         switched = launch.switched_game(line)
         if switched is not None:
             # The first game's window closes seconds before the next one's is up: the launcher stays aside.
             self._switching = True
             self._status = t("Switching to {game}...", game=switched.name)
             self.changed.emit()
-        elif line.startswith(STATUS_PREFIXES):
-            self._status = line[:120]
-            self.changed.emit()
+        else:
+            shown_now = next((t(text) for start, text in STATUS_LINES if line.startswith(start)), None)
+            if shown_now and shown_now != self._status:
+                self._status = shown_now
+                self.changed.emit()
 
     def _on_ended(self, code: int) -> None:
         self._session = None
@@ -257,6 +314,9 @@ class Launcher(QObject):
         self._game_window = False
         self._switching = False
         stopped, self._stopping = self._stopping, False
+        if self._preparing:
+            self._prepare_ended(code, stopped)
+            return
         if self._direct:
             QCoreApplication.exit(code)
             return
@@ -269,6 +329,25 @@ class Launcher(QObject):
                 t("The game stopped unexpectedly (code {code}).", code=code)
             self.message.emit(reason or t("The game ended with code {code}.", code=code) + "\n\n" +
                               t(NO_WINDOW_NOTE))
+        self.refresh()
+
+    def _prepare_ended(self, code: int, stopped: bool) -> None:
+        """One game's preparation ended: the next game, or back to the chosen game with the outcome."""
+        game = games.by_key(self._preparing)
+        if code == 0 and not stopped and self._prepare_queue:
+            self._prepare_next()
+            return
+        self._preparing, self._prepare_queue = "", []
+        if self._chosen_before:
+            self._selected = self._chosen_before
+        if stopped:
+            self._status = ""
+        elif code == 0:
+            self._status = t(PREPARED_TEXT)
+            self.message.emit(t(PREPARED_TEXT))
+        else:
+            self._status = t(PREPARE_FAILED_TEXT, game=game.name, code=code)
+            self.message.emit(t(PREPARE_FAILED_TEXT, game=game.name, code=code) + "\n\n" + t(NO_WINDOW_NOTE))
         self.refresh()
 
     def _check_game_window(self) -> None:

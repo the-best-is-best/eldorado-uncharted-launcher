@@ -37,11 +37,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import discord_presence  # noqa: E402
 from game_update_view import game_with_update  # noqa: E402
-from arabic_language import find_arabic_language  # noqa: E402
+from text_languages import LANGUAGE_IDS, cached_text_languages  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE = ROOT / "engine"
 USER = ROOT / "analysis" / "uncharted-user"
+STOP_FILE = USER / "stop-request"  # the launcher's STOP (gpu/shim/window.cpp closes the game)
 EXECUTABLES = ("eboot.bin", "big2-ps4_Shipping.elf", "big3-ps4_Shipping.elf")
 GAME_KEYS = {"eboot.bin": "u1", "big2-ps4_Shipping.elf": "u2", "big3-ps4_Shipping.elf": "u3"}
 LOG_DIRS = {"u1": "uncharted", "u2": "big2-ps4_Shipping", "u3": "big3-ps4_Shipping"}
@@ -80,6 +81,12 @@ REWARD_POKES = {"u2": "1114178:b=1,1114179:b=1", "u3": "17b2a94:b=1,17b2a95:b=1"
 # Infinite grenades: Uncharted 3's own debug switch "Infinite Grenades" (1.02 image offset), kept set the same way.
 # Uncharted 1 and 2 have no such switch: their throw's ammo use is patched out (engine/scripts/cheats.py).
 GRENADE_POKES = {"u3": "17faa92:b=1"}
+# The games' other debug switches the launcher offers (1.02 image offsets, kept set the same way): "No Reload"
+# (Uncharted 2 and 3), "One Hit Kills" (Uncharted 3; Uncharted 1 and 2 have no such switch) and the render setting
+# "hi-res local (lamp / torch) shadow buffer" (Uncharted 2 and 3, PS4 default off, ~0% FPS; U1 not mapped).
+CHEAT_POKES = {"rewards": REWARD_POKES, "grenades": GRENADE_POKES,
+               "noreload": {"u2": "104f84b:b=1", "u3": "17faa93:b=1"}, "onehit": {"u3": "17fab94:b=1"}}
+HIRES_SHADOW_POKES = {"u2": "1247d04:b=1", "u3": "18c6444:b=1"}
 # Mouse button names: the settings file's (GOW3_MOUSE_MAP) to the engine's input.ini names.
 MOUSE_NAMES = {"left": "Mouse Left", "right": "Mouse Right", "middle": "Mouse Middle", "x1": "Mouse 4",
                "x2": "Mouse 5", "wheel_up": "Wheel Up", "wheel_down": "Wheel Down"}
@@ -303,17 +310,21 @@ def shader_environment(env, game, game_dir, executable):
             env[variable] = str(lists.with_name(name))
 
 
-def arabic_text_file(game_dir, game):
-    """The launcher's "Arabic": the number of the game's text file that holds the translation, or None (English)."""
+def language_text_file(game_dir, game, language):
+    """The text file holding the launcher's language for this game in this copy, or None (the game's own choice)."""
     try:
-        found = find_arabic_language(game_dir, game, USER / "arabic-language.json")
+        held = cached_text_languages(game_dir, game, USER / "text-languages.json")
     except Exception as error:  # a damaged archive never keeps the game from starting
-        print(f"Arabic: {game}: the texts could not be read ({error}); English is used")
+        print(f"Languages: {game}: the texts could not be read ({error}); the game's own language is used")
         return None
-    if not found:
-        print(f"Arabic: {game}: no Arabic translation in this copy (install it with Install from .pkg); English is used")
-        return None
-    print(f"Arabic: {game}: the translation is text file {found}")
+    code = LANGUAGE_IDS.get(language)
+    found = held.get(code) if code else None
+    if language == "ar":
+        if found:
+            print(f"Arabic: {game}: the translation is text file {found}")
+        else:
+            print(f"Arabic: {game}: no Arabic translation in this copy (install it with Install from .pkg); English is used")
+            found = held.get("en-US") or held.get("en-GB")
     return found
 
 
@@ -398,10 +409,12 @@ def game_environment(args, game, executable, game_dir):
     arabic_cheats = []  # games set to Arabic: the patch that loads the translation's text file (cheats.py text<n>)
     for key in GAME_KEYS.values():
         language = os.environ.get(f"UNCHARTED_LANGUAGE_{key.upper()}", shared)
-        if language == "ar":
-            text_file = arabic_text_file(game_dir, key)
-            if text_file:
-                arabic_cheats.append(f"{key}:text{text_file}")
+        # The text file of the chosen language in this copy, read from the files themselves: the game then shows
+        # that language whatever its own table or its main menu (Square) would pick, and a translation is the
+        # language of the file it took (tools/text_languages.py).
+        text_file = language_text_file(game_dir, key, language)
+        if text_file:
+            arabic_cheats.append(f"{key}:text{text_file}")
         env[f"BB_LANGUAGE_{key.upper()}"] = language if language.isdigit() else "1"
     env["BB_LANGUAGE"] = env[f"BB_LANGUAGE_{game.upper()}"]
     # Each game's loading icon for its window and taskbar button: taken by the engine from the game's first loading
@@ -419,7 +432,9 @@ def game_environment(args, game, executable, game_dir):
     if env_flag("UNCHARTED_UNLOCK"):
         env["BB_UNLOCK_CHAPTERS"] = "1"
     env["BB_OFFLINE_NPID"] = "1"
-    env["BB_UI_LANGUAGE"] = "en"
+    # The launcher's language for the engine's own texts (close question, save list, loading screen); the engine
+    # shows English for one it lacks.
+    env["BB_UI_LANGUAGE"] = os.environ.get("UNCHARTED_UI_LANGUAGE", "en") or "en"
     env["BB_FREEZE_DUMP_SECONDS"] = "30"
     env["BB_BUTTON_PROMPTS"] = ini.get("prompts", "auto") if ini.get("prompts", "auto") in ("auto", "keyboard", "playstation", "xbox") else "auto"
     try:
@@ -429,21 +444,36 @@ def game_environment(args, game, executable, game_dir):
     except ValueError:
         pass
     cheats = [c.strip() for c in os.environ.get("UNCHARTED_CHEATS", "").split(",") if c.strip()]
+    # Code patches of the launcher's options (engine/scripts/cheats.py, 1.02 code only; it skips any other build):
+    # Uncharted 2's torch light along the torch (on unless UNCHARTED_TORCH_FORWARD=0), Uncharted 3's exposure.
+    option_cheats = [] if os.environ.get("UNCHARTED_TORCH_FORWARD", "1") == "0" else ["u2:torch"]
+    try:
+        exposure = max(-2.0, min(1.0, float(os.environ.get("UNCHARTED_U3_EXPOSURE", "0").strip() or 0)))
+    except ValueError:
+        exposure = 0.0
+    if abs(exposure) >= 0.05:
+        option_cheats.append(f"u3:exposure{exposure:+.2f}")
     env["BB_CHEATS"] = ",".join([f"{g}:{CHEAT_NAMES[c]}" for g in ("u1", "u2", "u3") for c in cheats if c in CHEAT_NAMES]
-                                + arabic_cheats)
+                                + option_cheats + arabic_cheats)
     if "devmode" in cheats:
         env["BB_DEV_MENU"] = "1"
     if "treasures" in cheats:  # the games' own Dev Menu "Give all Treasures", once a start (runtime_checkpoint.c)
         env["BB_GIVE_TREASURES"] = "1"
     pokes = {}
-    if "rewards" in cheats:
-        for key, value in REWARD_POKES.items():
+    for name, table in CHEAT_POKES.items():
+        if name in cheats:
+            for key, value in table.items():
+                pokes.setdefault(key, []).append(value)
+    if env_flag("UNCHARTED_HIRES_SHADOWS"):
+        for key, value in HIRES_SHADOW_POKES.items():
             pokes.setdefault(key, []).append(value)
-    if "grenades" in cheats:
-        for key, value in GRENADE_POKES.items():
-            pokes.setdefault(key, []).append(value)
+    # The offsets are update 1.02's: a game of another build gets none (a write there would hit other data).
     for key, values in pokes.items():
-        env[f"BB_POKE_{key.upper()}"] = ",".join(values)
+        executable = next(name for name, game_key in GAME_KEYS.items() if game_key == key)
+        if GAME_CODE.get(executable_hash(game_dir / executable)) == "1.02":
+            env[f"BB_POKE_{key.upper()}"] = ",".join(values)
+        else:
+            print(f"Cheats: {key}: memory switches need update 1.02 of the game (not used)")
     # Skip intro (the launcher's cheat, on by default): the boot logo movie of all three games (runtime_file.c).
     if "skipintro" in cheats:
         env.setdefault("BB_SKIP_INTRO", "1")
@@ -462,6 +492,22 @@ def game_environment(args, game, executable, game_dir):
         env["BB_DRAW_PIPE"] = "0"
     profile = os.environ.get(f"UNCHARTED_SAVE_PROFILE_{game.upper()}", "1")
     env[f"BB_USER_ID_{game.upper()}"] = profile if profile.isdigit() and 1 <= int(profile) <= 16 else "1"
+    # Straight to the game's main menu: the engine taps through the title page ("Press ... to begin") and stops at
+    # the first menu (runtime_menu_watch.c). Not with the collection menu first (its taps would pick a game there);
+    # a game the collection menu switches to gets it from run.py.
+    collection_menu = executable == "eboot.bin" and args.collection_menu
+    if not collection_menu:
+        env["BB_SKIP_TITLE"] = "1"
+    else:
+        env.pop("BB_SKIP_TITLE", None)
+    # The launcher's STOP: it writes this file and the game closes the usual way, keeping the shader cache's last
+    # writes (gpu/shim/window.cpp); the launcher ends it itself when that takes too long.
+    env["BB_STOP_FILE"] = str(STOP_FILE)
+    # The launcher's Prepare shaders: no window and no game, the progress as PREP lines (the engine's
+    # BB_PREPARE_ONLY); the same cache and lists as a start.
+    if env_flag("UNCHARTED_PREPARE_ONLY", "0"):
+        env["BB_PREPARE_ONLY"] = "1"
+        env.pop("BB_SKIP_TITLE", None)
     if env_flag("UNCHARTED_DIAGNOSTICS", "1"):
         env["BB_FRAME_STATS"] = "1"
     # Scripted input (tools/drive_game.py) only when asked: the engine then ignores the keyboard and the pad.
@@ -683,20 +729,32 @@ class PlayStats:
             print(f"Play stats: not saved ({error})")
 
 
-def migrate_trophy_logs():
-    """The old engine kept unlocks in trophy/trophy0N.txt; this one in trophy/<NP id>.log (same lines):
-    the old ones are merged in once (the old file is renamed *.migrated)."""
+def _trophy_unlock_id(line):
+    """The trophy number of an unlock line ("<number> <time>"), or None for a broken line."""
+    part = line.split()
+    return part[0] if len(part) >= 2 and part[0].isdigit() and part[1].isdigit() else None
+
+
+def migrate_trophy_logs(user=None):
+    """The old engine kept unlocks in trophy/trophy0N.txt; this one in trophy/<NP id>.log (same "id time"
+    lines): the old ones are merged in once, one line per trophy (the old file is renamed *.migrated).
+    Same rules as launcher/core/trophies.py migrate_old_logs()."""
+    user = user or USER
     ids = {"trophy01.txt": "NPWR09798_00", "trophy02.txt": "NPWR09799_00", "trophy03.txt": "NPWR09801_00"}
     for old_name, npcommid in ids.items():
-        old = USER / "trophy" / old_name
+        old = user / "trophy" / old_name
         if not old.is_file():
             continue
         try:
-            new = USER / "trophy" / f"{npcommid}.log"
+            new = user / "trophy" / f"{npcommid}.log"
             have = new.read_text(encoding="utf-8", errors="replace") if new.is_file() else ""
-            seen = {line.split()[0] for line in have.splitlines() if line.split()}
-            lines = [line.strip() for line in old.read_text(encoding="utf-8", errors="replace").splitlines()
-                     if len(line.split()) >= 2 and line.split()[0].isdigit() and line.split()[0] not in seen]
+            seen = {_trophy_unlock_id(line) for line in have.splitlines()} - {None}
+            lines = []
+            for line in old.read_text(encoding="utf-8", errors="replace").splitlines():
+                number = _trophy_unlock_id(line)
+                if number is not None and number not in seen:
+                    seen.add(number)
+                    lines.append(line.strip())
             if lines:
                 with new.open("a", encoding="utf-8", newline="\n") as log:
                     if have and not have.endswith("\n"):
@@ -727,7 +785,9 @@ def run(args, game, executable, game_dir):
                   "# language (launcher -> engine): " + ", ".join(
                       f"{key} {os.environ.get('UNCHARTED_LANGUAGE_' + key.upper(), '-')} -> "
                       f"{env.get('BB_LANGUAGE_' + key.upper(), '-')}" for key in GAME_KEYS.values())
-                  + f"; cheats {env.get('BB_CHEATS', '') or 'none'}\n").encode("utf-8")
+                  + f"; cheats {env.get('BB_CHEATS', '') or 'none'}\n"
+                  + ("# Straight to the main menu (BB_SKIP_TITLE=1)\n"
+                     if env.get("BB_SKIP_TITLE") == "1" else "")).encode("utf-8")
         log.write(header)
         try:
             process = subprocess.Popen(command, cwd=str(ENGINE), env=env, stdin=subprocess.DEVNULL,
@@ -741,9 +801,12 @@ def run(args, game, executable, game_dir):
                    "started_unix_ns": time.time_ns(), "active": True}
         (out / "boot.running.json").write_text(json.dumps(running, indent=2), encoding="utf-8")
         timed_out = False
+        STOP_FILE.unlink(missing_ok=True)
         stats = PlayStats(game)
         presence = discord_presence.Presence(USER)
-        presence.start(game)
+        preparing = env.get("BB_PREPARE_ONLY") == "1"  # no game is played: no presence, no play time
+        if not preparing:
+            presence.start(game)
         last_prep = 0.0
         deadline = started + args.seconds if args.seconds else None
         # The pipe is read to its end, not until run.py exits: a game that restarts itself ("Apply and
@@ -751,7 +814,7 @@ def run(args, game, executable, game_dir):
         for raw in iter(process.stdout.readline, b""):
             line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
             if line.startswith("PREP "):
-                if time.monotonic() - last_prep >= 5.0:
+                if time.monotonic() - last_prep >= 1.0:  # the launcher's progress, once a second
                     last_prep = time.monotonic()
                     print(line, flush=True)
                 continue
@@ -770,7 +833,8 @@ def run(args, game, executable, game_dir):
                 job.terminate()
                 process.kill()
         code = process.wait()
-    stats.save()
+    if not preparing:
+        stats.save()
     presence.stop()
     job.terminate()  # nothing left: a restart chain that outlived the pipe would be a stray
     result.update(exit_code=code, timed_out=timed_out, elapsed_seconds=round(time.monotonic() - started, 3))

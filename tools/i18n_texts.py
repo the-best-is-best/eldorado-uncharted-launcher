@@ -51,7 +51,10 @@ TABLES: dict[str, tuple[str, ...]] = {
     "core/profiles.py": ("NO_NAME", "SAME_NAME", "NO_PROFILE", "TOO_MANY"),
     "ui/settings_model.py": ("FILES_LAYOUT", "LAUNCHER_LAYOUT", "CAPTURE_HINT", "CHEATS_NOTE", "CREDITS"),
     "ui/saves_model.py": ("VIEW_NAMES", "VIEW_LINES", "ACCEPT_HINTS", "REMOVE_HINTS", "ARMED_NOTES"),
-    "ui/bridge.py": ("NO_SAVE", "NO_WINDOW_NOTE"),
+    "ui/bridge.py": ("NO_SAVE", "NO_WINDOW_NOTE", "SHADERS_TEXT", "PREPARING_TEXT", "PREPARE_TEXT",
+                     "PREPARE_START_TEXT", "PREPARED_TEXT", "PREPARE_FAILED_TEXT"),
+    "ui/app_model.py": ("REPORT_DONE",),
+    "core/launch.py": ("NO_GAME_FOLDER",),
 }
 # Words for the player, not keys: two letters in a row, and not an identifier (save_profile, fsr1, chooseGameFolder).
 WORDS = re.compile(r"[A-Za-z]{2}")

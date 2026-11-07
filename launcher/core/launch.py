@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import config as cfg
 from . import games, paths, resolution
+from . import i18n
 from .i18n import t
 
 RUN_SCRIPT = paths.ROOT / "tools" / "probe_uncharted.py"
@@ -22,7 +23,13 @@ LAST_RUN_LOG = paths.USER_DIR / "launcher-last-run.log"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # The start script's line when the Collection menu starts another game (the executable follows).
 SWITCH_LINE = "Collection: switching to "
-LOG_TAIL = 80  # lines read from the end of a log for the reason a game stopped
+NO_GAME_FOLDER = ("Select your Uncharted: The Nathan Drake Collection game folder (the folder with eboot.bin and "
+                  "sce_sys).")
+LOG_TAIL = 80
+# The launcher's STOP: the game sees this file and closes the usual way, keeping the shader cache's last writes
+# (engine/gpu/shim/window.cpp, BB_STOP_FILE from the start script); after STOP_WAIT seconds it is ended.
+STOP_FILE = paths.USER_DIR / "stop-request"
+STOP_WAIT = 15.0  # lines read from the end of a log for the reason a game stopped
 
 
 class LaunchError(Exception):
@@ -42,8 +49,13 @@ def environment(config: cfg.Config, base: dict[str, str] | None = None,
     env["UNCHARTED_LANGUAGE"] = str(config.game(started).get("language", "1"))
     env["UNCHARTED_ANISOTROPY"] = str(data.get("anisotropy", "0"))
     env["UNCHARTED_NO_DOF"] = "1" if data.get("no_dof") else "0"
+    env["UNCHARTED_TORCH_FORWARD"] = "1" if data.get("torch_forward", True) else "0"
+    env["UNCHARTED_U3_EXPOSURE"] = str(data.get("u3_exposure", "0"))
+    env["UNCHARTED_HIRES_SHADOWS"] = "1" if data.get("hires_shadows") else "0"
     env["UNCHARTED_UNLOCK"] = "1" if data.get("unlock") else "0"
     env["UNCHARTED_CHEATS"] = ",".join(config.cheats())
+    # The engine's own texts (the close question, the save list, the loading screen) in the launcher's language.
+    env["UNCHARTED_UI_LANGUAGE"] = i18n.language()
     # A game's update is the one beside its folder (<folder>-patch), found by the start script: never one chosen for
     # another game folder.
     env.pop("UNCHARTED_UPDATE", None)
@@ -75,13 +87,14 @@ class Session:
     """One running game: the start script's process and its output, line by line, to on_line."""
 
     def __init__(self, config: cfg.Config, game: games.Game, on_line: Callable[[str], None],
-                 on_end: Callable[[int], None]) -> None:
+                 on_end: Callable[[int], None], prepare: bool = False) -> None:
+        """prepare: the game's shaders are prepared with no window and no game (the engine's BB_PREPARE_ONLY);
+        the progress comes as PREP lines."""
         if not RUN_SCRIPT.exists():
-            raise LaunchError(f"The start script is missing:\n{RUN_SCRIPT}")
+            raise LaunchError(t("The start script is missing:") + f"\n{RUN_SCRIPT}")
         game_dir = config.game_dir()
         if not games.is_game_dir(game_dir):
-            raise LaunchError("Select your Uncharted: The Nathan Drake Collection game folder "
-                              "(the folder with eboot.bin and sce_sys).")
+            raise LaunchError(t(NO_GAME_FOLDER))
         for key in games.KEYS:
             # The keys the game's settings file lacks get their defaults; the in-game menu's own values stay.
             current = cfg.read_ini(key)
@@ -89,13 +102,17 @@ class Session:
         args = command(game, game_dir)
         _allow_game_foreground()
         try:
-            self.process = subprocess.Popen(args, cwd=str(paths.ROOT), env=environment(config, game=game),
+            env = environment(config, game=game)
+            if prepare:
+                env["UNCHARTED_PREPARE_ONLY"] = "1"
+            self.process = subprocess.Popen(args, cwd=str(paths.ROOT), env=env,
                                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                             stdin=subprocess.DEVNULL, creationflags=NO_WINDOW, text=True,
                                             encoding="utf-8", errors="replace")
         except OSError as error:
-            raise LaunchError(f"Could not start the game:\n{error}") from error
+            raise LaunchError(t("Could not start the game:") + f"\n{error}") from error
         self.game = game
+        self.prepare = prepare
         self.started = time.time()
         self._on_line, self._on_end = on_line, on_end
         self._log = _open_log(args)
@@ -105,10 +122,29 @@ class Session:
         return self.process.poll() is None
 
     def stop(self) -> None:
-        """Ends the start script and its game (it owns a Windows job that ends the game with it)."""
-        if self.running():
+        """Asks the game to close (STOP_FILE): it closes the usual way and keeps the shader cache's last writes.
+        After STOP_WAIT seconds, or at once while only preparing shaders (no window to close), the start script
+        and its game are ended (it owns a Windows job that ends the game with it). Returns at once."""
+        if not self.running():
+            return
+        if not self.prepare:
+            try:
+                STOP_FILE.parent.mkdir(parents=True, exist_ok=True)
+                STOP_FILE.write_text("stop\n", encoding="utf-8")
+            except OSError:
+                pass
+        threading.Thread(target=self._end_after, args=(0.0 if self.prepare else STOP_WAIT,), daemon=True).start()
+
+    def _end_after(self, seconds: float) -> None:
+        try:
+            self.process.wait(timeout=seconds)
+        except subprocess.TimeoutExpired:
             subprocess.run(["taskkill", "/PID", str(self.process.pid), "/T", "/F"], creationflags=NO_WINDOW,
                            capture_output=True)
+        try:
+            STOP_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def _read(self) -> None:
         assert self.process.stdout is not None
