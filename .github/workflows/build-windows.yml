@@ -64,10 +64,21 @@ jobs:
       - name: Install Pillow and PySide6
         shell: powershell
         run: |
-          $python = Join-Path $env:PYTHON_HOME 'python.exe'
-          if (-not (Test-Path $python)) { throw "No Python at $env:PYTHON_HOME (repository variable PYTHON_HOME)" }
-          & $python -m pip install --disable-pip-version-check pillow iced-x86
+          if (-not (Test-Path (Join-Path $env:PYTHON_HOME 'python.exe'))) {
+            throw "No Python at $env:PYTHON_HOME (repository variable PYTHON_HOME)"
+          }
+          # A copy of it that this build owns: the PC's Python is not written to (pip would put the packages in
+          # the user's own folder, which the package does not take), and its packages are installed here.
+          $own = Join-Path $env:RUNNER_TEMP 'python'
+          if (Test-Path $own) { Remove-Item -Recurse -Force $own }
+          robocopy $env:PYTHON_HOME $own /E /NFL /NDL /NJH /NJS /NP | Out-Null
+          if ($LASTEXITCODE -ge 8) { throw "Python could not be copied" }
+          $global:LASTEXITCODE = 0
+          $python = Join-Path $own 'python.exe'
+          $env:PYTHONNOUSERSITE = '1'
+          & $python -m pip install --disable-pip-version-check --no-warn-script-location pillow iced-x86
           if ($LASTEXITCODE) { throw "pip failed" }
+          [IO.File]::AppendAllText($env:GITHUB_ENV, "PACKAGE_PYTHON=$($own -replace '\\', '/')`n")
           & $python -m pip install --disable-pip-version-check --target downloads/pyside6 PySide6-Essentials==6.12.0
           if ($LASTEXITCODE) { throw "pip failed" }
 
@@ -123,7 +134,7 @@ jobs:
       - name: Package
         run: |
           export MSYS2_ROOT=$(cygpath -u "$MSYS2_ROOT")
-          export PYTHON_HOME=$(cygpath -u "$PYTHON_HOME")
+          export PYTHON_HOME=$(cygpath -u "$PACKAGE_PYTHON")  # the copy with Pillow and iced-x86
           tools/package_windows.sh
 
       - uses: actions/upload-artifact@v4
