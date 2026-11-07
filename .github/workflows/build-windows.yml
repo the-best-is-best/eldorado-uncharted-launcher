@@ -4,7 +4,7 @@
 # which the launcher's updates compare) and, with "Publish" ticked, it is released as tag vX.Y.Z[-betaN] with
 # tools/release-notes/v<version>.md (a pre-release is marked as one on GitHub).
 #
-# The runner's PC needs MSYS2 with the CLANG64 packages of engine/packaging/windows/README.md
+# The runner's PC (Windows PowerShell 5.1 is enough) needs MSYS2 with the CLANG64 packages of engine/packaging/windows/README.md
 # (MSYS2_ROOT, default C:\msys64) and a Windows Python 3.10+ with Pillow (PYTHON_HOME). The
 # repository variable ELDORADO_AA_FROM may name an installed package folder to take the DLAA and
 # FSR 4 files from (tools/copy_aa_files.sh); without it tools/fetch_aa_files.sh downloads them.
@@ -46,7 +46,7 @@ jobs:
       # Sources, patches and submodules keep the LF endings they are committed with (git apply);
       # long paths: FidelityFX's shader files pass Windows' 260-character limit.
       - name: Git settings
-        shell: pwsh
+        shell: powershell
         run: |
           git config --global core.autocrlf false
           git config --global core.longpaths true
@@ -62,7 +62,7 @@ jobs:
           python-version: '3.14'
 
       - name: Install Pillow and PySide6
-        shell: pwsh
+        shell: powershell
         run: |
           python -m pip install --disable-pip-version-check pillow iced-x86
           python -m pip install --disable-pip-version-check --target downloads/pyside6 PySide6-Essentials==6.12.0
@@ -96,7 +96,7 @@ jobs:
 
       # The version typed in "Run workflow": checked, then written where the package takes it from.
       - name: Version
-        shell: pwsh
+        shell: powershell
         env:
           VERSION: ${{ inputs.version }}
           GH_TOKEN: ${{ github.token }}
@@ -106,11 +106,13 @@ jobs:
             throw "Version '$env:VERSION' is not X.Y.Z or X.Y.Z-betaN"
           }
           if ('${{ inputs.publish }}' -eq 'true') {
-            gh release view "v$version" -R $env:GITHUB_REPOSITORY 2>$null
-            if ($LASTEXITCODE -eq 0) { throw "Release v$version exists already" }
+            # A list, not "gh release view": Windows PowerShell stops the step on gh's "not found" message.
+            $tags = gh release list -R $env:GITHUB_REPOSITORY --limit 200 --json tagName -q '.[].tagName'
+            if ($tags -contains "v$version") { throw "Release v$version exists already" }
           }
           [IO.File]::WriteAllText("tools/VERSION", "$version`n")
-          "VERSION=$version" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          # Without a byte order mark (Windows PowerShell's Out-File -Encoding utf8 writes one).
+          [IO.File]::AppendAllText($env:GITHUB_ENV, "VERSION=$version`n")
           Write-Output "Version $version"
           $global:LASTEXITCODE = 0
 
@@ -130,7 +132,7 @@ jobs:
       # which the launcher checks before installing it. Notes: tools/release-notes/vX.Y.Z.md.
       - name: Publish the release
         if: inputs.publish
-        shell: pwsh
+        shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
