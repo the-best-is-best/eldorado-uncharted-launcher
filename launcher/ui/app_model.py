@@ -24,6 +24,7 @@ from PySide6.QtCore import Property, QCoreApplication, QObject, QTimer, QUrl, Si
 from core import config as cfg
 from core import game_files, games, paths, report, shortcuts, steam, updater
 from core.i18n import t
+from ui import steam_art
 
 # Errors core/ raises for the player; anything else is shown with its type (a bug, but never swallowed).
 PLAYER_ERRORS = (updater.UpdateError, game_files.GameFilesError, steam.SteamError, shortcuts.ShortcutError, OSError)
@@ -44,6 +45,7 @@ class AppModel(QObject):
     confirm = Signal(str, str)
     # From worker threads to the window's thread (Qt queues signals across threads).
     _finished = Signal(object)
+    _checked = Signal(object)  # the quiet check at start: its outcome, from its own thread
     _step = Signal(float, str)
 
     def __init__(self) -> None:
@@ -66,6 +68,7 @@ class AppModel(QObject):
         # wait until the game is closed.
         self.running_check: Callable[[], bool] | None = None
         self._finished.connect(self._on_finished)
+        self._checked.connect(lambda done: done())
         self._step.connect(self._on_step)
         if config.data.get("check_updates", True):
             QTimer.singleShot(START_CHECK_DELAY_MS, lambda: self._check(manual=False))
@@ -343,7 +346,20 @@ class AppModel(QObject):
                 if manual:
                     self.message.emit(self._update_text)
 
-        self._run(t("Checking for updates...") if manual else "", work, done, quiet=not manual)
+        if manual:
+            self._run(t("Checking for updates..."), work, done)
+            return
+
+        # At start: on its own thread, apart from the player's actions (it held them back up to 15 s offline);
+        # silent when offline. Its answer is shown on the window's thread.
+        def quiet() -> None:
+            try:
+                release = work()
+            except Exception:  # offline, GitHub down, a bad answer: nothing to say at start
+                return
+            self._checked.emit(lambda: (done(release), self.changed.emit()))
+
+        threading.Thread(target=quiet, daemon=True).start()
 
     @Slot()
     def installUpdate(self) -> None:
@@ -526,13 +542,15 @@ def _add_to_steam(per_game: bool, game_dir: Path | None) -> str:
 def _write_to_steam(per_game: bool, game_dir: Path | None) -> str:
     game_list = [(game.key, game.name) for game in games.GAMES] if per_game else None
     # Each game's own emblem (its trophy pack's picture, from the player's files) for its library pictures.
-    emblems = {game.key: shortcuts.trp_file(shortcuts.trophy_pack(game_dir, game), "ICON0.PNG")
-               for game in games.GAMES} if per_game and game_dir else None
     # Each game's icon in Steam's list and on its pictures: El Dorado's own drawing (launcher/assets/loading).
     icons = {game.key: path for game in games.GAMES
              if (path := paths.LAUNCHER_DIR / "assets" / "loading" / f"{game.key}.png").is_file()} if per_game else None
+    # Their library pictures in El Dorado's own look (the drawn map, that icon, the title in the launcher's
+    # fonts): nothing of the game's.
+    art = {game.key: steam_art.make(game.key, shortcuts.ICON_DIR / "steam" / game.key)
+           for game in games.GAMES} if per_game else None
     wanted = steam.targets(paths.ROOT, shortcuts.STARTER, Path(sys.executable), shortcuts.ENTRY_SCRIPT, game_list,
-                           emblems, icons)
+                           None, icons, art)
     names = (steam.COLLECTION_NAME,) + tuple(game.name for game in games.GAMES)
     results = steam.add_to_steam(wanted, str(shortcuts.APP_ICON), game_dir, all_names=names)
     lines = []
@@ -548,7 +566,8 @@ def _write_to_steam(per_game: bool, game_dir: Path | None) -> str:
     backups = [str(result.backup) for result in results if result.backup]
     added = t("Added the three games to Steam:") if per_game else \
         t("Added {name} to Steam:", name=f'"{steam.COLLECTION_NAME}"')
-    text = added + "\n" + "\n".join(lines) + f"\n\n{pictures}"
+    # The three games' pictures are El Dorado's own (steam_art): no game folder needed, nothing to say.
+    text = added + "\n" + "\n".join(lines) + ("" if per_game else f"\n\n{pictures}")
     if backups:
         text += "\n\n" + t("The previous list was saved as:") + "\n" + "\n".join(backups)
     return text
