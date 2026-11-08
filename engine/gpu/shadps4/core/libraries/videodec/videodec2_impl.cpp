@@ -6,6 +6,7 @@
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "core/memory.h"
 #include "video_utils.h"
 #include "videodec_error.h"
 
@@ -110,6 +111,10 @@ s32 VdecDecoder::Decode(const OrbisVideodec2InputData& input_data,
         is_avc ? sizeof(OrbisVideodec2AvcPictureInfo) : sizeof(OrbisVideodec2HevcPictureInfo);
     Videodec::CopyNV12Data((u8*)frame_buffer.frame_buffer,
                            frame_buffer.frame_buffer_size - info_size, *frame);
+    // El Dorado (zorde23 0.3.7): the GPU's copy of this memory is stale now, as avplayer_source.cpp says for its
+    // frames; else a cutscene could stay on one picture while its sound went on (after texture evictions).
+    Core::Memory::Instance()->InvalidateMemory(reinterpret_cast<VAddr>(frame_buffer.frame_buffer),
+                                               frame_buffer.frame_buffer_size - info_size);
     frame_buffer.is_accepted = true;
 
     const auto width = Common::AlignUp<u32>(frame->width, 16);
@@ -203,6 +208,10 @@ s32 VdecDecoder::Flush(OrbisVideodec2FrameBuffer& frame_buffer,
         is_avc ? sizeof(OrbisVideodec2AvcPictureInfo) : sizeof(OrbisVideodec2HevcPictureInfo);
     Videodec::CopyNV12Data((u8*)frame_buffer.frame_buffer,
                            frame_buffer.frame_buffer_size - info_size, *frame);
+    // El Dorado (zorde23 0.3.7): the GPU's copy of this memory is stale now, as avplayer_source.cpp says for its
+    // frames; else a cutscene could stay on one picture while its sound went on (after texture evictions).
+    Core::Memory::Instance()->InvalidateMemory(reinterpret_cast<VAddr>(frame_buffer.frame_buffer),
+                                               frame_buffer.frame_buffer_size - info_size);
     frame_buffer.is_accepted = true;
 
     const auto width = Common::AlignUp<u32>(frame->width, 16);
