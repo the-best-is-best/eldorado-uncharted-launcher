@@ -108,6 +108,29 @@ extern "C" int bbgpu_window_foreground(void) {
 // El Dorado: the game's thread asks the window to put the close question on screen (the menus' Quit, back from
 // the main menu: runtime_exit_menu.c, runtime_menu_watch.c); the window thread shows it at its next events.
 static std::atomic<bool> close_question_wanted{false};
+
+// El Dorado: the window minimized or out of focus stops the game where it is (its threads and clocks, as the
+// shader preparation page does: runtime_freeze_reason), and it goes on when the window is back. No menu is opened.
+// BB_PAUSE_ON_FOCUS_LOST=0: off.
+extern "C" void runtime_freeze_reason(unsigned reason, int on, const char* why);
+// Back from the background: runtime_pad.c opens the game's pause menu (bbgpu_take_back_request, bbgpu.cpp).
+extern std::atomic<int> bbgpu_back_request;
+static void PauseRequest(bool away) {
+    static const bool off = [] {
+        const char* env = std::getenv("BB_PAUSE_ON_FOCUS_LOST");
+        return env && env[0] == '0';
+    }();
+    static bool frozen = false;
+    if (off || away == frozen) {
+        return;
+    }
+    frozen = away;
+    runtime_freeze_reason(2, away ? 1 : 0, "the game's window is in the background");
+    if (!away) {
+        bbgpu_back_request = 1;
+    }
+}
+
 extern "C" void bbgpu_ask_close(void) {
     close_question_wanted.store(true, std::memory_order_release);
 }
@@ -415,17 +438,23 @@ bool WindowSDL::PollEvents() {
             break;
         }
         case SDL_EVENT_WINDOW_FOCUS_GAINED:
+        case SDL_EVENT_WINDOW_RESTORED:
             window_focused = true;
+            PauseRequest(false); // El Dorado: back: the game goes on where it stood
             break;
         case SDL_EVENT_KEYMAP_CHANGED: // another keyboard layout: the prompts show its letters
             VideoCore::ButtonPrompts::KeymapChanged();
             break;
         case SDL_EVENT_WINDOW_FOCUS_LOST: {
             window_focused = false;
+            PauseRequest(true); // El Dorado: Alt+Tab or a click elsewhere stops the game where it is
             std::scoped_lock lock{mouse_mutex};
             mouse_buttons = 0;
             break;
         }
+        case SDL_EVENT_WINDOW_MINIMIZED:
+            PauseRequest(true); // El Dorado: minimized, the game stands still
+            break;
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
         case SDL_EVENT_WINDOW_RESIZED: {
             int w = 0, h = 0;

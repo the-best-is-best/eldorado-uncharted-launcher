@@ -55,6 +55,9 @@ void bbgpu_thumbnail_loaded(const char *path);
 void bbgpu_thumbnail_pause(void);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
+/* El Dorado: 1 once after the game's window came back from the background (minimized or out of focus; the game
+ * stood still meanwhile): runtime_pad.c opens the game's pause menu then. */
+int bbgpu_take_back_request(void);
 /* 1 while the full-screen shader preparation page shows (the game runs behind it). */
 int bbgpu_preparation_screen(void);
 /* The shader cache's last writes, before the process ends without destructors (runtime_quit). */

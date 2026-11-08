@@ -2231,6 +2231,34 @@ static void sample(PadData *d) {
     d->buttons|=injected.buttons;
     d->buttons|=runtime_continue_buttons(); /* BB_SKIP_TITLE: past the start page (runtime_menu_watch.c) */
     {
+        /* El Dorado: back from the background (the game stood still meanwhile: window.cpp), Options is held 150 ms so
+         * the game's pause menu is up, once the game has been played this run (not on the start's main menu).
+         * Whether a menu is already up comes from the player's own presses (Uncharted 1's pause menu is not among
+         * the pages runtime_menu_watch.c reads): Options opens it, Circle or Cross leave it; while it is up nothing
+         * is pressed (Options would close it). */
+        static int menu_up, options_held;
+        static uint64_t options_until_us;
+        const uint64_t t=now_us();
+        const int options=(d->buttons & BTN_OPTIONS)!=0;
+        if (t>=options_until_us) {
+            if (options && !options_held) menu_up=!menu_up;
+            else if (d->buttons & (BTN_CIRCLE|BTN_CROSS)) menu_up=0;
+        }
+        options_held=options;
+        if (bbgpu_take_back_request()) {
+            if (runtime_play_calls && !menu_up) {
+                options_until_us=t+150000u;
+                menu_up=1;
+                printf("Pause: back from the background: the game's pause menu\n");
+            } else {
+                printf("Pause: back from the background (%s): no menu pressed\n",
+                       runtime_play_calls ? "its pause menu is already up" : "not played yet");
+            }
+            fflush(stdout);
+        }
+        if (t<options_until_us) d->buttons|=BTN_OPTIONS;
+    }
+    {
         /* El Dorado: Circle (back, whatever key or button it is bound to) on the main menu asks "Close the game?"
          * instead of going back to the title page, which never sees the press (runtime_menu_watch.c). */
         static int circle_held;

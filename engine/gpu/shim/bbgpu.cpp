@@ -474,6 +474,14 @@ extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
 }
 
+// El Dorado: set by the window (window.cpp) when it is back from the background (the game stood still meanwhile);
+// taken by runtime_pad.c, which then opens the game's pause menu.
+std::atomic<int> bbgpu_back_request{0};
+
+extern "C" int bbgpu_take_back_request(void) {
+    return bbgpu_back_request.exchange(0);
+}
+
 extern "C" int bbgpu_preparation_screen(void) {
     return BbOverlay::PreparationScreenActive() ? 1 : 0;
 }
