@@ -12,7 +12,7 @@ from PySide6.QtCore import Property, QCoreApplication, QObject, QTimer, Signal, 
 
 from core import art
 from core import config as cfg
-from core import game_files, games, launch, paths, saves, stats
+from core import fps_advice, game_files, games, launch, paths, presets, saves, stats
 from core.i18n import t
 from ui import windows
 from ui.saves_model import picture_url, shown
@@ -57,6 +57,9 @@ class Launcher(QObject):
     crashed = Signal(str)
     # Started with --play (no window) and the game crashed: main.py opens the window, then `crashed` shows why.
     directCrashed = Signal(str)
+    # After a session that ran slow on the graphics card: one step lower quality? (AppDialogs.qml, yes ->
+    # takeAdvice()).
+    advise = Signal(str)
     # From the start script's reader thread to the window's thread (Qt queues signals across threads).
     _line = Signal(str)
     _ended = Signal(int)
@@ -79,6 +82,7 @@ class Launcher(QObject):
         self._direct = False
         # Started with --play: a normal end ends the launcher, even after its window opened for a crash.
         self._from_shortcut = False
+        self._advice: tuple[str, fps_advice.Step] | None = None  # the step offered after the last session
         self._saves: list[saves.Save] = []                  # every game's story saves, newest first
         self._pictures: dict[str, art.Picture] = {}         # what stands behind each game
         self._line.connect(self._on_line)
@@ -340,12 +344,54 @@ class Launcher(QObject):
             return
         if not crashed:
             self._status = ""
+            self._offer_advice()
         else:
             self._status = t("The game froze.") if froze else \
                 t("The game stopped unexpectedly (code {code}).", code=code)
             self.crashed.emit(reason or t("The game ended with code {code}.", code=code) + "\n\n" +
                               t(NO_WINDOW_NOTE))
         self.refresh()
+
+    def _offer_advice(self) -> None:
+        """The game just played ran clearly below its frame rate limit with the card as the limit: one step lower
+        quality is offered (fps_advice), once per session."""
+        key = self._selected
+        try:
+            config = cfg.Config.load()
+            step = fps_advice.advice(key, config.game(key), cfg.read_ini(key))
+            if step is None:
+                return
+            fps_advice.mark_asked(config, key)
+        except OSError:
+            return
+        self._advice = (key, step)
+        game = games.by_key(key)
+        text = t("{game} ran at {fps} FPS on average (limit {limit}), and the graphics card was what held it back.",
+                 game=game.name, fps=round(step.fps), limit=step.limit) + "\n\n"
+        if step.turn_on_fsr1:
+            text += t("Turn on FSR 1 upscaling at Quality? The game draws a little smaller and is brought up to "
+                      "your resolution; it works on every card.")
+        else:
+            text += t("Set the upscaling quality one step lower, to {quality}? The game draws a little smaller "
+                      "and runs faster.", quality=t(presets.QUALITY_TITLES[step.upscale]))
+        text += "\n\n" + t("You can change it back in Settings > Display.")
+        self.advise.emit(text)
+
+    @Slot()
+    def takeAdvice(self) -> None:
+        if self._advice is None:
+            return
+        key, step = self._advice
+        self._advice = None
+        try:
+            config = cfg.Config.load()
+            fps_advice.apply(config, key, step)
+        except OSError as error:
+            self.message.emit(str(error))
+            return
+        self._config = config
+        self._status = t("Settings changed for {game}.", game=games.by_key(key).name)
+        self.changed.emit()
 
     def _prepare_ended(self, code: int, stopped: bool) -> None:
         """One game's preparation ended: the next game, or back to the chosen game with the outcome."""

@@ -716,6 +716,8 @@ def stamp_saves(since, version):
 
 STATS = USER / "eldorado-stats.json"
 FRAME_STATS = re.compile(r"^Frame stats: ([0-9.]+) FPS.*?, ([0-9]+) draws/frame")
+# The share of time the game waited for the graphics card (high: the card is the limit).
+GPU_WAIT = re.compile(r"GPU ticks ([0-9.]+)%")
 
 
 class PlayStats:
@@ -734,6 +736,8 @@ class PlayStats:
             entry = self.data.setdefault(self.game, {"seconds": 0.0, "fps_sum": 0.0, "fps_count": 0})
             entry["fps_sum"] += float(match.group(1))
             entry["fps_count"] += 1
+            wait = GPU_WAIT.search(line)
+            entry["gpu_wait_sum"] = entry.get("gpu_wait_sum", 0.0) + (float(wait.group(1)) if wait else 0.0)
 
     def switch(self, game):
         self.close()
@@ -763,6 +767,12 @@ class PlayStats:
             total["last"] = entry.get("last", int(time.time()))
             total["fps_sum"] = round(float(total.get("fps_sum", 0.0)) + entry["fps_sum"], 1)
             total["fps_count"] = int(total.get("fps_count", 0)) + entry["fps_count"]
+            # This session alone (the launcher's frame rate advice, launcher/core/fps_advice.py).
+            total["session_fps"] = round(entry["fps_sum"] / entry["fps_count"], 1) if entry["fps_count"] else 0.0
+            total["session_samples"] = entry["fps_count"]
+            total["session_gpu_wait"] = round(entry.get("gpu_wait_sum", 0.0) / entry["fps_count"], 1) \
+                if entry["fps_count"] else 0.0
+            total["session_end"] = int(time.time())
         try:
             work = STATS.with_suffix(".tmp")
             work.write_text(json.dumps(stats, indent=2), encoding="utf-8")

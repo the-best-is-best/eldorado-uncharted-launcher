@@ -52,6 +52,10 @@ Item {
     Connections {
         target: typeof launcher !== "undefined" ? launcher : null
         function onMessage(text) { dialogs.show(text) }
+        function onAdvise(text) {
+            advice.text = text
+            advice.open()
+        }
         function onCrashed(text) {
             crash.text = text
             crash.open()
@@ -115,6 +119,60 @@ Item {
     Box {
         id: notice
         standardButtons: Dialog.Ok
+    }
+
+    // After a slow session (launcher.advise): one step lower quality, only on APPLY (Enter); NOT NOW or Escape
+    // leaves the settings as they are.
+    Dialog {
+        id: advice
+        property string text
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        padding: 28
+        background: Rectangle { color: Theme.panel; border.color: Theme.accentLine; radius: Theme.radius }
+        onOpened: adviceBody.forceActiveFocus()
+        function take() { close(); launcher.takeAdvice() }
+        Column {
+            id: adviceBody
+            width: 520
+            spacing: 18
+            focus: true
+            Keys.onReturnPressed: advice.take()
+            Keys.onEnterPressed: advice.take()
+            Keys.onEscapePressed: advice.close()
+            Text {
+                width: parent.width
+                text: qsTr("Smoother play")
+                color: Theme.accent
+                font.family: Theme.titleFont
+                font.pixelSize: 26
+            }
+            Rectangle { width: parent.width; height: 1; color: Theme.accentLine }
+            Text {
+                width: parent.width
+                text: advice.text
+                color: Theme.ink
+                font.family: Theme.bodyFont
+                font.pixelSize: 15
+                wrapMode: Text.WordWrap
+            }
+            Row {
+                spacing: 14
+                layoutDirection: i18n.rtl ? Qt.RightToLeft : Qt.LeftToRight
+                GoldButton {
+                    width: 180; height: 48
+                    text: qsTr("APPLY")
+                    onClicked: advice.take()
+                }
+                TextButton {
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: 44
+                    text: qsTr("NOT NOW")
+                    onClicked: advice.close()
+                }
+            }
+        }
     }
 
     // The game crashed or froze (launcher.crashed): why, then the same game again (it starts from the last save) or
