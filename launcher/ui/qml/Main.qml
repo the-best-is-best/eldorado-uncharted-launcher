@@ -177,7 +177,9 @@ ApplicationWindow {
                 spacing: 4
                 Text { leftPadding: 2; text: "EL DORADO"; color: Theme.gold; font.family: Theme.titleFont; font.pixelSize: 22; font.letterSpacing: Theme.tracking(4) }
                 Text { leftPadding: 2; text: "UNCHARTED COLLECTION"; color: Theme.faint; font.family: Theme.bodyFont; font.pixelSize: 10; font.letterSpacing: Theme.tracking(2) }
-                Item { width: 1; height: 18 }
+                // The launcher's version (after an update it shows the new one).
+                Text { leftPadding: 2; text: /^[0-9]/.test(app.version) ? "v" + app.version : app.version; color: Theme.faint; opacity: 0.8; font.family: Theme.bodyFont; font.pixelSize: 10; font.letterSpacing: Theme.tracking(1) }
+                Item { width: 1; height: 14 }
                 ProfileSwitch {}
                 Item { width: 1; height: 18 }
                 Repeater {
