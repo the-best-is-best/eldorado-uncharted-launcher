@@ -100,6 +100,9 @@ int32_t runtime_user_id(void);
 /* In play: counted up by the camera and joypad callbacks (runtime_pad.c), which run only while the
  * game is played, not in its menus or cutscenes; the save pictures read it. */
 extern volatile unsigned runtime_play_calls;
+/* El Dorado (runtime_savedata.c): the story save slot the game last mounted to write ("SAVEDATA012"), "" before
+ * its first save of the run; the Give all treasures cheat gives each slot once (runtime_checkpoint.c). */
+void runtime_played_save(char *out, size_t size);
 uintptr_t runtime_rtc_resolve(const char *name);
 const char *runtime_file_user_dir(void);
 void runtime_savedata_configure(const char *title);
@@ -203,6 +206,9 @@ static inline void runtime_freeze_point(void) {
     if (__builtin_expect(runtime_freeze_flag, 0)) runtime_freeze_wait();
 }
 void runtime_freeze_guest(int on);
+/* El Dorado: freeze for a reason (bit) of its own; the game runs when no reason is left. Reason 2: the game's window
+ * minimized or out of focus (window.cpp; BB_PAUSE_ON_FOCUS_LOST=0: off). */
+void runtime_freeze_reason(unsigned reason, int on, const char *why);
 void runtime_wait_print(double now);
 void runtime_wait_caller(uint64_t caller, uint64_t arg);
 #endif

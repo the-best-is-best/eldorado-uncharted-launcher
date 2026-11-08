@@ -70,6 +70,13 @@ static struct { int used, writable; char host[700], meta[700]; } slots[SLOTS];
 static char memory_path[720];
 static uint64_t memory_size;
 static size_t mounts_done, memory_writes;
+static char played_save[16]; /* under `lock` */
+
+void runtime_played_save(char *out, size_t size) {
+    pthread_mutex_lock(&lock);
+    snprintf(out,size,"%s",played_save);
+    pthread_mutex_unlock(&lock);
+}
 
 /* Bloodborne "sound hack" (rainvmaker, from the Diegolix29 shadPS4 fork): the game data
  * save carries a flag at 0x204E of userdata0010; with it clear, parts of the game's audio
@@ -300,6 +307,11 @@ static int32_t mount(int32_t user, const char *title, const DirName *dir, uint32
         return ERR_MOUNT_FULL;
     }
     ++mounts_done;
+    /* El Dorado: a story save slot mounted to write (SAVEDATA0<game><digit>: not the profile 01P or the system
+     * data 0CC) is the run's played save (runtime_played_save). */
+    if (!(mode & MODE_RDONLY) && strlen(dir->data)==11 && !strncmp(dir->data,"SAVEDATA0",9) &&
+        dir->data[9]>='1' && dir->data[9]<='3' && dir->data[10]>='0' && dir->data[10]<='9')
+        snprintf(played_save,sizeof(played_save),"%s",dir->data);
     pthread_mutex_unlock(&lock);
     printf("Runtime: save data '%s' mounted at %s (%s%s)\n",dir->data,result->point.data,
            exists ? "existing" : "created",(mode & MODE_RDONLY) ? ", read-only" : "");

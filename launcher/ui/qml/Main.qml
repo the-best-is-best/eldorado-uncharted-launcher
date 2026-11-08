@@ -113,7 +113,15 @@ ApplicationWindow {
         Keys.onReturnPressed: window.call("accept")
         Keys.onEnterPressed: window.call("accept")
         Keys.onDeletePressed: window.call("remove")
-        Keys.onPressed: if (typeof gamepad !== "undefined") gamepad.keyboardUsed()
+        Keys.onPressed: (event) => {
+            if (typeof gamepad !== "undefined") gamepad.keyboardUsed()
+            // The number pad's Del: with Num Lock on it types "." (or the layout's decimal sign), so it is known by
+            // its place on the keyboard (Windows scan code 0x53) and deletes as Delete does.
+            if (event.nativeScanCode === 0x53 && event.key !== Qt.Key_Delete) {
+                window.call("remove")
+                event.accepted = true
+            }
+        }
         Keys.onTabPressed: window.nextScreen(1)
         Keys.onBacktabPressed: window.nextScreen(-1)
         Keys.onEscapePressed: window.back()
@@ -169,7 +177,9 @@ ApplicationWindow {
                 spacing: 4
                 Text { leftPadding: 2; text: "EL DORADO"; color: Theme.gold; font.family: Theme.titleFont; font.pixelSize: 22; font.letterSpacing: Theme.tracking(4) }
                 Text { leftPadding: 2; text: "UNCHARTED COLLECTION"; color: Theme.faint; font.family: Theme.bodyFont; font.pixelSize: 10; font.letterSpacing: Theme.tracking(2) }
-                Item { width: 1; height: 18 }
+                // The launcher's version (after an update it shows the new one).
+                Text { leftPadding: 2; text: /^[0-9]/.test(app.version) ? "v" + app.version : app.version; color: Theme.faint; opacity: 0.8; font.family: Theme.bodyFont; font.pixelSize: 10; font.letterSpacing: Theme.tracking(1) }
+                Item { width: 1; height: 14 }
                 ProfileSwitch {}
                 Item { width: 1; height: 18 }
                 Repeater {

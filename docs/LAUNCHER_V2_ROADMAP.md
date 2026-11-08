@@ -1,6 +1,10 @@
 # El Dorado Launcher v2 — roadmap
 
-Branch: `launcher-v2`. Goal: a new launcher written from scratch for El Dorado, in **Python + PySide6 (Qt Quick /
+> **Done.** Launcher v2 became `main` on 8 Nov 2026 and shipped as **1.0.0-beta1** (the `launcher-v2` branch is
+> gone). Beta 2 work is on `release/1.0.0-beta2`: the crash screen, each game in Steam with its own icon and
+> pictures, the frame rate advice, F11 and the window fit. This page is kept as the record of how v2 was planned.
+
+Branch (then): `launcher-v2`. Goal: a new launcher written from scratch for El Dorado, in **Python + PySide6 (Qt Quick /
 QML)**, with no code from the legacy launcher, and at least every feature the released launcher has.
 
 Only the launcher (the window outside the game) changes. The engine (`engine/`, `bb-probe.exe`), the game start

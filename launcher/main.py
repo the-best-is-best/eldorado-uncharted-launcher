@@ -81,46 +81,65 @@ def main() -> int:
     from ui.bridge import Launcher
 
     launcher = Launcher()
+
+    def open_window() -> QQmlApplicationEngine | None:
+        """The launcher's window and its models; None when the QML does not load."""
+        from ui.app_model import AppModel
+        from ui.background import BackgroundProvider
+        from ui.gallery_model import GalleryModel
+        from ui.gamepad import Gamepad
+        from ui.saves_model import SavesModel
+        from ui.settings_model import SettingsModel
+        from ui.trophies_model import TrophiesModel
+
+        app_model = AppModel()
+        # Folder, .pkg, shader cache, reset and update actions wait until the game is closed.
+        app_model.running_check = lambda: launcher.running
+        # What QML sees, by name. Kept in a dict so the objects live as long as the window.
+        models = {"launcher": launcher, "app": app_model, "gamepad": Gamepad(), "saves": SavesModel(),
+                  "trophies": TrophiesModel(), "gallery": GalleryModel(), "settings": SettingsModel()}
+        from ui.profile_model import ProfileModel
+
+        models["profiles"] = ProfileModel()
+        language = LanguageModel()
+        models["i18n"] = language
+        engine = QQmlApplicationEngine()
+        language.attach(engine.retranslate, models.values())
+        # Another game folder or update (chosen, installed from a .pkg, a reset): every screen reads the files again:
+        # the game's version and its saves, the Arabic translation, the trophy packs.
+        for reread in (launcher.refresh, models["saves"].refresh, models["trophies"].reload, models["settings"].refresh):
+            app_model.filesChanged.connect(reread)
+            models["profiles"].switched.connect(reread)  # another player: other saves
+        models["settings"].languageWanted.connect(language.setLanguage)
+        engine.addImageProvider("background", BackgroundProvider(launcher.picture))
+        for name, model in models.items():
+            engine.rootContext().setContextProperty(name, model)
+        engine.setInitialProperties({"title": WINDOW_TITLE})
+        engine.load(QUrl.fromLocalFile(str(UI_DIR / "qml" / "Main.qml")))
+        engine.models = models  # the models live as long as the window (QML holds no Python reference)
+        return engine if engine.rootObjects() else None
+
     play = direct_game()
     if play:
         # No window, so none of its models (their first look at the game's files would run beside the start):
-        # the launcher only relays the start script and ends with it.
+        # the launcher only relays the start script and ends with it. A crash or freeze opens the window with the
+        # crash screen (PLAY AGAIN, PROBLEM REPORT); the launcher then ends when a game ends normally.
+        kept: list = []
+
+        def crashed(reason: str) -> None:
+            engine = open_window()
+            if engine is None:
+                app.exit(1)
+                return
+            kept.append(engine)
+            launcher.crashed.emit(reason)
+
+        launcher.directCrashed.connect(crashed)
         launcher.play_direct(play)
         return app.exec() if launcher.running else 1
 
-    from ui.app_model import AppModel
-    from ui.background import BackgroundProvider
-    from ui.gallery_model import GalleryModel
-    from ui.gamepad import Gamepad
-    from ui.saves_model import SavesModel
-    from ui.settings_model import SettingsModel
-    from ui.trophies_model import TrophiesModel
-
-    app_model = AppModel()
-    # Folder, .pkg, shader cache, reset and update actions wait until the game is closed.
-    app_model.running_check = lambda: launcher.running
-    # What QML sees, by name. Kept in a dict so the objects live as long as the window.
-    models = {"launcher": launcher, "app": app_model, "gamepad": Gamepad(), "saves": SavesModel(),
-              "trophies": TrophiesModel(), "gallery": GalleryModel(), "settings": SettingsModel()}
-    from ui.profile_model import ProfileModel
-
-    models["profiles"] = ProfileModel()
-    language = LanguageModel()
-    models["i18n"] = language
-    engine = QQmlApplicationEngine()
-    language.attach(engine.retranslate, models.values())
-    # Another game folder or update (chosen, installed from a .pkg, a reset): every screen reads the files again:
-    # the game's version and its saves, the Arabic translation, the trophy packs.
-    for reread in (launcher.refresh, models["saves"].refresh, models["trophies"].reload, models["settings"].refresh):
-        app_model.filesChanged.connect(reread)
-        models["profiles"].switched.connect(reread)  # another player: other saves
-    models["settings"].languageWanted.connect(language.setLanguage)
-    engine.addImageProvider("background", BackgroundProvider(launcher.picture))
-    for name, model in models.items():
-        engine.rootContext().setContextProperty(name, model)
-    engine.setInitialProperties({"title": WINDOW_TITLE})
-    engine.load(QUrl.fromLocalFile(str(UI_DIR / "qml" / "Main.qml")))
-    if not engine.rootObjects():
+    engine = open_window()
+    if engine is None:
         return 1
     if measure:
         window = engine.rootObjects()[0]

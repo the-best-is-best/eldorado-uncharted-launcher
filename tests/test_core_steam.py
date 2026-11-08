@@ -275,6 +275,82 @@ class PictureTests(TempSteam):
     def test_no_game_files_no_pictures(self) -> None:
         self.assertEqual(steam.make_pictures(self.temp / "nowhere"), {})
 
+    @staticmethod
+    def emblem(colour: tuple[int, int, int]) -> bytes:
+        import io
+        picture = Image.new("RGBA", (320, 176), (0, 0, 0, 0))
+        picture.paste((*colour, 255), (40, 20, 280, 156))
+        out = io.BytesIO()
+        picture.save(out, format="PNG")
+        return out.getvalue()
+
+    def test_each_game_gets_its_own_emblem(self) -> None:
+        colours = {"u1": (200, 160, 40), "u2": (150, 150, 150), "u3": (90, 90, 90)}
+        emblems = {key: self.emblem(colour) for key, colour in colours.items()}
+        wanted = steam.targets(self.temp, self.temp / "nothing.exe", Path(sys.executable), self.temp / "main.py",
+                               GAMES, emblems)
+        (result,) = steam.add_to_steam(wanted, "icon.ico", self.game, accounts=[(self.account, "")],
+                                       all_names=ALL_NAMES)
+        self.assertEqual(result.pictures, 12)
+        grid = self.account / "config" / "grid"
+        for appid, (key, _) in zip(result.ids, GAMES):
+            wide = Image.open(grid / f"{appid}.png").convert("RGB")
+            self.assertEqual(wide.size, steam.WIDE)
+            self.assertEqual(wide.getpixel((steam.WIDE[0] // 2, steam.WIDE[1] // 2)), colours[key])
+            logo = Image.open(grid / f"{appid}_logo.png")
+            self.assertEqual((logo.mode, logo.size), ("RGBA", (720, 408)))  # the emblem without its edge, x3
+
+    def test_each_games_own_icon_is_its_steam_icon_and_ours_are_made_again(self) -> None:
+        icon = self.temp / "u1.png"
+        Image.new("RGBA", (256, 256), (10, 200, 10, 255)).save(icon)
+        wanted = steam.targets(self.temp, self.temp / "nothing.exe", Path(sys.executable), self.temp / "main.py",
+                               GAMES[:1], {"u1": self.emblem((200, 160, 40))}, {"u1": icon})
+        (result,) = steam.add_to_steam(wanted, "icon.ico", self.game, accounts=[(self.account, "")],
+                                       all_names=ALL_NAMES)
+        (entry,) = [node for node in steam.shortcuts_of(steam._read(self.account / "config" / "shortcuts.vdf"))
+                    if steam.get(node.value, "AppName") == GAMES[0][1]]
+        self.assertEqual(steam.get(entry.value, "icon"), str(icon))
+        grid = self.account / "config" / "grid"
+        wide = Image.open(grid / f"{result.ids[0]}.png").convert("RGB")
+        self.assertEqual(wide.getpixel((50 + 165, steam.WIDE[1] // 2)), (10, 200, 10))  # the icon on the left
+        player = grid / f"{result.ids[0]}_hero.png"
+        Image.new("RGB", (8, 8)).save(player)  # the player's own banner (no mark)
+        (again,) = steam.add_to_steam(wanted, "icon.ico", self.game, accounts=[(self.account, "")],
+                                      all_names=ALL_NAMES)
+        self.assertEqual(again.pictures, 3)  # ours made again, the player's kept
+        self.assertEqual(Image.open(player).size, (8, 8))
+
+    def test_an_emblem_that_is_not_a_picture_keeps_the_collections(self) -> None:
+        pictures = steam.make_pictures(self.game, b"not a png")
+        self.assertEqual(pictures["_logo"].width, steam.LOGO_WIDTH)
+
+
+class SteamProcessTests(unittest.TestCase):
+    def test_steam_exe_from_the_first_folder_that_has_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            first, second = Path(temp) / "a", Path(temp) / "b"
+            first.mkdir()
+            second.mkdir()
+            (second / "steam.exe").write_bytes(b"")
+            self.assertEqual(steam.steam_exe([first, second]), second / "steam.exe")
+            self.assertIsNone(steam.steam_exe([first]))
+
+    def test_shut_down_waits_until_steam_is_gone(self) -> None:
+        running = iter([True, True, False])
+        with mock.patch.object(steam.subprocess, "Popen") as popen, \
+                mock.patch.object(steam, "steam_running", side_effect=lambda: next(running)), \
+                mock.patch.object(steam.time, "sleep"):
+            self.assertTrue(steam.shut_down_steam(Path("C:/Steam/steam.exe")))
+        self.assertEqual(popen.call_args[0][0], [str(Path("C:/Steam/steam.exe")), "-shutdown"])
+
+    def test_shut_down_gives_up(self) -> None:
+        clock = iter(range(0, 1000, 10))
+        with mock.patch.object(steam.subprocess, "Popen"), \
+                mock.patch.object(steam, "steam_running", return_value=True), \
+                mock.patch.object(steam.time, "sleep"), \
+                mock.patch.object(steam.time, "monotonic", side_effect=lambda: next(clock)):
+            self.assertFalse(steam.shut_down_steam(Path("C:/Steam/steam.exe"), wait=40))
+
 
 if __name__ == "__main__":
     unittest.main()

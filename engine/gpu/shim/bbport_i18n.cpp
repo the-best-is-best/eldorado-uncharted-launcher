@@ -12,7 +12,7 @@ namespace {
 // The menu's six, then the launcher's others (only the texts over the game outside the menu: the close question,
 // the save list, the loading screen). Arabic rows are stored joined, in display order (tools/arabic_shape.py).
 constexpr const char* languages[] = {"es", "pt", "fr", "de", "it", "ja", "ar", "nl", "da",
-                                     "no", "sv", "fi", "pl", "cs", "el", "ru", "tr"};
+                                     "no", "sv", "fi", "pl", "cs", "el", "ru", "tr", "ko", "zh"};
 constexpr int language_count = sizeof(languages) / sizeof(languages[0]);
 
 struct Row {
@@ -45,14 +45,21 @@ int LanguageIndex() {
 
 namespace BbI18n {
 
+// El Dorado: the menu's font cannot draw the language (Korean or Chinese without its Windows font): English.
+static bool forced_english = false;
+
+void ForceEnglish() {
+    forced_english = true;
+}
+
 const char* Language() {
     const int index = LanguageIndex();
-    return index < 0 ? "en" : languages[index];
+    return index < 0 || forced_english ? "en" : languages[index];
 }
 
 const char* T(const char* english) {
     const int index = LanguageIndex();
-    if (index < 0 || !english) {
+    if (index < 0 || forced_english || !english) {
         return english;
     }
     static const std::unordered_map<std::string_view, const char*> table = [index] {

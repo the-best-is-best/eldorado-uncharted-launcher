@@ -27,7 +27,7 @@ DATA = SHIM / 'overlay_i18n.py'
 OUTPUT = SHIM / 'bbport_overlay_i18n.inc'
 MENU_LANGUAGES = ('es', 'pt', 'fr', 'de', 'it', 'ja')  # every text in these
 # The launcher's other languages: only the texts over the game outside the menu (overlay_i18n.MORE).
-OTHER_LANGUAGES = ('ar', 'nl', 'da', 'no', 'sv', 'fi', 'pl', 'cs', 'el', 'ru', 'tr')
+OTHER_LANGUAGES = ('ar', 'nl', 'da', 'no', 'sv', 'fi', 'pl', 'cs', 'el', 'ru', 'tr', 'ko', 'zh')
 LANGUAGES = MENU_LANGUAGES + OTHER_LANGUAGES  # the order bbport_i18n.cpp reads
 
 MARK = re.compile(r'\b(?:T|TI|N_|tr)\(\s*(?=")')

@@ -79,8 +79,10 @@ static void test_request(void) {
  * of that name, its callback called as the menu does (message 4), once a session, after 5 s of play (a campaign is
  * loaded then; the treasures are its own and go into its next save). Uncharted 1 0x9fc60, Uncharted 2 0x3fea90,
  * Uncharted 3 0x4ba500, each checked against its first bytes first. BB_GIVE_TREASURES: "1" for every game, or the
- * games still to be given ("u1,u3"): the start script gives each game and player once (the game shows its "all
- * treasures found" message each time it is given). */
+ * games to give ("u1,u3"). Once per save: it waits for the run's first story save (runtime_played_save: then the
+ * slot being played is known) and gives only when that slot is not in BB_TREASURES_DONE ("SAVEDATA012,..."), the
+ * slots the start script noted from "Give all Treasures (<slot>)" (the game shows its "all treasures found"
+ * message each time it is given, so not again to the same save). */
 typedef unsigned char (__attribute__((sysv_abi)) *MenuCallback)(void *item, int message);
 static void give_treasures(uint64_t image, uint64_t at, const char *pattern, const char *name) {
     static int state=-1; /* -1 unread, 0 off or done, 1 waiting */
@@ -99,7 +101,16 @@ static void give_treasures(uint64_t image, uint64_t at, const char *pattern, con
     last_calls=calls;
     if (playing_since==0) { playing_since=t; return; }
     if (t-playing_since<5.0) return;
+    char slot[16];
+    runtime_played_save(slot,sizeof(slot));
+    if (!slot[0]) return; /* no story save yet this run: the slot is not known */
     state=0;
+    const char *done=getenv("BB_TREASURES_DONE");
+    if (done && strstr(done,slot)) {
+        printf("Treasures: %s: already given to %s\n",name,slot);
+        fflush(stdout);
+        return;
+    }
     const unsigned char *code=(const unsigned char *)(uintptr_t)(image+at);
     for (const char *p=pattern; *p; ) {
         while (*p==' ') ++p;
@@ -111,7 +122,7 @@ static void give_treasures(uint64_t image, uint64_t at, const char *pattern, con
         }
         p+=2;
     }
-    printf("Treasures: %s: Give all Treasures\n",name);
+    printf("Treasures: %s: Give all Treasures (%s)\n",name,slot);
     fflush(stdout);
     ((MenuCallback)(uintptr_t)(image+at))(NULL,4);
 }
