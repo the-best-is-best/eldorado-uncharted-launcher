@@ -343,6 +343,8 @@
  "Stacked": "堆疊",
  "Start Steam again: it is in your Library.": "請重新啟動 Steam：它在你的收藏庫中。",
  "Start Steam again: they are in your Library.": "請重新啟動 Steam：它們在你的收藏庫中。",
+ "Steam was closed for this and opened again: it is in your Library.": "已為此關閉並重新開啟 Steam：它在你的收藏庫中。",
+ "Steam was closed for this and opened again: they are in your Library.": "已為此關閉並重新開啟 Steam：它們在你的收藏庫中。",
  "Starting {game}...": "正在啟動 {game}...",
  "Starting...": "正在啟動...",
  "Steam account {account}": "Steam 帳戶 {account}",

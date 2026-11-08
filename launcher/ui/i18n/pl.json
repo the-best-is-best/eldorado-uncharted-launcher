@@ -343,6 +343,8 @@
  "Stacked": "W stosie",
  "Start Steam again: it is in your Library.": "Uruchom ponownie Steam: gra jest w Bibliotece.",
  "Start Steam again: they are in your Library.": "Uruchom ponownie Steam: gry są w Bibliotece.",
+ "Steam was closed for this and opened again: it is in your Library.": "Steam został w tym celu zamknięty i otwarty ponownie: jest w twojej bibliotece.",
+ "Steam was closed for this and opened again: they are in your Library.": "Steam został w tym celu zamknięty i otwarty ponownie: są w twojej bibliotece.",
  "Starting {game}...": "Uruchamianie {game}...",
  "Starting...": "Uruchamianie...",
  "Steam account {account}": "Konto Steam {account}",

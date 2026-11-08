@@ -343,6 +343,8 @@
  "Stacked": "Pod sebou",
  "Start Steam again: it is in your Library.": "Spusťte Steam znovu: najdete ji v knihovně.",
  "Start Steam again: they are in your Library.": "Spusťte Steam znovu: najdete je v knihovně.",
+ "Steam was closed for this and opened again: it is in your Library.": "Steam se kvůli tomu zavřel a znovu otevřel: najdeš ji v knihovně.",
+ "Steam was closed for this and opened again: they are in your Library.": "Steam se kvůli tomu zavřel a znovu otevřel: najdeš je v knihovně.",
  "Starting {game}...": "Spouštění {game}...",
  "Starting...": "Spouštění...",
  "Steam account {account}": "Účet Steam {account}",

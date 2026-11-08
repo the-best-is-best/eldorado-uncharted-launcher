@@ -343,6 +343,8 @@
  "Stacked": "Empilé",
  "Start Steam again: it is in your Library.": "Relancez Steam : il est dans votre bibliothèque.",
  "Start Steam again: they are in your Library.": "Relancez Steam : ils sont dans votre bibliothèque.",
+ "Steam was closed for this and opened again: it is in your Library.": "Steam a été fermé pour cela puis rouvert : il est dans ta bibliothèque.",
+ "Steam was closed for this and opened again: they are in your Library.": "Steam a été fermé pour cela puis rouvert : ils sont dans ta bibliothèque.",
  "Starting {game}...": "Lancement de {game}...",
  "Starting...": "Lancement...",
  "Steam account {account}": "Compte Steam {account}",

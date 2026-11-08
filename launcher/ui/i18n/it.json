@@ -343,6 +343,8 @@
  "Stacked": "In colonna",
  "Start Steam again: it is in your Library.": "Riavvia Steam: è nella tua Libreria.",
  "Start Steam again: they are in your Library.": "Riavvia Steam: sono nella tua Libreria.",
+ "Steam was closed for this and opened again: it is in your Library.": "Steam è stato chiuso per questo e riaperto: è nella tua libreria.",
+ "Steam was closed for this and opened again: they are in your Library.": "Steam è stato chiuso per questo e riaperto: sono nella tua libreria.",
  "Starting {game}...": "Avvio di {game}...",
  "Starting...": "Avvio...",
  "Steam account {account}": "Account Steam {account}",

@@ -4,17 +4,21 @@
 
 Steam keeps non-Steam games in <Steam>/userdata/<account>/config/shortcuts.vdf (binary VDF) and their library
 pictures in config/grid/<app id>*.png. Steam reads the file when it starts and writes its own copy when it exits, so
-the player closes Steam first (steam_running()).
+Steam is closed first (steam_running(); shut_down_steam() asks it to exit, start_steam() opens it again).
 
 The file is read and written losslessly: every entry this launcher did not make keeps its exact bytes, field types
 Steam rarely uses included. Each write keeps a dated backup (the newest KEEP_BACKUPS).
 
-Pictures come only from the player's own game files (sce_sys/pic1.png or pic0.png, icon0.png); nothing is
-downloaded, and a picture the player already set is never replaced.
+Pictures come only from the player's own game files (sce_sys/pic1.png or pic0.png, icon0.png, and for one game's
+entry that game's emblem, ICON0.PNG of its trophy pack) and from the game's own icon on its window (the loading icon
+the engine takes from the game, or El Dorado's drawing of it), which is also that entry's icon in Steam's list.
+Nothing is downloaded, and a picture the player already set is never replaced; ours carry PICTURE_MARK and are
+made again.
 """
 from __future__ import annotations
 
 import binascii
+import io
 import os
 import re
 import struct
@@ -39,6 +43,7 @@ TALL = (600, 900)     # <id>p.png: the portrait capsule
 WIDE = (920, 430)     # <id>.png: the wide capsule
 HERO = (1920, 620)    # <id>_hero.png: the banner behind the game page
 LOGO_WIDTH = 1280     # <id>_logo.png: the title over the banner (transparent)
+PICTURE_MARK = ("Software", "El Dorado")  # a PNG text field: the library pictures this launcher made
 
 
 class SteamError(Exception):
@@ -66,6 +71,8 @@ class Target:
     exe: str        # quoted, as Steam stores it
     start_dir: str  # quoted
     options: str
+    emblem: bytes | None = field(default=None, compare=False, repr=False)  # one game's title picture (PNG, alpha)
+    icon: Path | None = field(default=None, compare=False)  # one game's own icon (PNG): Steam's icon and its art
 
 
 @dataclass
@@ -211,9 +218,12 @@ def app_id(exe: str, name: str) -> int:
 
 
 def targets(root: Path, starter: Path, python: Path, script: Path,
-            games: list[tuple[str, str]] | None = None) -> list[Target]:
-    """One Collection entry (games None), or one per game ((key, name): started with --play <key>). The package's
-    starter when it is there, else the source tree's script under pythonw."""
+            games: list[tuple[str, str]] | None = None,
+            emblems: dict[str, bytes | None] | None = None,
+            icons: dict[str, Path | None] | None = None) -> list[Target]:
+    """One Collection entry (games None), or one per game ((key, name): started with --play <key>, with that game's
+    emblem from `emblems` by key). The package's starter when it is there, else the source tree's script under
+    pythonw."""
     if starter.is_file():
         exe, base = f'"{starter}"', ""
     else:
@@ -222,11 +232,14 @@ def targets(root: Path, starter: Path, python: Path, script: Path,
     start = f'"{root}"'
     if games is None:
         return [Target(COLLECTION_NAME, exe, start, base)]
-    return [Target(name, exe, start, f"{base} --play {key}".strip()) for key, name in games]
+    emblems, icons = emblems or {}, icons or {}
+    return [Target(name, exe, start, f"{base} --play {key}".strip(), emblems.get(key), icons.get(key))
+            for key, name in games]
 
 
 def new_entry(target: Target, icon: str) -> list[Node]:
     """A shortcut with the fields Steam itself writes, in its order."""
+    icon = str(target.icon) if target.icon else icon
     return [Node(INT32, "appid", app_id(target.exe, target.name)), Node(STRING, "AppName", target.name),
             Node(STRING, "Exe", target.exe), Node(STRING, "StartDir", target.start_dir), Node(STRING, "icon", icon),
             Node(STRING, "ShortcutPath", ""), Node(STRING, "LaunchOptions", target.options),
@@ -296,7 +309,8 @@ def merge(tree: list[Node], wanted: list[Target], icon: str, all_names: tuple[st
         target = by_options[options]
         for name, kind, value in (("appid", INT32, app_id(target.exe, target.name)), ("AppName", STRING, target.name),
                                   ("Exe", STRING, target.exe), ("StartDir", STRING, target.start_dir),
-                                  ("icon", STRING, icon), ("LaunchOptions", STRING, target.options)):
+                                  ("icon", STRING, str(target.icon) if target.icon else icon),
+                                  ("LaunchOptions", STRING, target.options)):
             put(entry, name, kind, value)
         kept.append(node)
         done.add(options)
@@ -322,6 +336,40 @@ def steam_running() -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return "steam.exe" in listing.stdout.lower()
+
+
+def steam_exe(roots: list[Path] | None = None) -> Path | None:
+    """steam.exe of the first Steam installation that has one."""
+    for root in steam_roots() if roots is None else roots:
+        if (root / "steam.exe").is_file():
+            return root / "steam.exe"
+    return None
+
+
+def shut_down_steam(exe: Path, wait: float = 40.0) -> bool:
+    """Asks Steam to exit the way its own Exit does (steam.exe -shutdown: it writes its lists first) and waits for
+    it to be gone. False when it still runs after `wait` seconds."""
+    try:
+        subprocess.Popen([str(exe), "-shutdown"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except OSError:
+        return False
+    end = time.monotonic() + wait
+    while time.monotonic() < end:
+        time.sleep(1.0)
+        if not steam_running():
+            time.sleep(1.0)  # its helper processes finish writing
+            return True
+    return False
+
+
+def start_steam(exe: Path) -> bool:
+    """Opens Steam again, apart from this launcher (it stays open when the launcher closes)."""
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    try:
+        subprocess.Popen([str(exe)], cwd=str(exe.parent), creationflags=flags, close_fds=True)
+    except OSError:
+        return False
+    return True
 
 
 def steam_roots() -> list[Path]:
@@ -426,9 +474,61 @@ def _title_logo(cover: Any) -> Any:
     return logo.resize((LOGO_WIDTH, round(logo.height * LOGO_WIDTH / logo.width)), Image.LANCZOS)
 
 
-def make_pictures(game_dir: Path) -> dict[str, Any]:
-    """{suffix: image} from the game's sce_sys pictures ("p" portrait, "" wide, "_hero", "_logo"); {} without them
-    or without Pillow."""
+def _fit(picture: Any, room: tuple[int, int]) -> Any:
+    """`picture` as large as fits in `room`, its shape kept."""
+    from PIL import Image
+
+    scale = min(room[0] / picture.width, room[1] / picture.height)
+    return picture.resize((max(1, round(picture.width * scale)), max(1, round(picture.height * scale))), Image.LANCZOS)
+
+
+def _trimmed(picture: Any) -> Any:
+    box = picture.getchannel("A").getbbox()
+    return picture.crop(box) if box else picture  # without its empty edge
+
+
+def _emblem_pictures(paper: Any, emblem: Any | None, icon: Any | None = None) -> dict[str, Any]:
+    """One game's capsules on the parchment: its own icon (the one on its window) large with its emblem (title and
+    coin) as the name, or the emblem alone; the emblem is also the logo over the banner."""
+    emblem = _trimmed(emblem) if emblem is not None else None
+    icon = _trimmed(icon) if icon is not None else None
+    pictures: dict[str, Any] = {}
+    tall = _cover(paper, TALL).convert("RGBA")
+    wide = _cover(paper, WIDE).convert("RGBA")
+    if icon is not None:
+        # Portrait: the icon in the upper part, the name below it. Wide: the icon on the left, the name beside it.
+        mark = _fit(icon, (TALL[0] - 140, 470 if emblem is not None else TALL[1] - 200))
+        top = 90 if emblem is not None else (TALL[1] - mark.height) // 2
+        tall.alpha_composite(mark, ((TALL[0] - mark.width) // 2, top + (470 - mark.height) // 2
+                                    if emblem is not None else top))
+        mark = _fit(icon, (330, WIDE[1] - 60) if emblem is not None else (WIDE[0] - 120, WIDE[1] - 60))
+        left = 50 if emblem is not None else (WIDE[0] - mark.width) // 2
+        wide.alpha_composite(mark, (left + (330 - mark.width) // 2 if emblem is not None else left,
+                                    (WIDE[1] - mark.height) // 2))
+        if emblem is not None:
+            name = _fit(emblem, (TALL[0] - 60, TALL[1] - 600))
+            tall.alpha_composite(name, ((TALL[0] - name.width) // 2, 590 + (TALL[1] - 620 - name.height) // 2))
+            name = _fit(emblem, (WIDE[0] - 420, WIDE[1] - 60))
+            wide.alpha_composite(name, (400 + (WIDE[0] - 420 - name.width) // 2, (WIDE[1] - name.height) // 2))
+    elif emblem is not None:
+        for card, size, room in ((tall, TALL, (TALL[0] - 40, TALL[1] // 2)), (wide, WIDE, (WIDE[0] - 120, WIDE[1] - 70))):
+            mark = _fit(emblem, room)
+            card.alpha_composite(mark, ((size[0] - mark.width) // 2, (size[1] - mark.height) // 2))
+    pictures["p"], pictures[""] = tall.convert("RGB"), wide.convert("RGB")
+    if emblem is None:
+        return pictures
+    from PIL import Image
+
+    logo = emblem
+    width = min(LOGO_WIDTH, logo.width * 3)  # the trophy picture is small: no more than three times its size
+    pictures["_logo"] = logo.resize((width, round(logo.height * width / logo.width)), Image.LANCZOS)
+    return pictures
+
+
+def make_pictures(game_dir: Path, emblem: bytes | None = None, icon: Path | None = None) -> dict[str, Any]:
+    """{suffix: image} from the game's sce_sys pictures ("p" portrait, "" wide, "_hero", "_logo"); with `emblem`
+    (one game's trophy ICON0.PNG) and `icon` (its own icon, a PNG) the capsules and logo show that game instead of
+    the Collection. {} without them or without Pillow."""
     try:
         from PIL import Image
     except ImportError:
@@ -449,19 +549,57 @@ def make_pictures(game_dir: Path) -> dict[str, Any]:
         wide = _cover(paper, WIDE)
         _blend_in(wide, cover.resize((WIDE[1], WIDE[1]), Image.LANCZOS), ((WIDE[0] - WIDE[1]) // 2, 0), 100)
         pictures.update({"p": tall, "": wide, "_logo": _title_logo(cover)})
+    mark = own = None
+    if emblem:
+        try:
+            mark = Image.open(io.BytesIO(emblem)).convert("RGBA")
+        except (OSError, ValueError):
+            mark = None  # not a picture: the Collection's capsules stay
+    if icon is not None:
+        try:
+            own = Image.open(icon).convert("RGBA")
+        except (OSError, ValueError):
+            own = None  # no icon yet: the emblem alone
+    if mark is not None or own is not None:
+        paper = art.crop((0, 0, round(art.width * 0.3), art.height)) if art is not None else \
+            Image.new("RGB", (64, 64), (226, 214, 188))
+        pictures.update(_emblem_pictures(paper, mark, own))
     return pictures
 
 
-def save_pictures(grid: Path, ids: list[int], pictures: dict[str, Any]) -> int:
-    """Writes each app id's pictures into grid/, skipping any the player set (in any format). Returns the count."""
+def _mark() -> Any:
+    from PIL import PngImagePlugin
+
+    info = PngImagePlugin.PngInfo()
+    info.add_text(*PICTURE_MARK)
+    return info
+
+
+def _ours(path: Path) -> bool:
+    """A library picture this launcher made (PICTURE_MARK): made again. The player's own are kept."""
+    if path.suffix.lower() != ".png":
+        return False
+    try:
+        from PIL import Image
+
+        with Image.open(path) as picture:
+            return picture.text.get(PICTURE_MARK[0]) == PICTURE_MARK[1]
+    except (ImportError, OSError, ValueError, AttributeError):
+        return False
+
+
+def save_pictures(grid: Path, ids: list[int], pictures: dict[str, Any] | list[dict[str, Any]]) -> int:
+    """Writes each app id's pictures (one set for all, or one per id) into grid/, skipping any the player set (in
+    any format). Returns the count."""
     grid.mkdir(parents=True, exist_ok=True)
     written = 0
-    for appid in ids:
-        for suffix, image in pictures.items():
+    for number, appid in enumerate(ids):
+        own = pictures[number] if isinstance(pictures, list) else pictures
+        for suffix, image in own.items():
             stem = f"{appid}{suffix}"
-            if any(grid.glob(stem + ".*")):
+            if any(not _ours(path) for path in grid.glob(stem + ".*")):
                 continue
-            image.save(grid / f"{stem}.png")
+            image.save(grid / f"{stem}.png", pnginfo=_mark())
             written += 1
     return written
 
@@ -495,7 +633,8 @@ def _read(file: Path) -> list[Node]:
         raise SteamError("bad_file", f"{file}: {error}") from error
 
 
-def update_account(folder: Path, persona: str, wanted: list[Target], icon: str, pictures: dict[str, Any],
+def update_account(folder: Path, persona: str, wanted: list[Target], icon: str,
+                   pictures: dict[str, Any] | list[dict[str, Any]],
                    all_names: tuple[str, ...] = ()) -> AccountResult:
     """This launcher's entries in one account's shortcuts.vdf (backed up first) and their pictures."""
     config = folder / "config"
@@ -505,7 +644,7 @@ def update_account(folder: Path, persona: str, wanted: list[Target], icon: str, 
     config.mkdir(parents=True, exist_ok=True)
     saved = backup(file)
     _write_bytes(file, dump_vdf(tree))
-    written = save_pictures(config / "grid", merged.ids, pictures) if pictures else 0
+    written = save_pictures(config / "grid", merged.ids, pictures) if any(pictures) else 0
     return AccountResult(folder, persona, file, saved, merged.ids, merged.added, merged.updated, merged.removed,
                          written)
 
@@ -527,8 +666,10 @@ def add_to_steam(wanted: list[Target], icon: str, game_dir: Path | None,
         raise SteamError("no_steam")
     for folder, _ in accounts:
         _read(folder / "config" / "shortcuts.vdf")
-    try:
-        pictures = make_pictures(game_dir) if game_dir else {}
-    except OSError:
-        pictures = {}  # unreadable pictures: the entries are added without them
+    pictures: list[dict[str, Any]] = []
+    for target in wanted:  # in merge()'s id order
+        try:
+            pictures.append(make_pictures(game_dir, target.emblem, target.icon) if game_dir else {})
+        except OSError:
+            pictures.append({})  # unreadable pictures: the entry is added without them
     return [update_account(folder, persona, wanted, icon, pictures, all_names) for folder, persona in accounts]

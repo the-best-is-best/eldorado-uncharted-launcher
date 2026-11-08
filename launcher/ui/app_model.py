@@ -502,11 +502,37 @@ def _player_text(error: Exception) -> str:
 
 
 def _add_to_steam(per_game: bool, game_dir: Path | None) -> str:
+    # Steam saves its own list of games when it closes, so an open Steam is asked to exit first (as its own Exit
+    # does) and is opened again afterwards.
+    restart = None
     if steam.steam_running():
-        return (t("Steam is open. Steam saves its own list of games when it closes, so a game added now would be "
-                  "lost.") + "\n\n" + t("Close Steam completely (Steam menu -> Exit), then try again."))
+        exe = steam.steam_exe()
+        if exe is None or not steam.shut_down_steam(exe):
+            return (t("Steam is open. Steam saves its own list of games when it closes, so a game added now would be "
+                      "lost.") + "\n\n" + t("Close Steam completely (Steam menu -> Exit), then try again."))
+        restart = exe
+    try:
+        text = _write_to_steam(per_game, game_dir)
+    finally:
+        if restart is not None:
+            steam.start_steam(restart)
+    if restart is not None:
+        return text + "\n\n" + (t("Steam was closed for this and opened again: they are in your Library.") if per_game
+                                else t("Steam was closed for this and opened again: it is in your Library."))
+    return text + "\n\n" + (t("Start Steam again: they are in your Library.") if per_game else
+                             t("Start Steam again: it is in your Library."))
+
+
+def _write_to_steam(per_game: bool, game_dir: Path | None) -> str:
     game_list = [(game.key, game.name) for game in games.GAMES] if per_game else None
-    wanted = steam.targets(paths.ROOT, shortcuts.STARTER, Path(sys.executable), shortcuts.ENTRY_SCRIPT, game_list)
+    # Each game's own emblem (its trophy pack's picture, from the player's files) for its library pictures.
+    emblems = {game.key: shortcuts.trp_file(shortcuts.trophy_pack(game_dir, game), "ICON0.PNG")
+               for game in games.GAMES} if per_game and game_dir else None
+    # Each game's icon in Steam's list and on its pictures: El Dorado's own drawing (launcher/assets/loading).
+    icons = {game.key: path for game in games.GAMES
+             if (path := paths.LAUNCHER_DIR / "assets" / "loading" / f"{game.key}.png").is_file()} if per_game else None
+    wanted = steam.targets(paths.ROOT, shortcuts.STARTER, Path(sys.executable), shortcuts.ENTRY_SCRIPT, game_list,
+                           emblems, icons)
     names = (steam.COLLECTION_NAME,) + tuple(game.name for game in games.GAMES)
     results = steam.add_to_steam(wanted, str(shortcuts.APP_ICON), game_dir, all_names=names)
     lines = []
@@ -525,5 +551,4 @@ def _add_to_steam(per_game: bool, game_dir: Path | None) -> str:
     text = added + "\n" + "\n".join(lines) + f"\n\n{pictures}"
     if backups:
         text += "\n\n" + t("The previous list was saved as:") + "\n" + "\n".join(backups)
-    return text + "\n\n" + (t("Start Steam again: they are in your Library.") if per_game else
-                             t("Start Steam again: it is in your Library."))
+    return text

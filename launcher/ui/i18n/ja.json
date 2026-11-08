@@ -343,6 +343,8 @@
  "Stacked": "縦並び",
  "Start Steam again: it is in your Library.": "Steam を再起動してください: ライブラリに追加されています。",
  "Start Steam again: they are in your Library.": "Steam を再起動してください: ライブラリに追加されています。",
+ "Steam was closed for this and opened again: it is in your Library.": "このために Steam を閉じて再び開きました: ライブラリにあります。",
+ "Steam was closed for this and opened again: they are in your Library.": "このために Steam を閉じて再び開きました: ライブラリにあります。",
  "Starting {game}...": "{game} を起動中...",
  "Starting...": "起動中...",
  "Steam account {account}": "Steam アカウント {account}",

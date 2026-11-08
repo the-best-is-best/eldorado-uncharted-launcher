@@ -343,6 +343,8 @@
  "Stacked": "Alt alta",
  "Start Steam again: it is in your Library.": "Steam'i yeniden başlatın: Kütüphanenizde.",
  "Start Steam again: they are in your Library.": "Steam'i yeniden başlatın: Kütüphanenizdeler.",
+ "Steam was closed for this and opened again: it is in your Library.": "Steam bunun için kapatılıp yeniden açıldı: Kitaplığında.",
+ "Steam was closed for this and opened again: they are in your Library.": "Steam bunun için kapatılıp yeniden açıldı: Kitaplığındalar.",
  "Starting {game}...": "{game} başlatılıyor...",
  "Starting...": "Başlatılıyor...",
  "Steam account {account}": "Steam hesabı {account}",

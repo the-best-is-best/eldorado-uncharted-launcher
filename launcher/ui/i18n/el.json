@@ -343,6 +343,8 @@
  "Stacked": "Στοιβαγμένο",
  "Start Steam again: it is in your Library.": "Ξεκινήστε ξανά το Steam: βρίσκεται στη Βιβλιοθήκη σας.",
  "Start Steam again: they are in your Library.": "Ξεκινήστε ξανά το Steam: βρίσκονται στη Βιβλιοθήκη σας.",
+ "Steam was closed for this and opened again: it is in your Library.": "Το Steam έκλεισε γι' αυτό και άνοιξε ξανά: Βρίσκεται στη βιβλιοθήκη σου.",
+ "Steam was closed for this and opened again: they are in your Library.": "Το Steam έκλεισε γι' αυτό και άνοιξε ξανά: Βρίσκονται στη βιβλιοθήκη σου.",
  "Starting {game}...": "Εκκίνηση του {game}...",
  "Starting...": "Εκκίνηση...",
  "Steam account {account}": "Λογαριασμός Steam {account}",

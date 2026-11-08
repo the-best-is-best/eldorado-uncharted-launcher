@@ -343,6 +343,8 @@
  "Stacked": "Pinottu",
  "Start Steam again: it is in your Library.": "Käynnistä Steam uudelleen: se on kirjastossasi.",
  "Start Steam again: they are in your Library.": "Käynnistä Steam uudelleen: ne ovat kirjastossasi.",
+ "Steam was closed for this and opened again: it is in your Library.": "Steam suljettiin tätä varten ja avattiin uudelleen: se on kirjastossasi.",
+ "Steam was closed for this and opened again: they are in your Library.": "Steam suljettiin tätä varten ja avattiin uudelleen: ne ovat kirjastossasi.",
  "Starting {game}...": "Käynnistetään {game}...",
  "Starting...": "Käynnistetään...",
  "Steam account {account}": "Steam-tili {account}",

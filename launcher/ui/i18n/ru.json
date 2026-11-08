@@ -343,6 +343,8 @@
  "Stacked": "Друг под другом",
  "Start Steam again: it is in your Library.": "Запустите Steam снова: игра в вашей библиотеке.",
  "Start Steam again: they are in your Library.": "Запустите Steam снова: игры в вашей библиотеке.",
+ "Steam was closed for this and opened again: it is in your Library.": "Steam был закрыт для этого и открыт снова: игра в вашей библиотеке.",
+ "Steam was closed for this and opened again: they are in your Library.": "Steam был закрыт для этого и открыт снова: игры в вашей библиотеке.",
  "Starting {game}...": "Запуск {game}...",
  "Starting...": "Запуск...",
  "Steam account {account}": "Аккаунт Steam {account}",

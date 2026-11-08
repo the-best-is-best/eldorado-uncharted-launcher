@@ -343,6 +343,8 @@
  "Stacked": "세로 배치",
  "Start Steam again: it is in your Library.": "Steam을 다시 시작하세요: 라이브러리에 있습니다.",
  "Start Steam again: they are in your Library.": "Steam을 다시 시작하세요: 라이브러리에 있습니다.",
+ "Steam was closed for this and opened again: it is in your Library.": "이를 위해 Steam을 닫았다가 다시 열었습니다: 라이브러리에 있습니다.",
+ "Steam was closed for this and opened again: they are in your Library.": "이를 위해 Steam을 닫았다가 다시 열었습니다: 라이브러리에 있습니다.",
  "Starting {game}...": "{game} 시작 중...",
  "Starting...": "시작 중...",
  "Steam account {account}": "Steam 계정 {account}",
