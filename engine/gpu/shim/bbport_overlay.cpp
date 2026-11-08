@@ -14,6 +14,7 @@
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <string_view>
@@ -1691,6 +1692,31 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
         ja_config.MergeMode = true;
         io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(bb_font_ja_ttf),
                                        int(bb_font_ja_ttf_end - bb_font_ja_ttf), 18.0f, &ja_config);
+    }
+    // Korean and Traditional Chinese: Windows' own fonts, read from the player's Windows (Malgun Gothic, Microsoft
+    // JhengHei; both in every Windows 10 and 11), merged as the Japanese subset is. Nothing of them is shipped.
+    // Without the file the menu's text is English for them (BbI18n falls back to it, see below).
+    {
+        const char* language = BbI18n::Language();
+        const char* file = std::strcmp(language, "ko") == 0   ? "malgun.ttf"
+                           : std::strcmp(language, "zh") == 0 ? "msjh.ttc"
+                                                              : nullptr;
+        if (file) {
+            const char* windows = std::getenv("WINDIR");
+            const std::string path = std::string(windows && *windows ? windows : "C:\\Windows") + "\\Fonts\\" + file;
+            std::error_code ec;
+            if (std::filesystem::exists(path, ec)) {
+                ImFontConfig cjk_config;
+                cjk_config.MergeMode = true;
+                cjk_config.FontNo = 0; // msjh.ttc: Microsoft JhengHei (regular) is its first face
+                io.Fonts->AddFontFromFileTTF(path.c_str(), 18.0f, &cjk_config);
+                std::printf("Overlay: %s text drawn with %s\n", language, path.c_str());
+            } else {
+                BbI18n::ForceEnglish();
+                std::printf("Overlay: %s has no font on this PC (%s): the menu is English\n", language, path.c_str());
+            }
+            std::fflush(stdout);
+        }
     }
 
     const vk::Instance vk_instance = instance.GetInstance();

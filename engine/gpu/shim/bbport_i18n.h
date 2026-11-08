@@ -6,10 +6,12 @@
 
 namespace BbI18n {
 
-// "en", "es", "pt", "fr", "de", "it" or "ja".
+// "en", or a code of the menu's table (es, pt, fr, de, it, ja, ar, nl, ... ko, zh): bbport_i18n.cpp.
 const char* Language();
 // The text in the menu's language; English (the text itself) when it has no translation.
 const char* T(const char* english);
+// From now on English: the menu has no font for the language (Korean or Traditional Chinese without Windows' font).
+void ForceEnglish();
 
 } // namespace BbI18n
 

@@ -724,9 +724,9 @@ TRANSLATIONS = {
 
 # The launcher's other languages (BB_UI_LANGUAGE), for what shows over the game outside the menu: the close question,
 # the game's save list and the loading screen; the rest of the menu is English in them. Arabic is written as read:
-# tools/make_overlay_i18n.py joins its letters and lays it out right to left (tools/arabic_shape.py). Korean and
-# Chinese are left out: the menu's font has none of their characters.
-OTHER_LANGUAGES = ('ar', 'nl', 'da', 'no', 'sv', 'fi', 'pl', 'cs', 'el', 'ru', 'tr')
+# tools/make_overlay_i18n.py joins its letters and lays it out right to left (tools/arabic_shape.py). Korean (ko) and
+# Traditional Chinese (zh) come from overlay_i18n_cjk.py (the menu takes Windows' own fonts for them).
+OTHER_LANGUAGES = ('ar', 'nl', 'da', 'no', 'sv', 'fi', 'pl', 'cs', 'el', 'ru', 'tr', 'ko', 'zh')
 
 
 def M(ar, nl, da, no, sv, fi, pl, cs, el, ru, tr):
