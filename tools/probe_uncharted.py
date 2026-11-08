@@ -332,12 +332,25 @@ def language_text_file(game_dir, game, language):
     return found
 
 
-TREASURES_FILE = USER / "treasures-given.json"  # "u1:<player>" -> when the Give all treasures cheat gave them
+# "u1:<player>:<save slot>" -> when the Give all treasures cheat gave them to that save (older "u1:<player>" keys,
+# from when it was once per player, no longer count).
+TREASURES_FILE = USER / "treasures-given.json"
+TREASURES_LINE = re.compile(r"^Treasures: Uncharted ([123]) .*: Give all Treasures \((SAVEDATA0\w+)\)")
 
 
-def treasure_key(game):
+def treasure_key(game, slot=""):
     profile = os.environ.get(f"UNCHARTED_SAVE_PROFILE_{game.upper()}", "1")
-    return f"{game}:{profile}"
+    return f"{game}:{profile}:{slot}" if slot else f"{game}:{profile}"
+
+
+def treasures_done():
+    """The save slots of the current players that already got the treasures (BB_TREASURES_DONE)."""
+    slots = []
+    for key in treasures_given():
+        parts = key.split(":")
+        if len(parts) == 3 and parts[0] in GAME_KEYS.values() and treasure_key(parts[0], parts[2]) == key:
+            slots.append(parts[2])
+    return slots
 
 
 def treasures_given():
@@ -347,12 +360,12 @@ def treasures_given():
         return {}
 
 
-def note_treasures_given(game):
-    """The engine gave this game's treasures to the current player: not again (treasure_key)."""
-    if not game:
+def note_treasures_given(game, slot):
+    """The engine gave this game's treasures to that save of the current player: not again to it."""
+    if not game or not slot:
         return
     given = treasures_given()
-    given[treasure_key(game)] = time.strftime("%Y-%m-%d %H:%M:%S")
+    given[treasure_key(game, slot)] = time.strftime("%Y-%m-%d %H:%M:%S")
     try:
         TREASURES_FILE.write_text(json.dumps(given, indent=2), encoding="utf-8")
     except OSError as error:
@@ -494,13 +507,10 @@ def game_environment(args, game, executable, game_dir):
     if "devmode" in cheats:
         env["BB_DEV_MENU"] = "1"
     if "treasures" in cheats:  # the games' own Dev Menu "Give all Treasures" (runtime_checkpoint.c)
-        # Once per game and player: given, the treasures are in that player's saves; given again, the game showed
-        # its "all treasures found" message at every start.
-        due = [key for key in GAME_KEYS.values() if treasure_key(key) not in treasures_given()]
-        if due:
-            env["BB_GIVE_TREASURES"] = ",".join(due)
-        else:
-            env.pop("BB_GIVE_TREASURES", None)
+        # Once per save: the engine gives them to the save being played unless it is one of these (given again,
+        # the game showed its "all treasures found" message at every start); a new playthrough's save gets them.
+        env["BB_GIVE_TREASURES"] = "1"
+        env["BB_TREASURES_DONE"] = ",".join(treasures_done())
     pokes = {}
     for name, table in CHEAT_POKES.items():
         if name in cheats:
@@ -874,9 +884,11 @@ def run(args, game, executable, game_dir):
             log.flush()
             print(line, flush=True)
             stats.line(line)
-            if line.startswith("Treasures: Uncharted ") and line.rstrip().endswith("Give all Treasures"):
+            gift = TREASURES_LINE.match(line)
+            if gift:
                 note_treasures_given(GAME_KEYS.get({"1": "eboot.bin", "2": "big2-ps4_Shipping.elf",
-                                                    "3": "big3-ps4_Shipping.elf"}.get(line[21:22], "")))
+                                                    "3": "big3-ps4_Shipping.elf"}.get(gift.group(1), "")),
+                                     gift.group(2))
             if line.startswith("Switching to "):
                 target = line[len("Switching to "):].strip()
                 # The launcher's message, and the log of the game started next.
