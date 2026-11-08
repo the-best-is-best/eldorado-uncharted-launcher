@@ -73,6 +73,7 @@ class Target:
     options: str
     emblem: bytes | None = field(default=None, compare=False, repr=False)  # one game's title picture (PNG, alpha)
     icon: Path | None = field(default=None, compare=False)  # one game's own icon (PNG): Steam's icon and its art
+    art: Path | None = field(default=None, compare=False)  # its library pictures, made (ui/steam_art.py)
 
 
 @dataclass
@@ -220,7 +221,8 @@ def app_id(exe: str, name: str) -> int:
 def targets(root: Path, starter: Path, python: Path, script: Path,
             games: list[tuple[str, str]] | None = None,
             emblems: dict[str, bytes | None] | None = None,
-            icons: dict[str, Path | None] | None = None) -> list[Target]:
+            icons: dict[str, Path | None] | None = None,
+            art: dict[str, Path | None] | None = None) -> list[Target]:
     """One Collection entry (games None), or one per game ((key, name): started with --play <key>, with that game's
     emblem from `emblems` by key). The package's starter when it is there, else the source tree's script under
     pythonw."""
@@ -232,8 +234,8 @@ def targets(root: Path, starter: Path, python: Path, script: Path,
     start = f'"{root}"'
     if games is None:
         return [Target(COLLECTION_NAME, exe, start, base)]
-    emblems, icons = emblems or {}, icons or {}
-    return [Target(name, exe, start, f"{base} --play {key}".strip(), emblems.get(key), icons.get(key))
+    emblems, icons, art = emblems or {}, icons or {}, art or {}
+    return [Target(name, exe, start, f"{base} --play {key}".strip(), emblems.get(key), icons.get(key), art.get(key))
             for key, name in games]
 
 
@@ -525,6 +527,26 @@ def _emblem_pictures(paper: Any, emblem: Any | None, icon: Any | None = None) ->
     return pictures
 
 
+ART_FILES = {"p": "p.png", "": "wide.png", "_hero": "hero.png", "_logo": "logo.png"}
+
+
+def made_pictures(folder: Path) -> dict[str, Any]:
+    """One game's pictures made in El Dorado's look (ui/steam_art.py: p, wide, hero, logo .png); {} without them or
+    without Pillow."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return {}
+    pictures: dict[str, Any] = {}
+    for suffix, name in ART_FILES.items():
+        try:
+            with Image.open(folder / name) as picture:
+                pictures[suffix] = picture.convert("RGBA" if suffix == "_logo" else "RGB")
+        except (OSError, ValueError):
+            continue
+    return pictures
+
+
 def make_pictures(game_dir: Path, emblem: bytes | None = None, icon: Path | None = None) -> dict[str, Any]:
     """{suffix: image} from the game's sce_sys pictures ("p" portrait, "" wide, "_hero", "_logo"); with `emblem`
     (one game's trophy ICON0.PNG) and `icon` (its own icon, a PNG) the capsules and logo show that game instead of
@@ -669,7 +691,10 @@ def add_to_steam(wanted: list[Target], icon: str, game_dir: Path | None,
     pictures: list[dict[str, Any]] = []
     for target in wanted:  # in merge()'s id order
         try:
-            pictures.append(make_pictures(game_dir, target.emblem, target.icon) if game_dir else {})
+            if target.art is not None:
+                pictures.append(made_pictures(target.art))
+            else:
+                pictures.append(make_pictures(game_dir, target.emblem, target.icon) if game_dir else {})
         except OSError:
             pictures.append({})  # unreadable pictures: the entry is added without them
     return [update_account(folder, persona, wanted, icon, pictures, all_names) for folder, persona in accounts]
