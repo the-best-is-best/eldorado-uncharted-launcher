@@ -864,10 +864,18 @@ std::vector<Patch> BuildRotateStick(const Picture& picture, u32 levels, Style st
     const Font font;
     const u32 w = picture.size, h = PictureHeight(picture) / 2;
     Canvas up{w, h};
-    const Color glow{picture.glow[0] / 255.0f, picture.glow[1] / 255.0f, picture.glow[2] / 255.0f};
+    // El Dorado's launcher look: the game shows this half through its stick's oval, which takes the launcher's
+    // panel colour with a soft glow of the game's colour behind the keys (it was the picture's beige).
+    constexpr Color panel{0.102f, 0.118f, 0.149f};      // Theme.qml panel #1a1e26
+    constexpr Color key_face{0.169f, 0.188f, 0.231f};   // panelHigh #232833, a little lighter
+    constexpr Color ink{0.933f, 0.945f, 0.965f};        // Theme.qml ink #eef1f6
+    const Color edge{rim.r * 0.55f + key_face.r * 0.45f, rim.g * 0.55f + key_face.g * 0.45f,
+                     rim.b * 0.55f + key_face.b * 0.45f}; // accentLine over the key
     for (u32 y = 0; y < h; ++y) {
         for (u32 x = 0; x < w; ++x) {
-            up.Blend(x, y, glow, 1.0f);
+            up.Blend(x, y, panel, 1.0f);
+            const float dx = (x + 0.5f - w * 0.5f) / (w * 0.45f), dy = (y + 0.5f - 96.0f) / (w * 0.35f);
+            up.Blend(x, y, rim, 0.27f * std::clamp(1.0f - (dx * dx + dy * dy), 0.0f, 1.0f));
         }
     }
     const u16 k = 68, gap = 6, cx = u16(w / 2), top = 18;
@@ -879,8 +887,20 @@ std::vector<Patch> BuildRotateStick(const Picture& picture, u32 levels, Style st
         {u16(cx - k / 2), row2, u16(cx + k / 2), u16(row2 + k), 0},
         {u16(cx + k / 2 + gap), row2, u16(cx + k / 2 + gap + k), u16(row2 + k), 0},
     };
+    // The keys as the launcher's key hints: a dark face, an edge in the game's colour, light letters. They light
+    // no direction: the game's arrow above says which way (it changes with the door).
     for (int i = 0; i < 4; ++i) {
-        DrawKey(up, font, places[i], KeyLabel(bindings.move[i]));
+        const Slot& s = places[i];
+        const float x0 = s.x0 + 2.0f, y0 = s.y0 + 2.0f, x1 = s.x1 - 2.0f, y1 = s.y1 - 2.0f;
+        const float kx = (x0 + x1) * 0.5f, ky = (y0 + y1) * 0.5f, half = (x1 - x0) * 0.5f, r = (x1 - x0) * 0.24f;
+        for (int y = int(y0) - 1; y < int(y1) + 2; ++y) {
+            for (int x = int(x0) - 1; x < int(x1) + 2; ++x) {
+                const float d = RoundedRect(x + 0.5f, y + 0.5f, kx, ky, half, half, r);
+                up.Blend(x, y, edge, Coverage(d));
+                up.Blend(x, y, key_face, Coverage(d + 3.5f));
+            }
+        }
+        font.Draw(up, KeyLabel(bindings.move[i]), kx, ky, (x1 - x0) - 10.0f, (y1 - y0) * 0.48f, ink);
     }
     // Stored upside down: the shown lower half is the stored upper half.
     Canvas level{w, h};
