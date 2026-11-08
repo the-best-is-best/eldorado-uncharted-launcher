@@ -53,6 +53,10 @@ def backwards(text: str) -> bool:
 class Launcher(QObject):
     changed = Signal()
     message = Signal(str)
+    # The game crashed or froze: why (shown with PLAY AGAIN and PROBLEM REPORT, AppDialogs.qml).
+    crashed = Signal(str)
+    # Started with --play (no window) and the game crashed: main.py opens the window, then `crashed` shows why.
+    directCrashed = Signal(str)
     # From the start script's reader thread to the window's thread (Qt queues signals across threads).
     _line = Signal(str)
     _ended = Signal(int)
@@ -73,6 +77,8 @@ class Launcher(QObject):
         self._started = 0.0
         # Started with --play: no window, the launcher ends with the game.
         self._direct = False
+        # Started with --play: a normal end ends the launcher, even after its window opened for a crash.
+        self._from_shortcut = False
         self._saves: list[saves.Save] = []                  # every game's story saves, newest first
         self._pictures: dict[str, art.Picture] = {}         # what stands behind each game
         self._line.connect(self._on_line)
@@ -252,6 +258,7 @@ class Launcher(QObject):
     def play_direct(self, key: str) -> None:
         """--play u1|u2|u3 (desktop and Steam shortcuts): the game starts at once with the saved settings."""
         self._direct = True
+        self._from_shortcut = True
         self._selected = games.by_key(key).key
         self.play()
         if self._session is None:
@@ -317,17 +324,26 @@ class Launcher(QObject):
         if self._preparing:
             self._prepare_ended(code, stopped)
             return
-        if self._direct:
-            QCoreApplication.exit(code)
-            return
         reason = launch.last_run_reason(self._started)
         froze = reason.startswith(t("The game froze"))
-        if (code == 0 or stopped) and not froze:
+        crashed = not ((code == 0 or stopped) and not froze)
+        if self._from_shortcut and not crashed:
+            QCoreApplication.exit(code)  # back to Steam / the desktop
+            return
+        if self._direct:
+            # No window yet: it opens now (main.py), the launcher's own from then on.
+            self._direct = False
+            self._status = t("The game froze.") if froze else \
+                t("The game stopped unexpectedly (code {code}).", code=code)
+            self.directCrashed.emit(reason or t("The game ended with code {code}.", code=code) + "\n\n" +
+                                    t(NO_WINDOW_NOTE))
+            return
+        if not crashed:
             self._status = ""
         else:
             self._status = t("The game froze.") if froze else \
                 t("The game stopped unexpectedly (code {code}).", code=code)
-            self.message.emit(reason or t("The game ended with code {code}.", code=code) + "\n\n" +
+            self.crashed.emit(reason or t("The game ended with code {code}.", code=code) + "\n\n" +
                               t(NO_WINDOW_NOTE))
         self.refresh()
 

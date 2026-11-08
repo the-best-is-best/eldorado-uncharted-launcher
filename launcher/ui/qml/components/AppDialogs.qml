@@ -52,6 +52,10 @@ Item {
     Connections {
         target: typeof launcher !== "undefined" ? launcher : null
         function onMessage(text) { dialogs.show(text) }
+        function onCrashed(text) {
+            crash.text = text
+            crash.open()
+        }
     }
     Connections {
         target: typeof settings !== "undefined" ? settings : null
@@ -111,6 +115,68 @@ Item {
     Box {
         id: notice
         standardButtons: Dialog.Ok
+    }
+
+    // The game crashed or froze (launcher.crashed): why, then the same game again (it starts from the last save) or
+    // the problem report (the logs of this crash in a zip on the Desktop).
+    // Enter (or the pad's OK) plays again, Escape closes.
+    Dialog {
+        id: crash
+        property string text
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        padding: 28
+        background: Rectangle { color: Theme.panel; border.color: Theme.accentLine; radius: Theme.radius }
+        onOpened: crashBody.forceActiveFocus()
+        function playAgain() { close(); launcher.play() }
+        function report() { close(); app.problemReport() }
+        Column {
+            id: crashBody
+            width: 520
+            spacing: 18
+            focus: true
+            Keys.onReturnPressed: crash.playAgain()
+            Keys.onEnterPressed: crash.playAgain()
+            Keys.onEscapePressed: crash.close()
+            Text {
+                width: parent.width
+                text: qsTr("The game stopped")
+                color: Theme.accent
+                font.family: Theme.titleFont
+                font.pixelSize: 26
+            }
+            Rectangle { width: parent.width; height: 1; color: Theme.accentLine }
+            Text {
+                width: parent.width
+                text: crash.text
+                color: Theme.ink
+                font.family: Theme.bodyFont
+                font.pixelSize: 15
+                wrapMode: Text.WordWrap
+            }
+            Row {
+                spacing: 14
+                layoutDirection: i18n.rtl ? Qt.RightToLeft : Qt.LeftToRight
+                GoldButton {
+                    width: 210; height: 48
+                    text: qsTr("PLAY AGAIN")
+                    onClicked: crash.playAgain()
+                }
+                TextButton {
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: 44
+                    text: qsTr("PROBLEM REPORT")
+                    onClicked: crash.report()
+                }
+                TextButton {
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: 44
+                    text: qsTr("CLOSE")
+                    onClicked: crash.close()
+                }
+            }
+        }
     }
 
     // A long action under way (a game .pkg unpacked, the update downloaded, the files checked...): its step and
