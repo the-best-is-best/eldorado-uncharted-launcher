@@ -24,16 +24,23 @@ the series.
   counter, checkpoints and save slots.
 - **Key prompts that read as keys:** keyboard keys drawn in the game's colors, with English (US) letters or any
   keyboard layout installed in Windows (Insert → Key letters). Keys work by their place on the keyboard.
-- **No lost progress by accident:** the close button and Alt+F4 ask first.
+- **No lost progress by accident:** the close button and Alt+F4 ask first. **F11** switches between a window and
+  fullscreen while you play, and a window always fits your screen.
+- **Smoother play, measured on your PC:** after a session that ran clearly below your frame rate limit because the
+  graphics card held it back, the launcher offers one step lower upscaling quality (only on your yes).
 - **Saves:** a picture of the moment each save was made, a Saves page to delete and restore them, and a backup
   of every changed save before each start. **Players:** named profiles with their own saves.
 - **Cheats for all three games:** infinite ammo and grenades, no reload, one hit kills, all treasures (once),
   every reward and chapter unlocked, and **Damage to Nate**, so that on any difficulty Nate takes damage as on
   Explorer, Easy, Normal or Hard while the enemies stay as chosen.
 - **Mouse on mounted guns:** Uncharted 1's jeep gun and the turrets of all three games.
-- **Trophies and Gallery** pages (F12 takes a full-size screenshot), Desktop shortcuts per game, Add to Steam.
-- **Help when something goes wrong:** *Problem report* (Settings → LAUNCHER) puts the logs and settings in one
-  zip on your Desktop, and **Check El Dorado.bat** checks the install and your last runs as one page.
+- **Trophies and Gallery** pages (F12 takes a full-size screenshot) and Desktop shortcuts per game.
+- **Steam:** the Collection, or each game on its own, as a non-Steam game, with El Dorado's own icon and library
+  pictures per game. An open Steam is closed and opened again for you.
+- **Help when something goes wrong:** a game that crashes or freezes brings up why, with **PLAY AGAIN** (back to
+  your last save) and **PROBLEM REPORT**, also when it was started from Steam or a shortcut. *Problem report*
+  (Settings → LAUNCHER) puts the logs and settings in one zip on your Desktop, and **Check El Dorado.bat** checks
+  the install and your last runs as one page.
 
 ## Requirements
 
