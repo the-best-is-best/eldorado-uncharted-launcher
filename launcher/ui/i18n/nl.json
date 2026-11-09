@@ -486,5 +486,7 @@
  "{save} restored from the backup of {when} (the one it replaced is in Deleted saves).": "{save} teruggezet uit de back-up van {when} (de vervangen versie staat in Verwijderde opgeslagen games).",
  "{save} restored from the backup of {when}.": "{save} teruggezet uit de back-up van {when}.",
  "{save} restored.": "{save} teruggezet.",
- "{total} files checked, {missing} missing, {wrong} with a wrong size.": "{total} bestanden gecontroleerd, {missing} ontbrekend, {wrong} met een verkeerde grootte."
+ "{total} files checked, {missing} missing, {wrong} with a wrong size.": "{total} bestanden gecontroleerd, {missing} ontbrekend, {wrong} met een verkeerde grootte.",
+ "Unlock all trophies": "Alle trofeeën ontgrendelen",
+ "Every trophy of the game you start, the platinum too, is marked earned when it starts. It is written into your trophy list, so it stays after the cheat is turned off.": "Elke trofee van het spel dat je start, ook de platina, wordt bij het starten als behaald gemarkeerd. Hij wordt in je trofeeënlijst geschreven en blijft staan als de cheat uitgaat."
 }

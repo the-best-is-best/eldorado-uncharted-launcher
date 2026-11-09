@@ -486,5 +486,7 @@
  "{save} restored from the backup of {when} (the one it replaced is in Deleted saves).": "{save} を {when} のバックアップから復元しました (置き換えられたものは削除したセーブデータにあります)。",
  "{save} restored from the backup of {when}.": "{save} を {when} のバックアップから復元しました。",
  "{save} restored.": "{save} を復元しました。",
- "{total} files checked, {missing} missing, {wrong} with a wrong size.": "{total} 個のファイルを確認: 不足 {missing}、サイズ違い {wrong}。"
+ "{total} files checked, {missing} missing, {wrong} with a wrong size.": "{total} 個のファイルを確認: 不足 {missing}、サイズ違い {wrong}。",
+ "Unlock all trophies": "すべてのトロフィーを解除",
+ "Every trophy of the game you start, the platinum too, is marked earned when it starts. It is written into your trophy list, so it stays after the cheat is turned off.": "起動したゲームのすべてのトロフィー(プラチナも)が、起動時に獲得済みになります。トロフィー一覧に書き込まれるため、チートをオフにしても残ります。"
 }

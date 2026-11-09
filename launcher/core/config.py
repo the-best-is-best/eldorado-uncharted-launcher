@@ -44,7 +44,7 @@ ASPECTS: tuple[str, ...] = ("16:10", "16:9", "21:9", "32:9")
 MAX_FPS = 120
 FPS_LIMITS: tuple[str, ...] = ("30", "40", "45", "50", "55", "60", "75", "90", "100", str(MAX_FPS))
 CHEATS: tuple[str, ...] = ("skipintro", "invincible", "ammo", "noreload", "grenades", "onehit", "treasures",
-                           "rewards")
+                           "rewards", "trophies")
 DEFAULT_GAME_DIR = paths.ROOT / "game" / "CUSA02344" / "uroot"
 
 

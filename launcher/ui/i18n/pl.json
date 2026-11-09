@@ -486,5 +486,7 @@
  "{save} restored from the backup of {when} (the one it replaced is in Deleted saves).": "Przywrócono {save} z kopii zapasowej z {when} (zastąpiony zapis jest w Usuniętych zapisach).",
  "{save} restored from the backup of {when}.": "Przywrócono {save} z kopii zapasowej z {when}.",
  "{save} restored.": "Przywrócono {save}.",
- "{total} files checked, {missing} missing, {wrong} with a wrong size.": "Sprawdzono plików: {total}, brakuje {missing}, ze złym rozmiarem {wrong}."
+ "{total} files checked, {missing} missing, {wrong} with a wrong size.": "Sprawdzono plików: {total}, brakuje {missing}, ze złym rozmiarem {wrong}.",
+ "Unlock all trophies": "Odblokuj wszystkie trofea",
+ "Every trophy of the game you start, the platinum too, is marked earned when it starts. It is written into your trophy list, so it stays after the cheat is turned off.": "Każde trofeum uruchamianej gry, także platynowe, jest oznaczane jako zdobyte przy starcie. Trafia do twojej listy trofeów, więc zostaje po wyłączeniu cheatu."
 }

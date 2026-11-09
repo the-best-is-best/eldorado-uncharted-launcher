@@ -73,6 +73,8 @@ CHEAT_TEXTS: dict[str, tuple[str, str]] = {
                   "is turned off."),
     "rewards": ("Unlock all rewards", "Everything in Bonuses (skins, weapons, render modes, art, gameplay tweaks) "
                 "and every cutscene. Nothing is saved: turned off, the menus show your own progress again."),
+    "trophies": ("Unlock all trophies", "Every trophy of the game you start, the platinum too, is marked earned "
+                 "when it starts. It is written into your trophy list, so it stays after the cheat is turned off."),
 }
 LANGUAGES: Options = (
     # First: not one of the game's languages but a fan translation laid over one of them (tools/arabic_language.py),

@@ -487,5 +487,7 @@
  "{save} restored from the backup of {when} (the one it replaced is in Deleted saves).": "استُعيد {save} من نسخة {when} الاحتياطية (والحفظ الذي حلّ محله موجود في الحفظات المحذوفة).",
  "{save} restored from the backup of {when}.": "استُعيد {save} من نسخة {when} الاحتياطية.",
  "{save} restored.": "استُعيد {save}.",
- "{total} files checked, {missing} missing, {wrong} with a wrong size.": "فُحص {total} ملف، {missing} ناقص، {wrong} بحجم خاطئ."
+ "{total} files checked, {missing} missing, {wrong} with a wrong size.": "فُحص {total} ملف، {missing} ناقص، {wrong} بحجم خاطئ.",
+ "Unlock all trophies": "فتح كل الكؤوس",
+ "Every trophy of the game you start, the platinum too, is marked earned when it starts. It is written into your trophy list, so it stays after the cheat is turned off.": "كل كؤوس اللعبة التي تبدؤها، البلاتينية أيضًا، تُسجَّل كمكتسبة عند بدئها. تُكتب في قائمة كؤوسك، فتبقى بعد إيقاف الغش."
 }

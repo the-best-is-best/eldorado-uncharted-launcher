@@ -486,5 +486,7 @@
  "{save} restored from the backup of {when} (the one it replaced is in Deleted saves).": "{save} palautettu varmuuskopiosta {when} (korvattu tallennus on kohdassa Poistetut tallennukset).",
  "{save} restored from the backup of {when}.": "{save} palautettu varmuuskopiosta {when}.",
  "{save} restored.": "{save} palautettu.",
- "{total} files checked, {missing} missing, {wrong} with a wrong size.": "{total} tiedostoa tarkistettu, {missing} puuttuu, {wrong} väärän kokoisia."
+ "{total} files checked, {missing} missing, {wrong} with a wrong size.": "{total} tiedostoa tarkistettu, {missing} puuttuu, {wrong} väärän kokoisia.",
+ "Unlock all trophies": "Avaa kaikki pokaalit",
+ "Every trophy of the game you start, the platinum too, is marked earned when it starts. It is written into your trophy list, so it stays after the cheat is turned off.": "Käynnistämäsi pelin jokainen pokaali, myös platina, merkitään ansaituksi käynnistyksessä. Se kirjoitetaan pokaalilistaasi, joten se säilyy, kun huijaus kytketään pois."
 }

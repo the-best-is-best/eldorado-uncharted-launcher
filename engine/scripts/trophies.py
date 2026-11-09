@@ -17,6 +17,7 @@ import argparse
 import re
 import struct
 import sys
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -366,6 +367,20 @@ def read_unlocks(user_dir, npcommid):
     return unlocked
 
 
+def unlock_all(info, user_dir, now=None):
+    """Writes every trophy of the set the player has not earned into the unlock log, platinum too (the Unlock all
+    trophies cheat). Earned ones keep their time. Returns how many were added."""
+    now = int(now if now is not None else time.time())
+    have = read_unlocks(user_dir, info['npcommid'])
+    missing = [number for number, *_rest in info['trophies'] if number not in have]
+    if missing:
+        log = unlock_log(user_dir, info['npcommid'])
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, 'a', encoding='utf-8') as out:
+            out.writelines(f'{number} {now}' + chr(10) for number in missing)
+    return len(missing)
+
+
 def progress(info, unlocked):
     """How much of a set is earned: {'count', 'percent', 'earned': {grade: n}, 'total': {grade: n}}."""
     total, earned, count = dict.fromkeys('PGSB', 0), dict.fromkeys('PGSB', 0), 0
@@ -388,9 +403,15 @@ def main():
     parser.add_argument('--exe', choices=sorted(GAMES), required=True)
     parser.add_argument('--lang', type=int, default=1)
     parser.add_argument('--own', action='store_true', help='the folder holds this game alone')
+    parser.add_argument('--unlock-all', type=Path, metavar='USER_DIR',
+                        help='then mark every trophy earned in this player folder (the Unlock all trophies cheat)')
     args = parser.parse_args()
     try:
         prepare(args.game, args.exe, args.out, args.lang, args.own)
+        if args.unlock_all:
+            info = read_cache(args.out)
+            if info:
+                print(f'Unlock all trophies: {unlock_all(info, args.unlock_all)} added')
     except Exception as error:  # trophies are optional: never keep a game from starting
         print(f'Trophies: {error}')
     return 0

@@ -486,5 +486,7 @@
  "{save} restored from the backup of {when} (the one it replaced is in Deleted saves).": "{save}을(를) {when} 백업에서 복원했습니다 (교체된 세이브는 삭제된 세이브에 있습니다).",
  "{save} restored from the backup of {when}.": "{save}을(를) {when} 백업에서 복원했습니다.",
  "{save} restored.": "{save} 복원됨.",
- "{total} files checked, {missing} missing, {wrong} with a wrong size.": "파일 {total}개 확인, {missing}개 누락, {wrong}개 크기 오류."
+ "{total} files checked, {missing} missing, {wrong} with a wrong size.": "파일 {total}개 확인, {missing}개 누락, {wrong}개 크기 오류.",
+ "Unlock all trophies": "모든 트로피 해제",
+ "Every trophy of the game you start, the platinum too, is marked earned when it starts. It is written into your trophy list, so it stays after the cheat is turned off.": "시작하는 게임의 모든 트로피(플래티넘 포함)가 시작할 때 획득한 것으로 표시됩니다. 트로피 목록에 기록되므로 치트를 꺼도 유지됩니다."
 }

@@ -110,6 +110,17 @@ def test_start_script_merges_old_engine_logs_once(tmp_path: Path) -> None:
     assert trophies.migrate_old_logs(tmp_path) == 0
 
 
+def test_unlock_all_adds_only_the_missing_ones(tmp_path: Path) -> None:
+    user = _user(tmp_path, "1 1600000000" + chr(10))
+    engine = trophies.load_engine()
+    info = engine.read_cache(trophies.cache_dir("u1", user))
+    assert engine.unlock_all(info, user, now=1900000000) == 4   # all but trophy 1, the platinum included
+    found = trophies.load("u1", tmp_path / "no-game", user_dir=user)
+    assert found is not None and found.count == 5 and found.percent == 100
+    assert {t.number: t.earned for t in found.trophies}[1] == 1600000000   # an earned one keeps its time
+    assert engine.unlock_all(info, user) == 0                            # again: nothing added
+
+
 def test_language_numbers() -> None:
     assert trophies.language_number("3") == 3
     assert trophies.language_number("ar") == 1

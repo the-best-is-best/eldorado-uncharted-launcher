@@ -486,5 +486,7 @@
  "{save} restored from the backup of {when} (the one it replaced is in Deleted saves).": "已從 {when} 的備份還原 {save} (被取代的存檔在已刪除的存檔中)。",
  "{save} restored from the backup of {when}.": "已從 {when} 的備份還原 {save}。",
  "{save} restored.": "已還原 {save}。",
- "{total} files checked, {missing} missing, {wrong} with a wrong size.": "已檢查 {total} 個檔案，{missing} 個遺失，{wrong} 個大小錯誤。"
+ "{total} files checked, {missing} missing, {wrong} with a wrong size.": "已檢查 {total} 個檔案，{missing} 個遺失，{wrong} 個大小錯誤。",
+ "Unlock all trophies": "解鎖所有獎盃",
+ "Every trophy of the game you start, the platinum too, is marked earned when it starts. It is written into your trophy list, so it stays after the cheat is turned off.": "啟動的遊戲的所有獎盃(含白金)會在啟動時標示為已獲得。它會寫入你的獎盃清單,所以關閉作弊後仍會保留。"
 }

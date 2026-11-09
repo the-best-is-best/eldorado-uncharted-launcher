@@ -165,6 +165,15 @@ def rewards(runs, root):
     return Result(PASSED, f"{when(hits[-1][0])}: {hits[-1][1]}")
 
 
+def u1_cross_prompt(runs, root):
+    return Result(LOOK, "Uncharted 1: Nate on the ground after a fall: the big X shows as your key. Mark it.")         if runs else Result(NOT_TRIED, "Uncharted 1: let Nate fall and look at the big X")
+
+
+def trophies_cheat(runs, root):
+    return seen(runs, r"Unlock all trophies: \d+ added",
+                what="Settings > CHEATS > Unlock all trophies, then start a game and open the launcher's Trophies page")
+
+
 def menu_sensitivity(runs, root):
     return seen(runs, r"aiming or vertical sensitivity changed in the in-game menu",
                 what="Insert > Mouse: change Aiming or Vertical sensitivity")
@@ -340,6 +349,8 @@ ITEMS = [
     Item("mouse_camera", "U2/U3 mouse camera smooth (in the game's input function)", mouse_camera),
     Item("mounted_guns", "Mouse aims mounted guns (turrets, U1 jeep gun)", mounted_guns),
     Item("rewards", "Unlock all rewards (Mevlock's)", rewards),
+    Item("u1_cross_prompt", "U1 big X prompt (Nate on the ground) shows your key", u1_cross_prompt),
+    Item("trophies_cheat", "Unlock all trophies (CHEATS)", trophies_cheat),
     Item("menu_sensitivity", "Insert menu: aiming and vertical sensitivity", menu_sensitivity),
     Item("checkpoint_jump", "Insert menu: double-click a checkpoint", checkpoint_jump),
     Item("fullscreen_keys", "Alt+Enter switches window / fullscreen", fullscreen_keys),

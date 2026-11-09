@@ -486,5 +486,7 @@
  "{save} restored from the backup of {when} (the one it replaced is in Deleted saves).": "Το {save} επανήλθε από το αντίγραφο ασφαλείας της {when} (αυτό που αντικατέστησε βρίσκεται στις Διαγραμμένες αποθηκεύσεις).",
  "{save} restored from the backup of {when}.": "Το {save} επανήλθε από το αντίγραφο ασφαλείας της {when}.",
  "{save} restored.": "Το {save} επανήλθε.",
- "{total} files checked, {missing} missing, {wrong} with a wrong size.": "{total} αρχεία ελέγχθηκαν, {missing} λείπουν, {wrong} με λάθος μέγεθος."
+ "{total} files checked, {missing} missing, {wrong} with a wrong size.": "{total} αρχεία ελέγχθηκαν, {missing} λείπουν, {wrong} με λάθος μέγεθος.",
+ "Unlock all trophies": "Ξεκλείδωμα όλων των τροπαίων",
+ "Every trophy of the game you start, the platinum too, is marked earned when it starts. It is written into your trophy list, so it stays after the cheat is turned off.": "Κάθε τρόπαιο του παιχνιδιού που ξεκινάς, και το πλατινένιο, σημειώνεται ως κερδισμένο κατά την εκκίνηση. Γράφεται στη λίστα τροπαίων σου και μένει μετά την απενεργοποίηση του cheat."
 }

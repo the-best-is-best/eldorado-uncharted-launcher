@@ -293,7 +293,9 @@ def main():
             language = env.get('BB_LANGUAGE', '1')
             run_script_here('trophies.py', game, '--out', trophy_dir, '--exe', key,
                        '--lang', language if language.isdigit() else '1',
-                       *(['--own'] if env.get(f'BB_GAME_DIR_{key.upper()}') else []))
+                       *(['--own'] if env.get(f'BB_GAME_DIR_{key.upper()}') else []),
+                       # Unlock all trophies (launcher Cheats, BB_UNLOCK_TROPHIES=1): every one marked earned.
+                       *(['--unlock-all', user_dir] if env.get('BB_UNLOCK_TROPHIES') == '1' else []))
         this = ['--run'] if getattr(sys, 'frozen', False) else [str(Path(__file__).resolve())]
         env['BB_EXE'] = exe
         env['BB_CHEATS'] = game_cheats(all_cheats, exe)

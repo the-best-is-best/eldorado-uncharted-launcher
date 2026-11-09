@@ -486,5 +486,7 @@
  "{save} restored from the backup of {when} (the one it replaced is in Deleted saves).": "{save}, {when} tarihli yedekten geri yüklendi (yerini aldığı kayıt Silinen kayıtlar'da).",
  "{save} restored from the backup of {when}.": "{save}, {when} tarihli yedekten geri yüklendi.",
  "{save} restored.": "{save} geri yüklendi.",
- "{total} files checked, {missing} missing, {wrong} with a wrong size.": "{total} dosya kontrol edildi, {missing} eksik, {wrong} yanlış boyutta."
+ "{total} files checked, {missing} missing, {wrong} with a wrong size.": "{total} dosya kontrol edildi, {missing} eksik, {wrong} yanlış boyutta.",
+ "Unlock all trophies": "Tüm kupaları aç",
+ "Every trophy of the game you start, the platinum too, is marked earned when it starts. It is written into your trophy list, so it stays after the cheat is turned off.": "Başlattığın oyunun platin dahil her kupası, başlarken kazanılmış olarak işaretlenir. Kupa listene yazılır, bu yüzden hile kapatıldıktan sonra da kalır."
 }

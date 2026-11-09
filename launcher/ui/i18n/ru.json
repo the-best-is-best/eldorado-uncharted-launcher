@@ -486,5 +486,7 @@
  "{save} restored from the backup of {when} (the one it replaced is in Deleted saves).": "{save} восстановлено из резервной копии от {when} (заменённое сохранение — в удалённых).",
  "{save} restored from the backup of {when}.": "{save} восстановлено из резервной копии от {when}.",
  "{save} restored.": "{save} восстановлено.",
- "{total} files checked, {missing} missing, {wrong} with a wrong size.": "Проверено файлов: {total}, отсутствует: {missing}, с неверным размером: {wrong}."
+ "{total} files checked, {missing} missing, {wrong} with a wrong size.": "Проверено файлов: {total}, отсутствует: {missing}, с неверным размером: {wrong}.",
+ "Unlock all trophies": "Открыть все трофеи",
+ "Every trophy of the game you start, the platinum too, is marked earned when it starts. It is written into your trophy list, so it stays after the cheat is turned off.": "Каждый трофей запускаемой игры, включая платиновый, отмечается полученным при старте. Он записывается в ваш список трофеев и остаётся после выключения чита."
 }

@@ -23,6 +23,8 @@ in `analysis/uncharted-user/test-marks.json`.
 | `mouse_camera` | Uncharted 2 or 3, walking around | Look around with the mouse, not aiming | As smooth as I J K L: no sticky or heavy feel, no drift after the mouse stops | `Mouse: Uncharted N follow camera turned in its input function` (LOOK: mark how it feels) |
 | `mounted_guns` | Any game, a mounted gun (turret); Uncharted 1's jeep gun | Get on it and aim with the mouse | The mouse aims it directly, like the camera | `Mouse: Uncharted N mounted gun entered` |
 | `rewards` | Settings → CHEATS → Unlock all rewards, then each game's Bonuses | Open Bonuses | Every skin, weapon, render mode and cutscene unlocked; turned off, only your own | `Unlock all rewards: ... patched` |
+| `u1_cross_prompt` | Uncharted 1, Nate on the ground after a fall (Drowned City) | Look at the big X at the bottom left | Your key (Space), not the PlayStation X | LOOK: mark it |
+| `trophies_cheat` | Settings → CHEATS → Unlock all trophies | Turn it on, start a game, then open the launcher's Trophies page | Every trophy of that game, the platinum too, shows as earned; nothing already earned is changed | `Unlock all trophies: N added` |
 | `menu_sensitivity` | Insert → settings → Mouse | Change Aiming sensitivity and Vertical sensitivity | Aiming and looking up and down follow the new values | `Mouse: aiming or vertical sensitivity changed in the in-game menu` |
 | `checkpoint_jump` | Insert → Checkpoints | Double-click a checkpoint | The game goes there at once | `Checkpoints: jumping to task` |
 | `fullscreen_keys` | Any game | Press Alt+Enter (and F11) | Window and fullscreen switch | `Window: Alt+Enter, ...` |

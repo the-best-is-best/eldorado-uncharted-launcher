@@ -486,5 +486,7 @@
  "{save} restored from the backup of {when} (the one it replaced is in Deleted saves).": "{save} gjenopprettet fra sikkerhetskopien fra {when} (den den erstattet, ligger under Slettede lagringer).",
  "{save} restored from the backup of {when}.": "{save} gjenopprettet fra sikkerhetskopien fra {when}.",
  "{save} restored.": "{save} gjenopprettet.",
- "{total} files checked, {missing} missing, {wrong} with a wrong size.": "{total} filer sjekket, {missing} mangler, {wrong} med feil størrelse."
+ "{total} files checked, {missing} missing, {wrong} with a wrong size.": "{total} filer sjekket, {missing} mangler, {wrong} med feil størrelse.",
+ "Unlock all trophies": "Lås opp alle trofeer",
+ "Every trophy of the game you start, the platinum too, is marked earned when it starts. It is written into your trophy list, so it stays after the cheat is turned off.": "Hver trofé i spillet du starter, også platina, merkes som oppnådd ved start. Den skrives inn i trofélisten din og blir værende når juksekoden slås av."
 }

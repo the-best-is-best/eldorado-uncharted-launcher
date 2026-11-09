@@ -486,5 +486,7 @@
  "{save} restored from the backup of {when} (the one it replaced is in Deleted saves).": "{save} obnoveno ze zálohy z {when} (nahrazená pozice je ve Smazaných pozicích).",
  "{save} restored from the backup of {when}.": "{save} obnoveno ze zálohy z {when}.",
  "{save} restored.": "{save} obnoveno.",
- "{total} files checked, {missing} missing, {wrong} with a wrong size.": "Zkontrolováno souborů: {total}, chybí {missing}, se špatnou velikostí {wrong}."
+ "{total} files checked, {missing} missing, {wrong} with a wrong size.": "Zkontrolováno souborů: {total}, chybí {missing}, se špatnou velikostí {wrong}.",
+ "Unlock all trophies": "Odemknout všechny trofeje",
+ "Every trophy of the game you start, the platinum too, is marked earned when it starts. It is written into your trophy list, so it stays after the cheat is turned off.": "Každá trofej spuštěné hry, i platinová, se při startu označí jako získaná. Zapíše se do seznamu trofejí, takže zůstane i po vypnutí cheatu."
 }

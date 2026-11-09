@@ -486,5 +486,7 @@
  "{save} restored from the backup of {when} (the one it replaced is in Deleted saves).": "{save} aus der Sicherung von {when} wiederhergestellt (der ersetzte Spielstand liegt in Gelöschte Spielstände).",
  "{save} restored from the backup of {when}.": "{save} aus der Sicherung von {when} wiederhergestellt.",
  "{save} restored.": "{save} wiederhergestellt.",
- "{total} files checked, {missing} missing, {wrong} with a wrong size.": "{total} Dateien geprüft, {missing} fehlen, {wrong} mit falscher Größe."
+ "{total} files checked, {missing} missing, {wrong} with a wrong size.": "{total} Dateien geprüft, {missing} fehlen, {wrong} mit falscher Größe.",
+ "Unlock all trophies": "Alle Trophäen freischalten",
+ "Every trophy of the game you start, the platinum too, is marked earned when it starts. It is written into your trophy list, so it stays after the cheat is turned off.": "Jede Trophäe des gestarteten Spiels, auch die Platin-Trophäe, gilt beim Start als erhalten. Sie wird in deine Trophäenliste geschrieben und bleibt, auch wenn der Cheat ausgeschaltet wird."
 }

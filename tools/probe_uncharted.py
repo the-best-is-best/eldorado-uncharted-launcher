@@ -520,6 +520,8 @@ def game_environment(args, game, executable, game_dir):
         env["BB_DEV_MENU"] = "1"
     if "rewards" in cheats:
         env["BB_UNLOCK_REWARDS"] = "1"
+    if "trophies" in cheats:  # every trophy of the game marked earned at the start (engine/scripts/trophies.py)
+        env["BB_UNLOCK_TROPHIES"] = "1"
     if "treasures" in cheats:  # the games' own Dev Menu "Give all Treasures" (runtime_checkpoint.c)
         # Once per save: the engine gives them to the save being played unless it is one of these (given again,
         # the game showed its "all treasures found" message at every start); a new playthrough's save gets them.
@@ -543,11 +545,11 @@ def game_environment(args, game, executable, game_dir):
     # Skip intro (the launcher's cheat, on by default): the boot logo movie of all three games (runtime_file.c).
     if "skipintro" in cheats:
         env.setdefault("BB_SKIP_INTRO", "1")
-    # Uncharted 3's Triangle prompt in its cargo plane scene is not in the engine's prompt table yet (Mevlock #27):
-    # the engine keeps the game's unknown button-sized pictures (at most 150 a run) for tools/test_report.py.
-    if game == "u3":
-        env.setdefault("BB_BUTTON_PROMPTS_DUMP", str(USER / "prompt-dumps"))
-        (USER / "prompt-dumps").mkdir(parents=True, exist_ok=True)
+    # Prompts not in the engine's prompt table yet (U3's Triangle in the cargo plane scene, Mevlock #27; U1's big X
+    # when Nate gets up after a fall): the engine keeps the game's unknown button-sized pictures (at most 150 a run)
+    # for tools/test_report.py.
+    env.setdefault("BB_BUTTON_PROMPTS_DUMP", str(USER / "prompt-dumps"))
+    (USER / "prompt-dumps").mkdir(parents=True, exist_ok=True)
     env["BB_JOB_SLEEP"] = job_sleep(game)
     # U3 characters sinking into the ground, floating or twitching (SuperMedo dca99bb): what the raycaster
     # copy shader writes is read back at the end-of-pipe label. On in Uncharted 3 unless already set;
