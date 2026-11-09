@@ -98,6 +98,7 @@ enum Shape : u8 {
     PressedPuck, ///< 512x512: the same button pressed down (hold prompts)
     HudDPad,     ///< 256x256: the weapon switch d-pad
     RotateStick, ///< 256x512: Uncharted 1's "turn the left stick" (a ring arrow over the stick, 4 frames)
+    PushStick,   ///< 256x128: Uncharted 1's "push the left stick left or right" (the stick tilting, 3 frames)
 };
 struct Picture {
     u64 hash;
@@ -125,6 +126,12 @@ const Picture pictures[] = {
     {0x7515a2f4f6a1022dull, 256, RotateStick, Move, {205, 178, 140}, "Uncharted 1 turn-the-stick prompt (2)", 512},
     {0x62ce1cf45bcd3fa6ull, 256, RotateStick, Move, {205, 178, 140}, "Uncharted 1 turn-the-stick prompt (3)", 512},
     {0x8d9e67192111aafbull, 256, RotateStick, Move, {205, 178, 140}, "Uncharted 1 turn-the-stick prompt (4)", 512},
+    // El Dorado (10 Nov 2026): Uncharted 1's "push the stick left or right" (pushing the stone in the Drowned City
+    // puzzle): the stick tilting right, upright, left, found with BB_BUTTON_PROMPTS_DUMP_ALL. The keys show instead,
+    // the one pushed lit.
+    {0x0127ee4d1bfd5dbfull, 256, PushStick, Move, {200, 176, 140}, "Uncharted 1 push-the-stick prompt (right)", 128},
+    {0x57aa12c28ebef9adull, 256, PushStick, Move, {200, 176, 140}, "Uncharted 1 push-the-stick prompt (centre)", 128},
+    {0xc91a58615dd27d66ull, 256, PushStick, Move, {200, 176, 140}, "Uncharted 1 push-the-stick prompt (left)", 128},
     {0x94d741f6b51815eeull, 512, Puck, Circle, {222, 32, 32}, "Uncharted 3 circle tapping prompt"},
     {0x93b46ba81469882cull, 512, PressedPuck, Circle, {222, 32, 32}, "Uncharted 3 circle hold prompt"},
 };
@@ -932,9 +939,70 @@ std::vector<Patch> BuildRotateStick(const Picture& picture, u32 levels, Style st
     return patches;
 }
 
+/// El Dorado: the "push the stick sideways" prompt as the move keys (W above, A S D below), the one the stick leans to
+/// lit (frames: right, upright, left). Like the wheel prompt, the picture is stored upside down and the game shows
+/// it through its own stick-shaped mask.
+std::vector<Patch> BuildPushStick(const Picture& picture, u32 levels, Style style) {
+    if (style != Style::Keyboard) {
+        return {}; // controllers: the game's own stick
+    }
+    const Bindings bindings = LoadBindings();
+    const Font font;
+    const u32 w = picture.size, h = PictureHeight(picture);
+    Canvas up{w, h};
+    constexpr Color panel{0.102f, 0.118f, 0.149f}; // Theme.qml panel #1a1e26, as the wheel prompt
+    for (u32 y = 0; y < h; ++y) {
+        for (u32 x = 0; x < w; ++x) {
+            up.Blend(x, y, panel, 1.0f);
+            const float dx = (x + 0.5f - w * 0.5f) / (w * 0.45f), dy = (y + 0.5f - h * 0.5f) / (h * 0.45f);
+            up.Blend(x, y, rim, 0.15f * std::clamp(1.0f - (dx * dx + dy * dy), 0.0f, 1.0f));
+        }
+    }
+    int frame = 0;
+    for (const Picture& p : pictures) {
+        if (p.hash == picture.hash) {
+            break;
+        }
+        frame += p.shape == PushStick ? 1 : 0;
+    }
+    struct Key {
+        float cx, cy;
+        int binding; // move[]: 0 up, 1 left, 2 down, 3 right
+        bool lit;
+    };
+    const float cx = w * 0.5f, cy = h * 0.5f, half = 17.0f, step = 40.0f;
+    const Key keys[4] = {{cx, cy - step * 0.5f, 0, false},
+                         {cx - step, cy + step * 0.5f, 1, frame == 2},
+                         {cx, cy + step * 0.5f, 2, false},
+                         {cx + step, cy + step * 0.5f, 3, frame == 0}};
+    constexpr Color hud_orange = highlight;
+    for (const Key& k : keys) {
+        DrawCap(
+            up, k.cx - half, k.cy - half, k.cx + half, k.cy + half,
+            [&](float x, float y) { return RoundedRect(x, y, k.cx, k.cy, half, half, 8.0f); },
+            k.lit ? &hud_orange : nullptr);
+        font.Draw(up, KeyLabel(bindings.move[k.binding]), k.cx, k.cy, 2 * half - 8.0f, 30.0f,
+                  k.lit ? lit_text : text_color);
+    }
+    // Stored upside down.
+    Canvas level{w, h};
+    for (u32 y = 0; y < h; ++y) {
+        std::memcpy(&level.px[size_t(y) * w * 4], &up.px[size_t(h - 1 - y) * w * 4], w * 4 * sizeof(float));
+    }
+    std::vector<Patch> patches;
+    for (u32 mip = 0; mip < std::max(levels, 1u) && level.height >= 4 && level.width >= 4; ++mip) {
+        patches.push_back({mip, 0, 0, level.width, level.height, EncodeBc1(level)});
+        level = Downsample(level);
+    }
+    return patches;
+}
+
 std::vector<Patch> BuildPicture(const Picture& picture, u32 levels, Style style) {
     if (picture.shape == RotateStick) {
         return BuildRotateStick(picture, levels, style);
+    }
+    if (picture.shape == PushStick) {
+        return BuildPushStick(picture, levels, style);
     }
     const Bindings bindings = LoadBindings();
     const Font font;
