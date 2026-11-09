@@ -2094,6 +2094,62 @@ static const unsigned char u3_eu_menu_handler[]={0x55,0x48,0x89,0xe5,0x41,0x57,0
                                                  0x48,0x81,0xec,0x08,0x03,0x00,0x00,0x89,0x95,0xfc,0xfc};
 static const unsigned char u3_us_menu_handler[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,
                                                  0x48,0x81,0xec,0xe8,0x02,0x00,0x00,0x89,0x95,0x24,0xfd};
+/* U1 1.02, One hit kills (BB_CHEATS has "onehit"): npc.cpp RespondToAttack (0x13ed0) joins its paths at 0x1472e with the
+ * damage in xmm0, r14 = the attack and r15 = the attacker [attack+8]. Nate's own hits kill an NPC outright (the
+ * attacker is the player's game object [player+0xf0], player = **(image+0xaa5f78), its id at +0x64 = *(image+0xaa5f80)).
+ * Elena's shots from the jet ski are not his: while her BuddyJetskiSkill update (0x4bf80, once a frame) runs, any
+ * attacker's hit kills (El Dorado, 9 Nov 2026: a hit by anyone kills at once, and she died of an enemy's hit off the
+ * boat). The damage is set through the thunk's saved xmm0 (probe.c callback_thunk: 0xb0 bytes below the 16-aligned
+ * regs, +0x30). */
+static uint64_t jetski_hook_us; /* last BuddyJetskiSkill update */
+static void __attribute__((ms_abi)) u1_102_jetski_skill(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                                        const uint64_t *regs) {
+    (void)rdi; (void)rsi; (void)image; (void)r14; (void)regs;
+    static int first=1;
+    if (first) { first=0; printf("One hit kills: Uncharted 1 jet ski: Elena's shots count while she rides with Nate\n"); }
+    jetski_hook_us=now_us();
+}
+static int onehit_enabled(void) {
+    static int on=-1;
+    if (on<0) {
+        on=0;
+        const char *list=getenv("BB_CHEATS");
+        for (const char *p=list; p && *p; ) {
+            const char *end=strchr(p,',');
+            const size_t length=end ? (size_t)(end-p) : strlen(p);
+            if (length==6 && !memcmp(p,"onehit",6)) on=1;
+            p=end ? end+1 : p+length;
+        }
+    }
+    return on;
+}
+static void __attribute__((ms_abi)) u1_102_onehit(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                                  const uint64_t *regs) {
+    (void)rdi; (void)rsi;
+    if (!onehit_enabled() || !r14 || !regs) return;
+    const uint64_t attacker=*(const uint64_t *)(uintptr_t)(r14+8);
+    if (!attacker) return;
+    const uint64_t now=now_us();
+    const int jetski=jetski_hook_us && now-jetski_hook_us<500000;
+    if (!jetski) {
+        const uint64_t handle=*(const uint64_t *)(uintptr_t)(image+0xaa5f78);
+        const uint32_t id=*(const uint32_t *)(uintptr_t)(image+0xaa5f80);
+        if (!handle) return;
+        const uint64_t player=*(const uint64_t *)(uintptr_t)handle;
+        if (!player || *(const uint32_t *)(uintptr_t)(player+0x64)!=id || attacker!=*(const uint64_t *)(uintptr_t)(player+0xf0)) return;
+    }
+    float *damage=(float *)(uintptr_t)(((uintptr_t)regs&~(uintptr_t)15)-0xb0+0x30);
+    *damage=100000.0f;
+    static int first=1;
+    if (first) { first=0; printf("One hit kills: Uncharted 1: a hit %s killed\n",jetski ? "while Elena rides (any attacker)" : "by Nate"); }
+}
+static const unsigned char u1_102_jetski_skill_code[]={
+    0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0xb8,0x00,0x00,0x00,
+    0x49,0x89,0xf6,0x48,
+};
+static const unsigned char u1_102_onehit_code[]={
+    0x44,0x8a,0xbb,0x29,0x2d,0x00,0x00,0xc6,0x83,0x29,0x2d,0x00,0x00,0x00,
+};
 static const RuntimeGuestCallback guest_callbacks[]={
     {"U2 main menu Quit (EU)",0x29d7da,u2_eu_menu_store,sizeof(u2_eu_menu_store),7,runtime_exit_menu_u2_data,NULL},
     {"U2 main menu Quit (1.02)",0x5c5433,u2_us_menu_store,sizeof(u2_us_menu_store),7,runtime_exit_menu_u2_data,NULL},
@@ -2222,6 +2278,8 @@ static const RuntimeGuestCallback guest_callbacks[]={
      u2_102_camera_input,NULL},
     {"U3 1.02 follow camera input (mouse)",0x4e42f0,u3_102_camera_input_code,sizeof(u3_102_camera_input_code),6,
      u3_102_camera_input,NULL},
+    {"U1 1.02 jet ski: Elena rides (One hit kills)",0x4bf80,u1_102_jetski_skill_code,sizeof(u1_102_jetski_skill_code),6,u1_102_jetski_skill,NULL},
+    {"U1 1.02 One hit kills",0x1472e,u1_102_onehit_code,sizeof(u1_102_onehit_code),14,u1_102_onehit,NULL},
 };
 const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count) {
     *count=sizeof(guest_callbacks)/sizeof(*guest_callbacks);

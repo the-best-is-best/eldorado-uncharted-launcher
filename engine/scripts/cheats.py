@@ -82,20 +82,15 @@ PATCHES[US['eboot.bin']]['noreload'] = PATCHES[US['eboot.bin']]['ammo']
 # Uncharted 1, npc.cpp RespondToAttack (0x13ed0): the damage [attack+0x14] in xmm0 is scaled by the tweak when
 # [attacker+0x60] == 1 (0x146f7) and handed to the NPC's damage (0x7da0 -> health 0x274e0, health float at +0x1c)
 # after "mov r15b, [rbx+0x2d29]" at 0x1472e, the join of every path (r15 = attacker [attack+8]; rax, rcx free). That
-# load jumps to a stub in the code segment's zero padding right after .eh_frame_hdr's table (it ends at 0x911530; the
-# ultrawide stubs start 0x100 past the last non-zero byte, so they land where they did): when the attacker exists
-# (r15 not null) xmm0 = 100000.0, whoever it is. El Dorado 9 Nov 2026: it was Nate's own hits only (a test of the player
-# through g_playerHandle 0xaa5f78), and Elena's shots from the jet ski did not kill; neither did a test with the
-# faction [attacker+0x60] == 1 of the tweak above (0x146f7). With any attacker they do, and Nate does not die of a hit.
+# load is where the engine's callback (runtime_pad.c u1_102_onehit) sets xmm0 = 100000.0: Nate's own hits (the
+# attacker is the player's game object), and any attacker's while Elena's BuddyJetskiSkill update (0x4bf80) runs.
 # Uncharted 2, npc.cpp ComputeArmorDamage (0x244ef0; its int damage [rbp-0x4040] goes to the health vfunc
 # [npc+0x1f0]+0x10): the faction-1 block 0x245a95..0x245b39 (cmp dword [r8+0x150], 1 / jne; the tweak's multiply)
 # is rewritten in place with the player test first (handle 0x115bd20: slot, id at +8; the object's id at +0x44, as
 # this function checks the attacker r8): the player's hit sets the damage to 100000 and skips the multiply; anyone
 # else runs the same multiply (only the s_pInternal null assert's message call is dropped, its int 0x41 is kept).
-U1_ONEHIT_STUB = '4d85ff7409b80050c347c5f96ec0448abb292d0000e9db3170ff'
-PATCHES[US['eboot.bin']]['onehit'] = [
-    (0x1472e, '448abb292d0000c683292d000000', 'e90dce8f00' + NOP * 2 + 'c683292d000000'),
-    (0x911540, '00' * (len(U1_ONEHIT_STUB) // 2), U1_ONEHIT_STUB)]
+# Uncharted 1's One hit kills is not a patch here any more: the engine hooks 0x1472e itself (runtime_pad.c
+# u1_102_onehit; BB_CHEATS keeps "u1:onehit" to switch it on), so Elena's shots kill while she rides the jet ski.
 PATCHES[US['big2-ps4_Shipping.elf']]['onehit'] = (
     0x245a95,
     '4183b850010000010f85960000004189f6c78560bfffff04000000488b1d095f4e014885db753e488b05b584320131db4885c0742e'
