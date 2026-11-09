@@ -83,16 +83,16 @@ PATCHES[US['eboot.bin']]['noreload'] = PATCHES[US['eboot.bin']]['ammo']
 # [attacker+0x60] == 1 (0x146f7) and handed to the NPC's damage (0x7da0 -> health 0x274e0, health float at +0x1c)
 # after "mov r15b, [rbx+0x2d29]" at 0x1472e, the join of every path (r15 = attacker [attack+8]; rax, rcx free). That
 # load jumps to a stub in the code segment's zero padding right after .eh_frame_hdr's table (it ends at 0x911530; the
-# ultrawide stubs start 0x100 past the last non-zero byte, so they land where they did): g_playerHandle 0xaa5f78
-# (slot, id at +8; the player's id at +0x64), and when the attacker is the player's game object [player+0xf0] (as the
-# NPC's own event handler compares at 0x12b09) xmm0 = 100000.0.
+# ultrawide stubs start 0x100 past the last non-zero byte, so they land where they did): when the attacker exists
+# (r15 not null) xmm0 = 100000.0, whoever it is. El Dorado 9 Nov 2026: it was Nate's own hits only (a test of the player
+# through g_playerHandle 0xaa5f78), and Elena's shots from the jet ski did not kill; neither did a test with the
+# faction [attacker+0x60] == 1 of the tweak above (0x146f7). With any attacker they do, and Nate does not die of a hit.
 # Uncharted 2, npc.cpp ComputeArmorDamage (0x244ef0; its int damage [rbp-0x4040] goes to the health vfunc
 # [npc+0x1f0]+0x10): the faction-1 block 0x245a95..0x245b39 (cmp dword [r8+0x150], 1 / jne; the tweak's multiply)
 # is rewritten in place with the player test first (handle 0x115bd20: slot, id at +8; the object's id at +0x44, as
 # this function checks the attacker r8): the player's hit sets the damage to 100000 and skips the multiply; anyone
 # else runs the same multiply (only the s_pInternal null assert's message call is dropped, its int 0x41 is kept).
-U1_ONEHIT_STUB = ('4d85ff7431488b052c4a19004885c074258b0d294a1900488b004885c0741739486475124c3bb8f00000007509'
-                  'b80050c347c5f96ec0448abb292d0000e9b33170ff')
+U1_ONEHIT_STUB = '4d85ff7409b80050c347c5f96ec0448abb292d0000e9db3170ff'
 PATCHES[US['eboot.bin']]['onehit'] = [
     (0x1472e, '448abb292d0000c683292d000000', 'e90dce8f00' + NOP * 2 + 'c683292d000000'),
     (0x911540, '00' * (len(U1_ONEHIT_STUB) // 2), U1_ONEHIT_STUB)]
