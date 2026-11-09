@@ -169,6 +169,15 @@ def u1_cross_prompt(runs, root):
     return Result(LOOK, "Uncharted 1: Nate on the ground after a fall: the big X shows as your key. Mark it.")         if runs else Result(NOT_TRIED, "Uncharted 1: let Nate fall and look at the big X")
 
 
+def u1_push_prompt(runs, root):
+    return Result(LOOK, "Uncharted 1: pushing the stone (Drowned City): W A S D show, the pushed key lit. Mark it.")         if runs else Result(NOT_TRIED, "Uncharted 1: push the stone and look at the prompt")
+
+
+def onehit_jetski(runs, root):
+    return seen(runs, r"One hit kills: Uncharted 1 jet ski: Elena's shots count",
+                what="Uncharted 1 jet ski with One hit kills on: Elena's shots kill, off the boat only Nate's hits do")
+
+
 def trophies_cheat(runs, root):
     return seen(runs, r"Unlock all trophies: \d+ added",
                 what="Settings > CHEATS > Unlock all trophies, then start a game and open the launcher's Trophies page")
@@ -350,6 +359,8 @@ ITEMS = [
     Item("mounted_guns", "Mouse aims mounted guns (turrets, U1 jeep gun)", mounted_guns),
     Item("rewards", "Unlock all rewards (Mevlock's)", rewards),
     Item("u1_cross_prompt", "U1 big X prompt (Nate on the ground) shows your key", u1_cross_prompt),
+    Item("u1_push_prompt", "U1 push-the-stone prompt shows W A S D", u1_push_prompt),
+    Item("onehit_jetski", "One hit kills counts Elena's shots on the jet ski only", onehit_jetski),
     Item("trophies_cheat", "Unlock all trophies (CHEATS)", trophies_cheat),
     Item("menu_sensitivity", "Insert menu: aiming and vertical sensitivity", menu_sensitivity),
     Item("checkpoint_jump", "Insert menu: double-click a checkpoint", checkpoint_jump),
