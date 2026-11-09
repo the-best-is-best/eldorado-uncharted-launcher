@@ -286,6 +286,21 @@ static void restore_protections(const ProtRun *runs, size_t from, size_t to) {
             win_fail("restoring page protection",runs[i].start,runs[i].end-runs[i].start);
     }
 }
+/* A carve that keeps a mapped view around the hole unmaps the whole view and maps both sides back:
+ * with one large view per mapping that costs ~16 ms per partial unmap (a fork's U3 cutscene-start
+ * report: 244 MiB freed in 1 MiB pieces from a 2.9 GB mapping, 3.8 s of stalls). Slow ones are
+ * logged (diagnostics, always on: only carves over 4 ms print, the first 40 then every 50th). */
+static void carve_note(LARGE_INTEGER t0, uintptr_t lo, uintptr_t hi, uintptr_t a, uintptr_t b) {
+    static LARGE_INTEGER freq; static long slow; static double total;
+    LARGE_INTEGER t1; QueryPerformanceCounter(&t1);
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    const double ms=(double)(t1.QuadPart-t0.QuadPart)*1000.0/(double)freq.QuadPart;
+    if (ms<4.0) return;
+    ++slow; total+=ms;
+    if (slow<=40 || slow%50==0)
+        printf("Memory: slow carve %.1f ms: a %" PRIu64 " KiB hole in a %" PRIu64 " MiB view (%ld slow, %.0f ms in all)\n",
+               ms,(uint64_t)((b-a)>>10),(uint64_t)((hi-lo)>>20),slow,total);
+}
 /* Leaves [a,b) as exactly one unmapped placeholder; returns its region index. */
 static size_t carve_host(uintptr_t a, uintptr_t b) {
     size_t first=region_index(a), last=first;
@@ -299,6 +314,8 @@ static size_t carve_host(uintptr_t a, uintptr_t b) {
     ProtRun *runs=NULL; size_t nruns=0, capacity=0, left_runs=0;
     if (keep_left) left_runs=nruns=save_protections(lo,a,&runs,nruns,&capacity);
     if (keep_right) nruns=save_protections(b,hi,&runs,nruns,&capacity);
+    LARGE_INTEGER carve_t0={0};
+    if (keep_left || keep_right) QueryPerformanceCounter(&carve_t0);
     if (keep_left || keep_right) {
         carve_lo=lo; carve_hi=hi; carve_thread=GetCurrentThreadId();
         InterlockedIncrement(&carve_seq);
@@ -334,14 +351,37 @@ static size_t carve_host(uintptr_t a, uintptr_t b) {
         }
     }
     if (keep_left || keep_right) { done_lo=lo; done_hi=hi; InterlockedIncrement(&carve_seq); }
+    if (keep_left || keep_right) carve_note(carve_t0,lo,hi,a,b);
     free(runs);
     return at;
+}
+/* Large mappings become one view per 16 MiB (address-aligned), from Alex's fork (ec638b52): a partial
+ * unmap remaps the rest of its view (carve_host), and the games free video memory in 1 MiB pieces from
+ * the start of a 3-4 GB mapping (U3 loads and cutscene starts: 5-33 ms each here, ~16 ms on his PC,
+ * seconds in all on a slow one). host_protect already works view by view. BB_VIEW_CHUNKS=0: one view. */
+#define VIEW_CHUNK (UINT64_C(16)<<20)
+static int view_chunks(void) {
+    static int value=-1;
+    if (value<0) { const char *v=getenv("BB_VIEW_CHUNKS"); value=!(v && v[0]=='0'); }
+    return value;
 }
 static int host_map(uintptr_t address, uint64_t size, int prot, int reserved, uint64_t phys) {
     size_t i=carve_host(address,address+size);
     if (reserved) return 0;
-    regions[i].phys=phys; regions[i].mapped=1;
-    view_map(&regions[i],win_prot(prot));
+    const uintptr_t end=address+size;
+    const int chunks=view_chunks();
+    for (uintptr_t at=address; at<end; ++i) {
+        uintptr_t next=chunks ? (at+VIEW_CHUNK)&~(uintptr_t)(VIEW_CHUNK-1) : end;
+        if (next>=end) next=end;
+        else {
+            if (!VirtualFree((void *)at,next-at,MEM_RELEASE|MEM_PRESERVE_PLACEHOLDER)) win_fail("splitting a placeholder",at,next-at);
+            regions[i].end=next;
+            region_insert(i+1,(HostRegion){next,end,0,0});
+        }
+        regions[i].phys=phys+(at-address); regions[i].mapped=1;
+        view_map(&regions[i],win_prot(prot));
+        at=next;
+    }
     return 0;
 }
 static int host_unmap(uintptr_t address, uint64_t size) { carve_host(address,address+size); return 0; }

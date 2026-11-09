@@ -16,6 +16,7 @@
 #include "video_core/renderer_vulkan/vk_dlss.h"
 #include "video_core/renderer_vulkan/vk_xess.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_low_latency.h"
 #include "video_core/renderer_vulkan/vk_vram.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 
@@ -528,6 +529,17 @@ bool Instance::CreateDevice() {
             }
         }
     }
+    // bbport: low latency mode (NVIDIA Reflex / AMD Anti-Lag 2, BB_LOW_LATENCY).
+    std::vector<const char*> latency_extensions;
+    void* latency_features =
+        LowLatency::PrepareDevice(physical_device, available_extensions, latency_extensions);
+    for (const char* name : latency_extensions) {
+        if (std::none_of(enabled_extensions.begin(), enabled_extensions.end(),
+                         [&](const char* e) { return std::string_view{e} == name; }) &&
+            enabled_extensions.size() < enabled_extensions.capacity()) {
+            enabled_extensions.push_back(name);
+        }
+    }
     vk::StructureChain device_chain = {
         vk::DeviceCreateInfo{
             .queueCreateInfoCount = static_cast<u32>(queue_infos.size()),
@@ -757,6 +769,14 @@ bool Instance::CreateDevice() {
         device_chain.unlink<vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE>();
     }
 
+    if (latency_features) {
+        auto* tail = reinterpret_cast<VkBaseOutStructure*>(
+            &device_chain.get<vk::PhysicalDeviceFeatures2>());
+        while (tail->pNext) {
+            tail = tail->pNext;
+        }
+        tail->pNext = static_cast<VkBaseOutStructure*>(latency_features);
+    }
     // bbport: XeSS enables its features in the chain (and may append structures to its end).
     if (Xess* xess = Xess::Get()) {
         xess->PatchDeviceFeatures(*instance, physical_device,
@@ -770,6 +790,7 @@ bool Instance::CreateDevice() {
     device = std::move(dev);
 
     VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
+    LowLatency::OnDevice(*device);
     if (Dlss* dlss = Dlss::Get()) {
         dlss->Initialize(*instance, physical_device, *device);
     }
@@ -1076,6 +1097,18 @@ void Instance::CollectToolingInfo() const {
     }
 }
 
+// bbport: the driver's budget as the caches see it: BB_VRAM_SIMULATE_MIB leaves the ballast out and
+// caps it at the simulated size; BB_TEST_VRAM_MB caps it at ~90% of the test card.
+static u64 GameBudget(u64 budget, bool integrated) {
+    if (vram_simulated_bytes) {
+        budget = budget > vram_ballast_bytes ? budget - vram_ballast_bytes : 0;
+        budget = std::min<u64>(budget, vram_simulated_bytes);
+    } else if (const u64 test_limit = Vram::TestLimit(); test_limit && !integrated) {
+        budget = std::min<u64>(budget, test_limit / 10 * 9);
+    }
+    return budget;
+}
+
 u64 Instance::GetDeviceMemoryUsage() const {
     vk::PhysicalDeviceMemoryBudgetPropertiesEXT memory_budget_props{};
     vk::PhysicalDeviceMemoryProperties2 props = {
@@ -1101,13 +1134,7 @@ u64 Instance::GetDeviceMemoryBudgetNow() const {
     for (const size_t heap : valid_heaps) {
         total_budget += memory_budget_props.heapBudget[heap];
     }
-    if (vram_simulated_bytes) {
-        total_budget = total_budget > vram_ballast_bytes ? total_budget - vram_ballast_bytes : 0;
-        total_budget = std::min<u64>(total_budget, vram_simulated_bytes);
-    } else if (const u64 test_limit = Vram::TestLimit(); test_limit && !IsIntegrated()) {
-        total_budget = std::min<u64>(total_budget, test_limit / 10 * 9);
-    }
-    return total_budget;
+    return GameBudget(total_budget, IsIntegrated());
 }
 
 void Instance::QueryMemory(u64& usage, u64& budget) const {
@@ -1120,14 +1147,9 @@ void Instance::QueryMemory(u64& usage, u64& budget) const {
         usage += memory_budget_props.heapUsage[heap];
         budget += memory_budget_props.heapBudget[heap];
     }
-    if (vram_simulated_bytes) {
-        // BB_VRAM_SIMULATE_MIB: the ballast is not the game's (as GetDeviceMemoryUsage/Budget).
-        usage = usage > vram_ballast_bytes ? usage - vram_ballast_bytes : 0;
-        budget = budget > vram_ballast_bytes ? budget - vram_ballast_bytes : 0;
-        budget = std::min<u64>(budget, vram_simulated_bytes);
-    } else if (const u64 test_limit = Vram::TestLimit(); test_limit && !IsIntegrated()) {
-        budget = std::min<u64>(budget, test_limit / 10 * 9);
-    }
+    // BB_VRAM_SIMULATE_MIB: the ballast is not the game's (as GetDeviceMemoryUsage/Budget).
+    usage = usage > vram_ballast_bytes ? usage - vram_ballast_bytes : 0;
+    budget = GameBudget(budget, IsIntegrated());
 }
 
 void Instance::TouchBallast(vk::CommandBuffer cmdbuf) const {
@@ -1165,6 +1187,43 @@ bool Instance::VramAllows(u64 bytes) const {
         return true;
     }
     return GetDeviceMemoryUsage() + bytes <= limit / 10 * 9;
+}
+
+Instance::VramTotals Instance::QueryVramTotals(bool with_heaps) const {
+    vk::PhysicalDeviceMemoryBudgetPropertiesEXT budget{};
+    vk::PhysicalDeviceMemoryProperties2 props = {.pNext = &budget};
+    physical_device.getMemoryProperties2(&props);
+    VramTotals t{};
+    for (const size_t heap : valid_heaps) {
+        t.usage += budget.heapUsage[heap];
+        t.budget += budget.heapBudget[heap];
+        t.size += props.memoryProperties.memoryHeaps[heap].size;
+    }
+    t.ballast_bytes = vram_ballast_bytes;
+    t.usage = t.usage > vram_ballast_bytes ? t.usage - vram_ballast_bytes : 0;
+    t.budget = GameBudget(t.budget, IsIntegrated()); // as GetDeviceMemoryBudgetNow
+    if (allocator) {
+        VmaBudget vma[VK_MAX_MEMORY_HEAPS]{};
+        vmaGetHeapBudgets(allocator, vma);
+        for (const size_t heap : valid_heaps) {
+            t.vma_block_bytes += vma[heap].statistics.blockBytes;
+            t.vma_alloc_bytes += vma[heap].statistics.allocationBytes;
+            t.vma_blocks += vma[heap].statistics.blockCount;
+            t.vma_allocs += vma[heap].statistics.allocationCount;
+        }
+    }
+    if (with_heaps) {
+        const u32 count = props.memoryProperties.memoryHeapCount;
+        for (u32 heap = 0; heap < count && heap < VK_MAX_MEMORY_HEAPS; ++heap) {
+            const bool local = bool(props.memoryProperties.memoryHeaps[heap].flags &
+                                    vk::MemoryHeapFlagBits::eDeviceLocal);
+            t.heaps += fmt::format("{}h{}{} {}/{}/{}", t.heaps.empty() ? "" : ", ", heap,
+                                   local ? "*" : "", budget.heapUsage[heap] >> 20,
+                                   budget.heapBudget[heap] >> 20,
+                                   props.memoryProperties.memoryHeaps[heap].size >> 20);
+        }
+    }
+    return t;
 }
 
 void Instance::ReportMemory(const char* why) const {

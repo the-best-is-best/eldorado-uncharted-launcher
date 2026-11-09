@@ -83,6 +83,12 @@ tests run with `python -m pytest tests`. Actions → Build Windows → Run workf
 pre-release like `1.0.0-beta1`), builds the package on the self-hosted runner and publishes the release
 ([build-windows.yml](.github/workflows/build-windows.yml)).
 
+## Testing
+
+[docs/TESTING.md](docs/TESTING.md) lists what to try in the game after a change: where, what to do and what should
+happen. `python tools/test_report.py --root <install>` reads the game's logs and says for each item whether it was
+tried and whether it worked (PASSED, FAILED, LOOK for what only your eyes can tell, NOT TRIED).
+
 ## License
 
 El Dorado is licensed under the GNU GPL v2 or later (see `engine/LICENSE`). It includes code from other

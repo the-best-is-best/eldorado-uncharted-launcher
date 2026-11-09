@@ -49,7 +49,7 @@ TABLES: dict[str, tuple[str, ...]] = {
     "core/games.py": ("PLACES",),
     "core/trophies.py": ("GRADE_NAMES",),
     "core/profiles.py": ("NO_NAME", "SAME_NAME", "NO_PROFILE", "TOO_MANY"),
-    "ui/settings_model.py": ("FILES_LAYOUT", "LAUNCHER_LAYOUT", "CAPTURE_HINT", "CHEATS_NOTE", "CREDITS"),
+    "ui/settings_model.py": ("FILES_LAYOUT", "LAUNCHER_LAYOUT", "CAPTURE_HINT", "CHEATS_NOTE", "CREDITS", "U2_HIGH_FPS"),
     "ui/saves_model.py": ("VIEW_NAMES", "VIEW_LINES", "ACCEPT_HINTS", "REMOVE_HINTS", "ARMED_NOTES"),
     "ui/bridge.py": ("NO_SAVE", "NO_WINDOW_NOTE", "SHADERS_TEXT", "PREPARING_TEXT", "PREPARE_TEXT",
                      "PREPARE_START_TEXT", "PREPARED_TEXT", "PREPARE_FAILED_TEXT"),

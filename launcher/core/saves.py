@@ -254,11 +254,17 @@ def _now_stamp() -> str:
     return time.strftime(STAMP_FORMAT)
 
 
+def last_good_copy(title_dir: Path, name: str) -> Path:
+    """The engine's last good copy of a save (runtime_savedata.c save_backup: <title>.backups/auto/<dir>; it was
+    <title>/.backup/<dir> before engine 0.3.6.49)."""
+    return title_dir.parent / f"{title_dir.name}.backups" / "auto" / name
+
+
 def _trash_moves(title_dir: Path, name: str, trash: Path) -> list[tuple[Path, Path]]:
     """The renames that take a live save (folder, its .sce_sys, the engine's last good copy) into trash: the
-    parts that are there."""
+    parts that are there. A copy left behind would later "repair" a new save of that name with this one's data."""
     parts = [(title_dir / name, trash / name), (title_dir / f"{name}.sce_sys", trash / f"{name}.sce_sys"),
-             (title_dir / ".backup" / name, trash / "backup")]
+             (last_good_copy(title_dir, name), trash / "backup"), (title_dir / ".backup" / name, trash / "backup-old")]
     return [(source, target) for source, target in parts if source.is_dir()]
 
 
@@ -306,10 +312,14 @@ def restore(user_dir: Path, save: Save) -> None:
     moves = [(save.data, target)]
     if save.meta.is_dir():
         moves.append((save.meta, meta_target))
-    last_good, last_good_target = save.holder / "backup", title_dir / ".backup" / save.name
+    last_good, last_good_target = save.holder / "backup", last_good_copy(title_dir, save.name)
     if last_good.is_dir() and not last_good_target.exists():
         last_good_target.parent.mkdir(parents=True, exist_ok=True)
         moves.append((last_good, last_good_target))
+    old_copy, old_target = save.holder / "backup-old", title_dir / ".backup" / save.name
+    if old_copy.is_dir() and not old_target.exists():
+        old_target.parent.mkdir(parents=True, exist_ok=True)
+        moves.append((old_copy, old_target))
     move_all(moves)
     _remove_empty(save.holder)
 

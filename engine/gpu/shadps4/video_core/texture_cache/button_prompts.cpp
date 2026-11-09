@@ -854,14 +854,13 @@ u32 PictureHeight(const Picture& picture) {
     return picture.tall ? picture.tall : picture.size;
 }
 
-/// El Dorado: the wheel prompt as the move keys in their places (W over A S D, by the keyboard layout), on the
-/// picture's own background, under the game's ring arrow, which is kept: only the lower half (shown) is redrawn.
+/// El Dorado: the wheel prompt as a mouse going round (on the keyboard the mouse turns the stick
+/// while this prompt is on screen: runtime_pad.c mouse_turns_stick), under the game's ring arrow, which is kept and
+/// says which way: only the lower half (shown) is redrawn.
 std::vector<Patch> BuildRotateStick(const Picture& picture, u32 levels, Style style) {
     if (style != Style::Keyboard) {
         return {}; // controllers: the game's own stick
     }
-    const Bindings bindings = LoadBindings();
-    const Font font;
     const u32 w = picture.size, h = PictureHeight(picture) / 2;
     Canvas up{w, h};
     // El Dorado's launcher look: the game shows this half through its stick's oval, which takes the launcher's
@@ -875,33 +874,48 @@ std::vector<Patch> BuildRotateStick(const Picture& picture, u32 levels, Style st
         for (u32 x = 0; x < w; ++x) {
             up.Blend(x, y, panel, 1.0f);
             const float dx = (x + 0.5f - w * 0.5f) / (w * 0.45f), dy = (y + 0.5f - 96.0f) / (w * 0.35f);
-            up.Blend(x, y, rim, 0.27f * std::clamp(1.0f - (dx * dx + dy * dy), 0.0f, 1.0f));
+            up.Blend(x, y, rim, 0.15f * std::clamp(1.0f - (dx * dx + dy * dy), 0.0f, 1.0f));
         }
     }
-    const u16 k = 68, gap = 6, cx = u16(w / 2), top = 18;
-    const u16 row2 = u16(top + k + gap);
-    // move[]: ls_up, ls_left, ls_down, ls_right
-    const Slot places[4] = {
-        {u16(cx - k / 2), top, u16(cx + k / 2), u16(top + k), 0},
-        {u16(cx - k / 2 - gap - k), row2, u16(cx - k / 2 - gap), u16(row2 + k), 0},
-        {u16(cx - k / 2), row2, u16(cx + k / 2), u16(row2 + k), 0},
-        {u16(cx + k / 2 + gap), row2, u16(cx + k / 2 + gap + k), u16(row2 + k), 0},
-    };
-    // The keys as the launcher's key hints: a dark face, an edge in the game's colour, light letters. They light
-    // no direction: the game's arrow above says which way (it changes with the door).
-    for (int i = 0; i < 4; ++i) {
-        const Slot& s = places[i];
-        const float x0 = s.x0 + 2.0f, y0 = s.y0 + 2.0f, x1 = s.x1 - 2.0f, y1 = s.y1 - 2.0f;
-        const float kx = (x0 + x1) * 0.5f, ky = (y0 + y1) * 0.5f, half = (x1 - x0) * 0.5f, r = (x1 - x0) * 0.24f;
-        for (int y = int(y0) - 1; y < int(y1) + 2; ++y) {
-            for (int x = int(x0) - 1; x < int(x1) + 2; ++x) {
-                const float d = RoundedRect(x + 0.5f, y + 0.5f, kx, ky, half, half, r);
-                up.Blend(x, y, edge, Coverage(d));
-                up.Blend(x, y, key_face, Coverage(d + 3.5f));
+    // The mouse goes round by itself: the game shows its four frames one after another, and each frame has the
+    // mouse a quarter turn further on a small circle (top, right, bottom, left) round the middle of what the
+    // stick's oval shows, with a fading copy where it just was. No path or arrow: the game's arrow above says which
+    // way (it changes with the door; the frames play the other way round then).
+    constexpr float pi = 3.14159265f;
+    int frame = 0;
+    for (const Picture& p : pictures) {
+        if (p.hash == picture.hash) {
+            break;
+        }
+        frame += p.shape == RotateStick ? 1 : 0;
+    }
+    // The mouse as the launcher's key hints: the dark key face, an edge in the game's colour, its buttons split by
+    // lines, a light wheel.
+    const auto mouse = [&](float mx, float my, float alpha) {
+        const float hw = 36.0f, hh = 53.0f, top = my - hh, split = top + 2.0f * hh * 0.42f;
+        for (int y = int(top) - 2; y < int(my + hh) + 3; ++y) {
+            for (int x = int(mx - hw) - 2; x < int(mx + hw) + 3; ++x) {
+                const float fx = x + 0.5f, fy = y + 0.5f;
+                const float body = RoundedRect(fx, fy, mx, my, hw, hh, hw);
+                up.Blend(x, y, edge, alpha * Coverage(body));
+                up.Blend(x, y, key_face, alpha * Coverage(body + 3.5f));
+                if (body < -3.5f) {
+                    const float across = std::fabs(fy - split) - 1.5f;
+                    const float down = fy < split ? std::fabs(fx - mx) - 1.5f : 1e9f;
+                    up.Blend(x, y, edge, alpha * Coverage(std::min(across, down)));
+                }
+                const float wheel = RoundedRect(fx, fy, mx, top + 2.0f * hh * 0.22f, 7.5f, 15.0f, 7.5f);
+                up.Blend(x, y, ink, alpha * Coverage(wheel));
             }
         }
-        font.Draw(up, KeyLabel(bindings.move[i]), kx, ky, (x1 - x0) - 10.0f, (y1 - y0) * 0.48f, ink);
-    }
+    };
+    const float cx = w * 0.5f, cy = 92.0f, orbit = 14.0f;
+    const auto at = [&](float quarter, float alpha) {
+        const float t = quarter * 0.5f * pi; // clockwise from the top
+        mouse(cx + orbit * std::sin(t), cy - orbit * std::cos(t), alpha);
+    };
+    at(float(frame) - 0.5f, 0.3f);
+    at(float(frame), 1.0f);
     // Stored upside down: the shown lower half is the stored upper half.
     Canvas level{w, h};
     for (u32 y = 0; y < h; ++y) {
@@ -1343,6 +1357,27 @@ void KeymapChanged() {
     }).detach();
 }
 
+bool IsRotateStick(u64 hash) {
+    for (const Picture& p : pictures) {
+        if (p.hash == hash) {
+            return p.shape == RotateStick;
+        }
+    }
+    return false;
+}
+
+static std::atomic<u64> rotate_stick_drawn_ms{0};
+
+static u64 NowMs() {
+    return u64(std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+                   .count());
+}
+
+void RotateStickDrawn() {
+    rotate_stick_drawn_ms.store(NowMs(), std::memory_order_relaxed);
+}
+
 void Prebuild() {
     // Drawing a sheet takes tens of milliseconds, which the game's first prompt waited for (a hitch). The device used
     // is not known yet at start: both styles, for every known picture with the mip levels the games give them
@@ -1369,3 +1404,10 @@ void Prebuild() {
 }
 
 } // namespace VideoCore::ButtonPrompts
+
+/// El Dorado: Uncharted 1's turn-the-stick prompt was drawn in the last 250 ms (runtime_pad.c: the mouse turns the
+/// left stick while it is on screen).
+extern "C" int bbgpu_rotate_prompt_shown(void) {
+    const u64 drawn = VideoCore::ButtonPrompts::rotate_stick_drawn_ms.load(std::memory_order_relaxed);
+    return drawn && VideoCore::ButtonPrompts::NowMs() - drawn < 250 ? 1 : 0;
+}

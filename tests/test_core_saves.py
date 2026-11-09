@@ -75,14 +75,16 @@ def test_arabic_text_shown_as_stored_with_spaces() -> None:
 def test_delete_moves_save_meta_and_last_good_copy(tmp_path: Path) -> None:
     title = live_title(tmp_path)
     make_save(title, "SAVEDATA012")
-    (title / ".backup" / "SAVEDATA012").mkdir(parents=True)
+    saves.last_good_copy(title, "SAVEDATA012").mkdir(parents=True)  # the engine's (<title>.backups/auto)
+    (title / ".backup" / "SAVEDATA012").mkdir(parents=True)  # the old place, before engine 0.3.6.49
     save = saves.list_saves(tmp_path, saves.SAVES, PROFILES)[0]
     trash = saves.delete(tmp_path, save)
     assert not (title / "SAVEDATA012").exists() and not (title / "SAVEDATA012.sce_sys").exists()
     assert trash.parent == tmp_path / "savedata-deleted" / "1" / TITLE
     assert (trash / "SAVEDATA012" / "USR-DATA").is_file()
     assert (trash / "SAVEDATA012.sce_sys" / "param.bin").is_file()
-    assert (trash / "backup").is_dir()
+    assert (trash / "backup").is_dir() and (trash / "backup-old").is_dir()
+    assert not saves.last_good_copy(title, "SAVEDATA012").exists()
     deleted = saves.list_saves(tmp_path, saves.DELETED, PROFILES)
     assert [s.name for s in deleted] == ["SAVEDATA012"]
 
@@ -104,12 +106,12 @@ def test_failed_move_puts_everything_back(tmp_path: Path) -> None:
 def test_restore_brings_deleted_save_back(tmp_path: Path) -> None:
     title = live_title(tmp_path)
     make_save(title, "SAVEDATA012")
-    (title / ".backup" / "SAVEDATA012").mkdir(parents=True)
+    saves.last_good_copy(title, "SAVEDATA012").mkdir(parents=True)
     trash = saves.delete(tmp_path, saves.list_saves(tmp_path, saves.SAVES, PROFILES)[0])
     saves.restore(tmp_path, saves.list_saves(tmp_path, saves.DELETED, PROFILES)[0])
     assert (title / "SAVEDATA012" / "USR-DATA").is_file()
     assert (title / "SAVEDATA012.sce_sys" / "thumb.png").is_file()
-    assert (title / ".backup" / "SAVEDATA012").is_dir()
+    assert saves.last_good_copy(title, "SAVEDATA012").is_dir()
     assert not trash.exists()
 
 

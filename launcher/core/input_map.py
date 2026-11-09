@@ -18,7 +18,7 @@ STICK_ACTIONS: tuple[str, ...] = ("ls_up", "ls_down", "ls_left", "ls_right", "rs
 GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ("MOVEMENT", (("ls_up", "Move forward"), ("ls_down", "Move back"), ("ls_left", "Move left"),
                   ("ls_right", "Move right"), ("rs_up", "Look up"), ("rs_down", "Look down"),
-                  ("rs_left", "Look left"), ("rs_right", "Look right"))),
+                  ("rs_left", "Look left"), ("rs_right", "Look right"), ("walk", "Walk / run (press to switch)"))),
     ("WEAPONS (D-PAD)", (("left", "Left"), ("right", "Right"), ("up", "Up"), ("down", "Down"))),
     ("ACTIONS", (("cross", "Jump, climb"), ("circle", "Cover, roll, drop"), ("square", "Melee"),
                  ("triangle", "Interact, pick up"), ("l2", "Aim"), ("r2", "Fire"),
@@ -35,7 +35,14 @@ DEFAULT_BINDINGS: dict[str, tuple[str, ...]] = {
     "l2": ("mouse:right",), "r2": ("mouse:left",), "l1": ("key:Q", "mouse:x1"), "r1": ("key:E", "mouse:x2"),
     "l3": ("key:Left Shift",), "r3": ("key:V", "mouse:middle"), "options": ("key:Escape", "key:Return"),
     "touchpad_left": ("key:Tab",), "touchpad_right": ("key:Backspace",),
+    # The engine's walk key (a press switches walking and running: walk_toggle=1, tools/probe_uncharted.py; its
+    # own default Left Ctrl is Circle here). Wheels and valves need no keys: the
+    # mouse turns the stick while their prompt is on screen.
+    "walk": ("key:B",),
 }
+# Actions the engine added later: a stored set made before them gets their defaults only where no action has
+# those keys yet.
+LATER_ACTIONS: tuple[str, ...] = ("walk",)
 # Controller buttons that can be rebound (the runtime's default map) and the ones that cannot.
 PAD_DEFAULTS: dict[str, str] = {
     "cross": "a", "circle": "b", "square": "x", "triangle": "y", "l1": "leftshoulder", "r1": "rightshoulder",
@@ -45,6 +52,7 @@ PAD_DEFAULTS: dict[str, str] = {
 PAD_FIXED: dict[str, str] = {
     "l2": "lefttrigger", "r2": "righttrigger", "touchpad_left": "leftshoulder+back",
     **{action: "lstick" for action in STICK_ACTIONS[:4]}, **{action: "rstick" for action in STICK_ACTIONS[4:]},
+    **{action: "lstick" for action in LATER_ACTIONS},
 }
 # SDL3's gamepad buttons, in its order.
 PAD_BUTTONS: tuple[str, ...] = ("a", "b", "x", "y", "back", "guide", "start", "leftstick", "rightstick",
@@ -88,6 +96,11 @@ def bindings(stored: Mapping[str, Any] | None) -> Bindings:
     for action, entries in (stored or {}).items():
         if action in result and isinstance(entries, (list, tuple)):
             result[action] = [entry for entry in entries if isinstance(entry, str) and entry][:SLOTS]
+    if stored:
+        taken = {entry for action, entries in result.items() if action in stored for entry in entries}
+        for action in LATER_ACTIONS:
+            if action not in stored:
+                result[action] = [entry for entry in result[action] if entry not in taken]
     return result
 
 

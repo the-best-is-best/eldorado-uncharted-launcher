@@ -60,6 +60,9 @@ int bbgpu_overlay_captures_input(void);
 int bbgpu_take_back_request(void);
 /* 1 while the full-screen shader preparation page shows (the game runs behind it). */
 int bbgpu_preparation_screen(void);
+/* The game reads the controller: the frame start of the low latency mode (NVIDIA Reflex / AMD
+ * Anti-Lag 2, BB_LOW_LATENCY), which may sleep there until the GPU is ready for the next frame. */
+void bbgpu_input_sample(void);
 /* The shader cache's last writes, before the process ends without destructors (runtime_quit). */
 void bbgpu_prepare_exit(void);
 /* Button prompts (button_prompts.cpp), the device used last: 0 keyboard or mouse (pictures of the
@@ -76,6 +79,10 @@ int bbgpu_camera_yaw(float *yaw_degrees, double *age_seconds);
 int bbgpu_mouse_sample(float *dx, float *dy, uint32_t *buttons, int *wheel);
 /* The game window is in front (Windows; 1 without a window): the controller is read only then. */
 int bbgpu_window_foreground(void);
+/* 1 while the Enter of an Alt+Enter (window <-> fullscreen) is still held: the game must not see it. */
+int bbgpu_window_enter_swallowed(void);
+/* El Dorado: Uncharted 1's turn-the-stick prompt (wheels, valves) was drawn in the last 250 ms. */
+int bbgpu_rotate_prompt_shown(void);
 /* The mouse movement over the last window_s seconds, in pixels per second, from the event times (paced cameras). */
 void bbgpu_mouse_rate(double window_s, float *rate_x, float *rate_y);
 /* In-game trophy notice (the overlay draws it for a few seconds, one at a time): grade 1 platinum,

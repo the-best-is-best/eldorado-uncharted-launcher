@@ -38,6 +38,7 @@
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/texture_cache/button_prompts.h"
+#include "video_core/renderer_vulkan/vk_low_latency.h"
 
 extern "C" {
 // runtime_memory.c
@@ -486,6 +487,10 @@ extern "C" int bbgpu_preparation_screen(void) {
     return BbOverlay::PreparationScreenActive() ? 1 : 0;
 }
 
+extern "C" void bbgpu_input_sample(void) {
+    Vulkan::LowLatency::InputSample();
+}
+
 extern "C" void bbgpu_thumbnail_flush(void);
 extern "C" void bbgpu_prepare_exit(void) {
     bbgpu_thumbnail_flush(); // saves still waiting for a picture get the last one
@@ -532,9 +537,29 @@ extern "C" int bbgpu_choice_begin(int kind, const char* const* items, const char
     }
     // Pictures are decoded here, on the game's thread, before the list is shown; a large one (a 960x540
     // thumb.png) is scaled to twice the size the list draws it at.
+    // El Dorado: decoded side by side (up to 8 at once), so the list waits for about one picture, not all of them.
     std::vector<BbPng::Image> pictures(count);
-    for (int i = 0; images && i < count; ++i) {
-        if (images[i] && images[i][0] && !BbPng::LoadRgba(images[i], pictures[i], 456, 256)) {
+    std::vector<char> failed(count, 0);
+    {
+        std::atomic<int> next{0};
+        const auto work = [&] {
+            for (int i; (i = next.fetch_add(1)) < count;) {
+                if (images && images[i] && images[i][0] && !BbPng::LoadRgba(images[i], pictures[i], 456, 256)) {
+                    failed[i] = 1;
+                }
+            }
+        };
+        std::vector<std::thread> helpers;
+        for (int t = 1; t < std::min(count, 8); ++t) {
+            helpers.emplace_back(work);
+        }
+        work();
+        for (auto& helper : helpers) {
+            helper.join();
+        }
+    }
+    for (int i = 0; i < count; ++i) {
+        if (failed[i]) {
             std::printf("Overlay: save list: no picture from %s\n", images[i]);
         }
     }

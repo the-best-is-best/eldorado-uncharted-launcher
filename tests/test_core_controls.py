@@ -134,3 +134,21 @@ def test_the_shared_set_is_the_games_most_common_controls(home) -> None:
     assert controls.shared(config).bindings["square"] == ["key:F"]
     assert set(controls.own_items(config, "u1")) == {Item("binding", "square"), Item("binding", "triangle")}
     assert controls.own_items(config, "u2") == [] and controls.own_items(config, "u3") == []
+
+
+def test_walk_is_on_the_controls_page_and_never_takes_a_used_key() -> None:
+    shown = {action for _, actions in input_map.GROUPS for action, _ in actions}
+    assert "walk" in shown
+    defaults = input_map.bindings(None)
+    assert defaults["walk"] == ["key:B"]
+    # Every default key does one thing.
+    keys = [entry for entries in defaults.values() for entry in entries]
+    assert len(keys) == len(set(keys))
+    # A set saved before Walk, with B on Melee: Walk gets no key.
+    old = {action: list(entries) for action, entries in defaults.items() if action not in input_map.LATER_ACTIONS}
+    old["square"] = ["key:B"]
+    older = input_map.bindings(old)
+    assert older["walk"] == [] and older["square"] == ["key:B"]
+    # Written for the engine: every action listed, so its own default (Left Ctrl) never comes back.
+    key_map, _ = input_map.key_and_mouse_maps(old)
+    assert "walk=," in key_map + ","

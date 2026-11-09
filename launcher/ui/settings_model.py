@@ -17,6 +17,8 @@ from core.i18n import t
 
 CAPTURE_SECONDS = 6
 SCOPE_KEY = "controls_scope"  # the Controls tab's top row: whose keys it shows
+U2_HIGH_FPS = ("Uncharted 2 above 60 FPS: players report Nate passing through the second blade in The Path of Light "
+               "and crashes in chapter 21 (Convoy). Play those at 60.")
 CHEATS_NOTE = "For all three games, applied when a game starts. Made for update 1.02 of the game."
 CREDITS = ("DLSS and DLAA use NVIDIA DLSS technology; NVIDIA, RTX and DLSS are trademarks of NVIDIA Corporation. "
            "FSR 3.1 and FSR 4 are AMD FidelityFX Super Resolution.")
@@ -473,6 +475,10 @@ class SettingsModel(QObject):
             note = t("Frame rate unlocked up to {fps} FPS (your monitor: {hz} Hz).", fps=values["fps_limit"],
                      hz=hz) + " " + note
         rows.insert(1, {"kind": "note", "text": note})
+        if self._game == "u2" and int(values["fps_limit"]) > 60:
+            # Players' reports (port issues, Nov 2026): above 60 FPS Nate passes through the second blade in "The
+            # Path of Light" and chapter 21 (Convoy) crashes after its cutscene; both are fine at 60.
+            rows.insert(2, {"kind": "note", "text": t(U2_HIGH_FPS)})
         return rows
 
     def _controls_rows(self, config: cfg.Config, values: dict[str, Any]) -> list[dict[str, Any]]:

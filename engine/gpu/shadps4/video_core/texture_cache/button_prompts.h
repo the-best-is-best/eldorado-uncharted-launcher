@@ -48,4 +48,9 @@ void KeymapChanged();
 /// Draws every known picture ahead on a background thread, so the game's first prompt does not wait for it.
 void Prebuild();
 
+/// El Dorado: the picture is Uncharted 1's turn-the-stick prompt (any of its frames).
+bool IsRotateStick(u64 hash);
+/// El Dorado: a draw used the turn-the-stick prompt (TextureCache::FindTexture); bbgpu_rotate_prompt_shown reads it.
+void RotateStickDrawn();
+
 } // namespace VideoCore::ButtonPrompts

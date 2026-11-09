@@ -1624,7 +1624,18 @@ void PipelineCache::WarmUpThread() {
         std::error_code ec;
         const std::filesystem::path list_path{ship_list};
         prepared_marker = db.Directory() / ("prepared_" + list_path.stem().string());
+        // El Dorado: the list's size and a hash of its text (a list changed but of the same size kept the old
+        // marker, and the page was skipped with variants missing).
         prepared_stamp = std::to_string(std::filesystem::file_size(list_path, ec));
+        if (std::FILE* f = std::fopen(list_path.string().c_str(), "rb")) {
+            std::string text;
+            char chunk[65536];
+            for (size_t n; (n = std::fread(chunk, 1, sizeof(chunk), f)) > 0;) {
+                text.append(chunk, n);
+            }
+            std::fclose(f);
+            prepared_stamp += fmt::format(" {:016x}", XXH3_64bits(text.data(), text.size()));
+        }
     }
     // BB_PREPARE_ONLY=1 (the launcher's Prepare shaders button): no window and no game, the progress goes to the
     // launcher (PrepareShadersWithoutWindow); preparation runs at full speed as on the page.
@@ -2043,6 +2054,12 @@ void PipelineCache::WarmUpThread() {
     if (full_preparation) {
         BbOverlay::SetShaderPreparation(3, 0, u32(stages.size()));
     }
+    // El Dorado: the stored metas listed once: a stage without one is skipped quietly (a first preparation tried to
+    // open each and logged 10,614 "Failed to open" errors for Uncharted 3, a 3 MB log).
+    std::unordered_set<std::string> stored_metas;
+    for (auto& name : db.ListBlobNames(Storage::BlobType::ShaderMeta)) {
+        stored_metas.insert(std::move(name));
+    }
     ParallelFor(stages.size(), threads, [&](size_t i) {
         struct Loaded {
             std::atomic<u32>& n;
@@ -2057,8 +2074,11 @@ void PipelineCache::WarmUpThread() {
         } loaded{stages_loaded, full_preparation, u32(stages.size())};
         auto& stage = stages[i];
         std::vector<u8> meta_blob;
-        db.Load(Storage::BlobType::ShaderMeta, fmt::format("{:#018x}", stage_hashes[i]),
-                meta_blob);
+        const std::string meta_name = fmt::format("{:#018x}", stage_hashes[i]);
+        if (!stored_metas.contains(meta_name)) {
+            return;
+        }
+        db.Load(Storage::BlobType::ShaderMeta, meta_name, meta_blob);
         if (meta_blob.empty()) {
             return;
         }
@@ -2548,7 +2568,22 @@ void PipelineCache::WarmUpThread() {
         // differ for a cache made before the list (play first, or an earlier list). ship_remap: a list stage hash ->
         // the cache's stage hash of the same variant; the list's keys are rewritten with it before they are built.
         std::unordered_map<u64, u64> ship_remap;
-        u32 same_number = 0, other_number = 0, number_taken = 0;
+        u32 same_number = 0, other_number = 0, number_taken = 0, remembered = 0;
+        // El Dorado: the numbers found last time (variant-remap.txt beside the cache: "<list hash> <cache hash>"). A
+        // listed variant the game made first, or one the cache holds under another number, was built again at every
+        // start only to find it there (U1 100-275, U3 1,770 a start); with its number remembered it is not.
+        std::unordered_map<u64, u64> saved_remap;
+        const std::filesystem::path remap_file =
+            db.Directory().empty() ? std::filesystem::path{} : db.Directory() / "variant-remap.txt";
+        if (!remap_file.empty()) {
+            if (std::FILE* rf = std::fopen(remap_file.string().c_str(), "r")) {
+                unsigned long long from = 0, to = 0;
+                while (std::fscanf(rf, "%llx %llx", &from, &to) == 2) {
+                    saved_remap[from] = to;
+                }
+                std::fclose(rf);
+            }
+        }
         std::unordered_map<u64, std::vector<std::pair<size_t, std::string>>> cached_bodies; // per shader
         std::vector<ListedVariant> listed;
         if (std::FILE* f = std::fopen(ship, "r")) {
@@ -2562,6 +2597,14 @@ void PipelineCache::WarmUpThread() {
                 if (auto v = ParseVariantLine(line)) {
                     const u64 list_hash = HashCombine(v->hash, v->perm);
                     const auto it = by_hash.find(list_hash);
+                    if (const auto sit = saved_remap.find(list_hash);
+                        sit != saved_remap.end() && sit->second != list_hash && by_hash.contains(sit->second)) {
+                        ship_remap[list_hash] = sit->second;
+                        ++other_number;
+                        ++remembered;
+                        line.clear();
+                        continue;
+                    }
                     // Predicted lines (image setups by slot, a start taken from a listed pixel shader) cannot be
                     // compared before they are built: as before, the cache's variant of that number counts.
                     const bool comparable = !v->by_slot && !v->start_from_ps;
@@ -2748,6 +2791,18 @@ void PipelineCache::WarmUpThread() {
         for (const auto& [perm_hash, stage] : new_stages) {
             by_hash.emplace(perm_hash, stage);
         }
+        if (!remap_file.empty() && !ship_remap.empty()) {
+            const auto temp = std::filesystem::path{remap_file}.concat(".tmp");
+            if (std::FILE* wf = std::fopen(temp.string().c_str(), "w")) {
+                for (const auto& [from, to] : ship_remap) {
+                    std::fprintf(wf, "%016llx %016llx\n", static_cast<unsigned long long>(from),
+                                 static_cast<unsigned long long>(to));
+                }
+                std::fclose(wf);
+                std::error_code ec;
+                std::filesystem::rename(temp, remap_file, ec);
+            }
+        }
         // The list's keys in this cache's numbers, then built with the cache's own.
         u32 keys_renumbered = 0;
         if (!ship_remap.empty()) {
@@ -2791,8 +2846,8 @@ void PipelineCache::WarmUpThread() {
                     t_built - t_read, num_pipelines.load() - before, elapsed_ms() - t_built);
         std::printf("Variant ship numbers: %u listed variants under the same number in the cache, %u under another "
                     "(found before building), %u whose number the cache uses for another variant; %zu list numbers "
-                    "mapped, %u list keys renumbered\n",
-                    same_number, other_number, number_taken, ship_remap.size(), keys_renumbered);
+                    "mapped, %u list keys renumbered; %u numbers remembered from the last start\n",
+                    same_number, other_number, number_taken, ship_remap.size(), keys_renumbered, remembered);
     }
     // The hold ends: the stored pipelines and the listed variants are ready before the game goes on.
     if (held) {
@@ -2942,6 +2997,15 @@ void PipelineCache::WarmUpThread() {
     // bbport: preparation is done: the game's frames may go out; a variant list's first launch leaves the
     // "prepared" marker, so later launches load in the background with the corner box only.
     if (prep_screen) {
+        // El Dorado: the shaders just made are written while the page is still up. Left to the background, a
+        // whole new cache (17,400 files after an engine update) kept the disk busy for a minute of play, and
+        // choosing a difficulty in Uncharted 3 hung for seconds before the save list came up.
+        if (const u32 queued = db.PendingWrites(); queued > 200) {
+            const double before = elapsed_ms();
+            db.Flush(180000);
+            std::printf("Preparation screen: waited %.0f ms for %u shader cache writes\n", elapsed_ms() - before,
+                        queued);
+        }
         BbOverlay::SetPreparationScreen(false);
         std::printf("Preparation screen: shown for %.0f ms\n", elapsed_ms());
     }

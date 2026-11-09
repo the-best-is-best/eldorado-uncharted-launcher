@@ -77,7 +77,8 @@ unsigned InPlayCalls() {
 // a half-written picture, and a failure leaves the old one.
 bool WritePng(const std::string& path, const std::vector<unsigned char>& rgb) {
     size_t size = 0;
-    void* png = tdefl_write_image_to_png_file_in_memory_ex(rgb.data(), int(Width), int(Height), 3, &size, 3,
+    // El Dorado: level 6 (was 3): smaller pictures; written off the game's thread (saves of play, deferred).
+    void* png = tdefl_write_image_to_png_file_in_memory_ex(rgb.data(), int(Width), int(Height), 3, &size, 6,
                                                            MZ_FALSE);
     if (!png) {
         return false;
@@ -203,6 +204,11 @@ std::atomic<bool> loading_done{false};
 std::atomic<int> loading_lit{0};
 Clock::time_point loading_since = Clock::now(), loading_probe_at{};
 } // namespace
+
+/// El Dorado: the game has shown its first picture (window.cpp: no pause while the game loads).
+extern "C" int bbgpu_loading_done(void) {
+    return loading_done.load(std::memory_order_relaxed) ? 1 : 0;
+}
 
 bool Loading() {
     if (loading_done.load(std::memory_order_relaxed)) {

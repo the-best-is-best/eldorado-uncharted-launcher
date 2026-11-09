@@ -45,6 +45,7 @@ extern "C" void runtime_freeze_guest(int on);
 #include "imgui_internal.h"
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_low_latency.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
 namespace Vulkan {
@@ -106,6 +107,8 @@ extern "C" const unsigned char bb_font_ja_ttf[];
 extern "C" const unsigned char bb_font_ja_ttf_end[];
 
 extern "C" void runtime_restart(void); // bb-probe (probe.c)
+extern "C" void runtime_mouse_get(float* look, float* aim, float* vertical); // runtime_pad.c
+extern "C" void runtime_mouse_set(float look, float aim, float vertical);
 
 namespace BbOverlay {
 
@@ -533,8 +536,39 @@ void CheckpointsPage() {
         list = BbSaves::Checkpoints();
     }
     const BbSaves::Checkpoint now = BbSaves::Current();
-    if (chapter < 0) {
-        chapter = now.known ? now.chapter : (list.empty() ? 1 : list.front().chapter);
+    // The current checkpoint in the list: the entry of its task, or (a cutscene or setup step, which the list leaves
+    // out) the last playable checkpoint before it in game order.
+    int current = -1;
+    if (now.known) {
+        for (int i = 0; i < static_cast<int>(list.size()); ++i) {
+            if (list[i].task == now.task) {
+                current = i;
+                break;
+            }
+            if (now.row >= 0 && list[i].row >= 0 && list[i].row <= now.row &&
+                (current < 0 || list[i].row > list[current].row)) {
+                current = i;
+            }
+        }
+    }
+    // The page follows the player: opening it, or a new current checkpoint, shows the current chapter and scrolls
+    // the list to it. A chapter picked by hand stays until one of those happens.
+    static int last_frame = -10;
+    static uint32_t last_task = 0;
+    const bool opened = ImGui::GetFrameCount() - last_frame > 1;
+    last_frame = ImGui::GetFrameCount();
+    bool scroll_to_current = false;
+    if (opened || chapter < 0 || (now.known && now.task != last_task)) {
+        if (current >= 0) {
+            if (chapter != list[current].chapter) {
+                picked = -1;  // a pick in another chapter would stay behind Go there, out of sight
+            }
+            chapter = list[current].chapter;
+            scroll_to_current = true;
+        } else if (chapter < 0) {
+            chapter = now.known ? now.chapter : (list.empty() ? 1 : list.front().chapter);
+        }
+        last_task = now.task;
     }
     switch (BbSaves::JumpResult()) {
     case 1: message = T("Done."); break;
@@ -615,9 +649,28 @@ void CheckpointsPage() {
             if (c.chapter != chapter) {
                 continue;
             }
-            const std::string label = std::to_string(c.number) + "  " + c.name + (c.task == now.task ? std::string("  ") + T("(now)") : std::string());
-            if (ImGui::Selectable(label.c_str(), i == picked)) {
+            const bool is_current = i == current;
+            const std::string label = (is_current ? std::string("> ") : std::string("   ")) + std::to_string(c.number) +
+                                      "  " + c.name + (is_current ? std::string("  ") + T("(now)") : std::string());
+            if (is_current) {
+                // Always marked: green text on a soft green row, also while another checkpoint is picked.
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 1.0f, 0.55f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.2f, 0.5f, 0.2f, 0.55f));
+                ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.25f, 0.6f, 0.25f, 0.7f));
+            }
+            if (ImGui::Selectable(label.c_str(), i == picked || (is_current && picked < 0),
+                                  ImGuiSelectableFlags_AllowDoubleClick)) {
                 picked = i;
+                // A double click goes there at once (the same as picking it and pressing Go there).
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    BbSaves::Jump(list[i], message);
+                }
+            }
+            if (is_current) {
+                ImGui::PopStyleColor(3);
+                if (scroll_to_current) {
+                    ImGui::SetScrollHereY(0.35f);
+                }
             }
         }
     }
@@ -638,6 +691,7 @@ void CheckpointsPage() {
         ImGui::SameLine();
         TextGrey(T("Starts with a movie: use Chapter Select in the game's menu."));
     }
+    Hint(T("Or double-click a checkpoint in the list."));
     if (!message.empty()) {
         ImGui::SameLine();
         Wrapped("%s", message.c_str());
@@ -893,6 +947,25 @@ void Menu() {
     Hint(T("Generated frames between the game's own: 60 FPS on screen becomes 120. Adds a little "
            "input latency; menus and cutscene videos are not generated. The launcher's Frame rate "
            "limit counts generated frames."));
+
+    // The mouse: the sensitivities live in the runtime (runtime_pad.c); a change turns the next frame's motion.
+    ImGui::SeparatorText(T("Mouse"));
+    {
+        float look = 1.0f, aim = 1.0f, vertical = 1.0f;
+        runtime_mouse_get(&look, &aim, &vertical);
+        const ImGuiSliderFlags log = ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp;
+        if (ImGui::SliderFloat(TI("Mouse sensitivity"), &look, 0.1f, 10.0f, "%.2f", log)) {
+            runtime_mouse_set(look, 0.0f, 0.0f);
+        }
+        if (ImGui::SliderFloat(TI("Aiming sensitivity"), &aim, 0.25f, 4.0f, "%.2f", log)) {
+            runtime_mouse_set(0.0f, aim, 0.0f);
+        }
+        if (ImGui::SliderFloat(TI("Vertical sensitivity"), &vertical, 0.25f, 4.0f, "%.2f", log)) {
+            runtime_mouse_set(0.0f, 0.0f, vertical);
+        }
+        Hint(T("Aiming: times the mouse sensitivity while aiming (1.00 the same as looking around). Vertical: "
+               "times it for up and down. Ctrl+click to type a value."));
+    }
 
     ImGui::SeparatorText(T("Other"));
     // El Dorado: whose letters the key pictures show (the keys work by place whatever is chosen).

@@ -71,6 +71,9 @@ struct UniqueImage {
     /// info inside a ReuseScope (call once the GPU is done with it), else destroys it.
     void Recycle();
 
+    /// bbport (BB_VRAM_STATS): bytes of the images kept for recycling.
+    static u64 RecycledBytes();
+
     /// bbport: Create() calls on this thread may take a recycled image. Only for images whose
     /// contents are overwritten before use: a recycled one holds its old contents.
     struct ReuseScope {
@@ -168,6 +171,8 @@ public:
     /// bbport: remade by format (TextureCache::ResolveDepthOverlap): its Vulkan image is recycled
     /// when it is deleted.
     bool recycle_on_delete = false;
+    /// El Dorado: Uncharted 1's turn-the-stick prompt (button_prompts.h): a draw with it marks the prompt shown.
+    bool rotate_prompt = false;
     VAddr track_addr = 0;
     VAddr track_addr_end = 0;
     VAddr guest_begin = 0; ///< info.guest_address

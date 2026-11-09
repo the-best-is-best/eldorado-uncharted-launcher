@@ -175,6 +175,45 @@ MENU = {
     'Chapter': R('Hoofdstuk', 'Kapitel', 'Kapittel', 'Kapitel', 'Luku', 'Rozdział', 'Kapitola', 'Κεφάλαιο', 'Глава',
                  'Bölüm'),
     '(now)': R('(nu)', '(nu)', '(nå)', '(nu)', '(nyt)', '(teraz)', '(nyní)', '(τώρα)', '(сейчас)', '(şu an)'),
+    'Mouse': R('Muis', 'Mus', 'Mus', 'Mus', 'Hiiri', 'Mysz', 'Myš', 'Ποντίκι', 'Мышь', 'Fare'),
+    'Mouse sensitivity': R('Muisgevoeligheid', 'Musens følsomhed', 'Musfølsomhet', 'Muskänslighet', 'Hiiren herkkyys',
+                           'Czułość myszy', 'Citlivost myši', 'Ευαισθησία ποντικιού', 'Чувствительность мыши',
+                           'Fare hassasiyeti'),
+    'Aiming sensitivity': R('Gevoeligheid bij richten', 'Følsomhed ved sigte', 'Følsomhet ved sikting',
+                            'Känslighet vid sikte', 'Herkkyys tähdätessä', 'Czułość przy celowaniu',
+                            'Citlivost při míření', 'Ευαισθησία στη σκόπευση', 'Чувствительность при прицеливании',
+                            'Nişan alırken hassasiyet'),
+    'Vertical sensitivity': R('Verticale gevoeligheid', 'Lodret følsomhed', 'Vertikal følsomhet',
+                              'Vertikal känslighet', 'Pystysuora herkkyys', 'Czułość pionowa', 'Svislá citlivost',
+                              'Κατακόρυφη ευαισθησία', 'Вертикальная чувствительность', 'Dikey hassasiyet'),
+    'Aiming: times the mouse sensitivity while aiming (1.00 the same as looking around). Vertical: times it for '
+    'up and down. Ctrl+click to type a value.': R(
+        'Richten: keer de muisgevoeligheid tijdens het richten (1.00 hetzelfde als rondkijken). Verticaal: keer die '
+        'voor omhoog en omlaag. Ctrl+klik om een waarde te typen.',
+        'Sigte: gange musens følsomhed under sigte (1.00 det samme som at se sig omkring). Lodret: gange den op og '
+        'ned. Ctrl+klik for at skrive en værdi.',
+        'Sikting: ganger musfølsomheten mens du sikter (1.00 det samme som å se seg rundt). Vertikal: ganger den '
+        'opp og ned. Ctrl+klikk for å skrive inn en verdi.',
+        'Sikte: gånger muskänsligheten när du siktar (1.00 samma som att se sig omkring). Vertikal: gånger den upp '
+        'och ner. Ctrl+klicka för att skriva ett värde.',
+        'Tähtäys: hiiren herkkyyden kerroin tähdätessä (1.00 sama kuin ympärille katsoessa). Pystysuora: kerroin '
+        'ylös ja alas. Ctrl+napsautus kirjoittaa arvon.',
+        'Celowanie: mnożnik czułości myszy podczas celowania (1.00 tak samo jak przy rozglądaniu się). Pionowa: '
+        'mnożnik w górę i w dół. Ctrl+klik, aby wpisać wartość.',
+        'Míření: násobek citlivosti myši při míření (1.00 stejně jako při rozhlížení). Svislá: násobek pro pohyb '
+        'nahoru a dolů. Ctrl+kliknutím zadáte hodnotu.',
+        'Σκόπευση: πολλαπλασιαστής της ευαισθησίας του ποντικιού κατά τη σκόπευση (1.00 ίδια με το να κοιτάς '
+        'γύρω). Κατακόρυφη: πολλαπλασιαστής για πάνω και κάτω. Ctrl+κλικ για να πληκτρολογήσεις τιμή.',
+        'Прицеливание: множитель чувствительности мыши при прицеливании (1.00 — как при обзоре). Вертикальная: '
+        'множитель для движения вверх и вниз. Ctrl+щелчок, чтобы ввести значение.',
+        'Nişan: nişan alırken fare hassasiyetinin çarpanı (1.00 etrafa bakarkenkiyle aynı). Dikey: yukarı ve aşağı '
+        'için çarpanı. Değer yazmak için Ctrl+tıklayın.'),
+    'Or double-click a checkpoint in the list.': R(
+        'Of dubbelklik op een checkpoint in de lijst.', 'Eller dobbeltklik på et checkpoint på listen.',
+        'Eller dobbeltklikk på et sjekkpunkt i listen.', 'Eller dubbelklicka på en kontrollpunkt i listan.',
+        'Tai kaksoisnapsauta tarkistuspistettä luettelossa.', 'Lub kliknij dwukrotnie punkt kontrolny na liście.',
+        'Nebo dvakrát klikněte na kontrolní bod v seznamu.', 'Ή κάνε διπλό κλικ σε ένα σημείο ελέγχου στη λίστα.',
+        'Или дважды щёлкните контрольную точку в списке.', 'Ya da listedeki bir kontrol noktasına çift tıklayın.'),
     'Go there': R('Ga erheen', 'Gå dertil', 'Gå dit', 'Gå dit', 'Siirry', 'Przejdź', 'Přejít', 'Μετάβαση',
                   'Перейти', 'Oraya git'),
     "Starts with a movie: use Chapter Select in the game's menu.": R(

@@ -46,6 +46,26 @@ def no_console():
     return 0 if ctypes.windll.kernel32.GetConsoleWindow() else subprocess.CREATE_NO_WINDOW
 
 
+def run_script_here(name, *args):
+    """A script of scripts/ inside this process (El Dorado: content_profile.py and trophies.py at every start, each a
+    new Python before); its exit code ends the start as run_script's would. The packaged executable runs it apart."""
+    if getattr(sys, 'frozen', False):
+        return run_script(name, *args)
+    import runpy
+    saved_argv, saved_path = sys.argv, list(sys.path)
+    sys.argv = [str(PORT / 'scripts' / name), *map(str, args)]
+    sys.path.insert(0, str(PORT / 'scripts'))
+    try:
+        runpy.run_path(sys.argv[0], run_name='__main__')
+    except SystemExit as stop:
+        if stop.code not in (None, 0):
+            sys.stdout.flush()
+            sys.exit(stop.code if isinstance(stop.code, int) else 1)
+    finally:
+        sys.argv, sys.path[:] = saved_argv, saved_path
+        sys.stdout.flush()
+
+
 def run_script(name, *args):
     # Inside the packaged executable (PyInstaller) the executable runs scripts itself.
     script = ['--script'] if getattr(sys, 'frozen', False) else []
@@ -97,7 +117,8 @@ def prepare(game, exe, out):
     linked = out / 'boot-linked.bin'
     # Which executable the files in out/ were made from: another folder (a per-game one) needs a new run.
     stamp, source = out / 'source.txt', str(game / exe)
-    sources = [game / exe, *(PORT / 'scripts').glob('*.py'),
+    # El Dorado: only the scripts that make it (a change to cheats.py or trophies.py re-prepared all three games).
+    sources = [game / exe, *(PORT / 'scripts' / name for name in ('prepare.py', 'link_modules.py', 'link_libc.py')),
                *(game / 'sce_module').glob('*.prx')]
     if linked.is_file() and all(linked.stat().st_mtime >= s.stat().st_mtime for s in sources):
         if not stamp.is_file():
@@ -115,12 +136,26 @@ def isa_rewrite_args(probe, out):
     BMI1, MOVBE, LZCNT, F16C), else []. bb-probe rewrites those instructions at load time from a table of
     their places (scripts/isa_rewrite.py, needs the Python package iced-x86). BB_FORCE_LEGACY_CPU=1
     does it on any CPU (tests)."""
-    check = subprocess.run([str(probe), '--cpu-features'], stdin=subprocess.DEVNULL, capture_output=True,
-                           text=True, errors='replace', creationflags=no_console())
-    if check.returncode:   # AVX, SSE4.2 or POPCNT missing: bb-probe has shown why
-        sys.stderr.write(check.stderr)
-        sys.exit(check.returncode)
-    missing = check.stdout.strip()
+    # El Dorado: the answer is kept for this bb-probe (a start of it each time cost a process launch).
+    cached = out.parent / 'cpu-features.txt'
+    key = f"{Path(probe).stat().st_mtime_ns} {os.environ.get('BB_FORCE_LEGACY_CPU', '')}"
+    try:
+        stored_key, _, stored = cached.read_text(encoding='utf-8').partition('\n')
+    except OSError:
+        stored_key, stored = '', None
+    if stored_key == key and stored is not None:
+        missing = stored.strip()
+    else:
+        check = subprocess.run([str(probe), '--cpu-features'], stdin=subprocess.DEVNULL, capture_output=True,
+                               text=True, errors='replace', creationflags=no_console())
+        if check.returncode:   # AVX, SSE4.2 or POPCNT missing: bb-probe has shown why
+            sys.stderr.write(check.stderr)
+            sys.exit(check.returncode)
+        missing = check.stdout.strip()
+        try:
+            cached.write_text(f'{key}\n{missing}\n', encoding='utf-8')
+        except OSError:
+            pass
     if not missing.startswith('CPU: missing'):
         return []
     print(f"{missing}; the game's instructions of those sets are rewritten at load time", flush=True)
@@ -242,7 +277,7 @@ def main():
                  'is chosen for this game.')
         out = out_root / Path(exe).stem.split('-')[0]
         prepare(game, file, out)
-        run_script('content_profile.py', game, '--out', out, '--sku', env.get('BB_CONTENT_SKU', 'full'))
+        run_script_here('content_profile.py', game, '--out', out, '--sku', env.get('BB_CONTENT_SKU', 'full'))
         # The trophy set of this game (its texts in the console language, the icons) for the runtime.
         trophy_dir = out / 'trophy'
         key = next((k for k, v in EXECUTABLES.items() if v == exe), '')
@@ -256,7 +291,7 @@ def main():
             env['BB_LOADING_ICON_DEFAULT'] = env[f'BB_LOADING_ICON_DEFAULT_{key.upper()}']
         if key:
             language = env.get('BB_LANGUAGE', '1')
-            run_script('trophies.py', game, '--out', trophy_dir, '--exe', key,
+            run_script_here('trophies.py', game, '--out', trophy_dir, '--exe', key,
                        '--lang', language if language.isdigit() else '1',
                        *(['--own'] if env.get(f'BB_GAME_DIR_{key.upper()}') else []))
         this = ['--run'] if getattr(sys, 'frozen', False) else [str(Path(__file__).resolve())]
@@ -269,8 +304,11 @@ def main():
             env['BB_POKE'] = pokes
         else:
             env.pop('BB_POKE', None)
-        patches = cheats.build(game / exe, out, [c for c in env['BB_CHEATS'].split(',') if c])
-        env['BB_KEEP_BYTES'] = cheats.keep_bytes(game / exe, [c for c in env['BB_CHEATS'].split(',') if c])
+        # Unlock all rewards (launcher Game page, BB_UNLOCK_REWARDS=1): every game, code patches + kept switches.
+        enabled = [c for c in env['BB_CHEATS'].split(',') if c] + (['rewards'] if env.get('BB_UNLOCK_REWARDS') == '1'
+                                                                     else [])
+        patches = cheats.build(game / exe, out, enabled)
+        env['BB_KEEP_BYTES'] = cheats.keep_bytes(game / exe, enabled)
         env['BB_RESTART_COMMAND'] = subprocess.list2cmdline([sys.executable, *this, '--after', str(os.getpid()), *args])
         command = [str(probe), str(out / 'boot-linked.bin'), '--content-profile', str(out / 'content.bin'),
                    '--app0', str(game), '--user', str(user_dir), '--timeout', env.get('BB_TIMEOUT', '0')]

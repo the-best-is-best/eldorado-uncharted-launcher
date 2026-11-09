@@ -576,10 +576,27 @@ static ssize_t read_full(int h,void *buffer,uint64_t size,int64_t offset) {
     }
     return (ssize_t)done;
 }
+/* El Dorado: a game read that took 300 ms or more (the music and level data stream from the disk; Mevlock #9: the
+ * soundtrack cut out for 3-4 s): logged, at most 40 times a run, for tools/test_report.py. */
+static uint64_t now_ns_file(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC,&ts);
+    return (uint64_t)ts.tv_sec*1000000000u+(uint64_t)ts.tv_nsec;
+}
+static void note_slow_read(int fd,uint64_t size,uint64_t start_ns) {
+    static int told;
+    const uint64_t ms=(now_ns_file()-start_ns)/1000000u;
+    if (ms<300 || told>=40) return;
+    ++told;
+    printf("File: slow read, %llu ms for %llu bytes (fd %d)\n",(unsigned long long)ms,(unsigned long long)size,fd);
+    fflush(stdout);
+}
 static int64_t do_read(int fd,void *buffer,uint64_t size) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
+    const uint64_t start_ns=now_ns_file();
     ssize_t n=read_full(h,buffer,size,-1);
+    note_slow_read(fd,size,start_ns);
     if (n<0) { if (audio_trace()) printf("Audio trace: read(fd %d, %llu) failed, errno %d\n",fd,(unsigned long long)size,errno); return -errno; }
     trace_bank_read(fd,size,-1,n);
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
@@ -588,7 +605,9 @@ static int64_t do_read(int fd,void *buffer,uint64_t size) {
 static int64_t do_pread(int fd,void *buffer,uint64_t size,int64_t offset) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
+    const uint64_t start_ns=now_ns_file();
     ssize_t n=read_full(h,buffer,size,offset);
+    note_slow_read(fd,size,start_ns);
     if (n<0) { if (audio_trace()) printf("Audio trace: pread(fd %d, %llu @%lld) failed, errno %d\n",fd,(unsigned long long)size,(long long)offset,errno); return -errno; }
     trace_bank_read(fd,size,offset,n);
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);

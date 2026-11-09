@@ -128,7 +128,8 @@ private:
     /// presents it. `last`: the game frame itself, which also signals the frame's fence.
     /// False when the swapchain could not give an image. `game_frame`: a new frame of the game
     /// (not a blank or re-shown one), which may be captured for the save pictures.
-    bool PresentImage(Frame* frame, vk::Image image, bool last, bool game_frame = false);
+    bool PresentImage(Frame* frame, vk::Image image, bool last, bool game_frame = false,
+                      u64 latency_id = 0);
 
     void SetExpectedGameSize(s32 width, s32 height);
 

@@ -32,6 +32,15 @@ MENU = {
         'ar': 'القفز يشغل وضع التدريب: حتى تعيد تشغيل اللعبة، تحفظ في نسخة تدريب وليس في حفظك.'},
     'Chapter': {'ar': 'الفصل'},
     '(now)': {'ar': '(الآن)'},
+    'Mouse': {'ar': 'الماوس'},
+    'Mouse sensitivity': {'ar': 'حساسية الماوس'},
+    'Aiming sensitivity': {'ar': 'الحساسية أثناء التصويب'},
+    'Vertical sensitivity': {'ar': 'الحساسية لأعلى وأسفل'},
+    'Aiming: times the mouse sensitivity while aiming (1.00 the same as looking around). Vertical: times it for '
+    'up and down. Ctrl+click to type a value.': {
+        'ar': 'التصويب: مضاعف حساسية الماوس أثناء التصويب (1.00 مثل النظر حولك). لأعلى وأسفل: مضاعفها للحركة '
+              'لأعلى ولأسفل. Ctrl+نقرة لكتابة قيمة.'},
+    'Or double-click a checkpoint in the list.': {'ar': 'أو انقر نقرًا مزدوجًا على نقطة حفظ في القائمة.'},
     'Go there': {'ar': 'انتقل إليها'},
     "Starts with a movie: use Chapter Select in the game's menu.": {
         'ar': 'تبدأ بمشهد سينمائي: استخدم اختيار الفصل في قائمة اللعبة.'},

@@ -82,6 +82,16 @@ MENU = {
         '영상은 생성되지 않습니다. 런처의 프레임 레이트 제한은 생성된 프레임도 셉니다.',
         '在遊戲原本的畫格之間生成畫格：畫面上的 60 FPS 變成 120。會稍微增加輸入延遲；選單與過場影片不會生成。啟動器的'
         '畫面更新率上限會把生成的畫格算進去。'),
+    'Mouse': R('마우스', '滑鼠'),
+    'Mouse sensitivity': R('마우스 감도', '滑鼠靈敏度'),
+    'Aiming sensitivity': R('조준 감도', '瞄準靈敏度'),
+    'Vertical sensitivity': R('상하 감도', '垂直靈敏度'),
+    'Aiming: times the mouse sensitivity while aiming (1.00 the same as looking around). Vertical: times it for '
+    'up and down. Ctrl+click to type a value.': R(
+        '조준: 조준 중 마우스 감도의 배율입니다(1.00은 둘러볼 때와 같음). 상하: 위아래 움직임의 배율입니다. '
+        'Ctrl+클릭으로 값을 입력합니다.',
+        '瞄準：瞄準時滑鼠靈敏度的倍率(1.00 與環顧四周相同)。垂直：上下移動的倍率。按 Ctrl+點擊可輸入數值。'),
+    'Or double-click a checkpoint in the list.': R('또는 목록의 체크포인트를 더블클릭하세요.', '或在清單中按兩下檢查點。'),
     'Go there': R('이동', '前往'),
     'Going to {}...': R('{}(으)로 이동하는 중...', '正在前往 {}...'),
     'Gold trophy earned': R('골드 트로피 획득', '獲得金獎盃'),

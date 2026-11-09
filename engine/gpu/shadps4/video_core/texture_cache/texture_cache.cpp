@@ -198,7 +198,11 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
 TextureCache::~TextureCache() = default;
 
 void TextureCache::ProcessDownloadImages() {
+    if (!downloads_queued.load(std::memory_order_acquire)) {
+        return;
+    }
     std::unique_lock lk{download_images_mutex};
+    downloads_queued.store(false, std::memory_order_relaxed);
     for (const ImageId image_id : download_images) {
         DownloadImageMemory(image_id, true);
     }
@@ -484,7 +488,7 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
     const bool bpp_match = requested_info.num_bits == cache_image.info.num_bits;
 
     // If an image in the cache has less slices we need to expand it
-    bool recreate = cache_image.info.resources < requested_info.resources;
+    bool recreate = !cache_image.info.resources.Contains(requested_info.resources);
 
 
     switch (binding) {
@@ -519,7 +523,11 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
 
     if (recreate) {
         auto new_info = requested_info;
-        new_info.resources = std::max(requested_info.resources, cache_image.info.resources);
+        // Each dimension on its own (zorde23): the max of the pair could drop the other's layers.
+        new_info.resources.levels =
+            std::max(requested_info.resources.levels, cache_image.info.resources.levels);
+        new_info.resources.layers =
+            std::max(requested_info.resources.layers, cache_image.info.resources.layers);
         new_info.UpdateSize();
         PadDepthLayers(new_info, requested_info);
         HtileLog("depth overlap %#llx: %ux%u layers %u remade as %ux%u layers %u (binding %d)\n",
@@ -644,7 +652,7 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
 
         // Size and resources are greater, expand the image.
         if (image_info.type == cache_image.info.type &&
-            image_info.resources > cache_image.info.resources) {
+            !cache_image.info.resources.Contains(image_info.resources)) {
             return {ExpandImage(image_info, cache_image_id), -1, -1};
         }
 
@@ -1138,7 +1146,7 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
         if (exact_fmt && info.pixel_format != image_resolved.info.pixel_format) {
             // Cannot reuse this image as we need the exact requested format.
             image_id = {};
-        } else if (image_resolved.info.resources < info.resources) {
+        } else if (!image_resolved.info.resources.Contains(info.resources)) {
             // The image was clearly picked up wrong.
             HtileLog("overlap resolve failed at %#llx: %ux%u layers %u freed for %ux%u layers %u\n",
                      static_cast<unsigned long long>(image_resolved.info.guest_address),
@@ -1290,18 +1298,23 @@ ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc, Vi
                                      bool refresh) {
     Image& image = slot_images[image_id];
     LogHugeBind(desc.type == BindingType::Storage ? "storage" : "texture", image, desc);
+    if (image.rotate_prompt) {
+        ButtonPrompts::RotateStickDrawn();
+    }
     if (desc.type == BindingType::Storage) {
         image.flags |= ImageFlagBits::GpuModified;
         if (readback_linear_images && (!image.info.props.is_tiled || image.info.size.width <= 8) &&
             image.info.guest_address != 0) {
             std::unique_lock lk{download_images_mutex};
             download_images.emplace(image_id);
+            downloads_queued.store(true, std::memory_order_release);
         } else if (ReadbackSmallTargets() && image.info.size.width <= 8 &&
                    image.info.size.height <= 8 && image.info.guest_address != 0) {
             // Written by a compute shader rather than rendered (after Umar-Qayyum-dev's tiny
             // read-back): the CPU reads such results the same way.
             std::unique_lock lk{download_images_mutex};
             small_download_images.emplace(image_id);
+            downloads_queued.store(true, std::memory_order_release);
         }
     }
     if (refresh) {
@@ -1360,10 +1373,12 @@ ImageView& TextureCache::FindRenderTarget(ImageId image_id, const ImageDesc& des
     if (readback_linear_images && (!image.info.props.is_tiled || image.info.size.width <= 8)) {
         std::unique_lock lk{download_images_mutex};
         download_images.emplace(image_id);
+        downloads_queued.store(true, std::memory_order_release);
     } else if (ReadbackSmallTargets() && image.info.size.width <= 8 &&
                image.info.size.height <= 8 && image.info.guest_address != 0) {
         std::unique_lock lk{download_images_mutex};
         small_download_images.emplace(image_id);
+        downloads_queued.store(true, std::memory_order_release);
     }
     image.usage.render_target = 1u;
     UpdateImage(image_id);
@@ -1454,6 +1469,7 @@ std::vector<std::pair<VAddr, u32>> prompt_ranges;
 /// upload.
 void ReplaceButtonPrompts(Vulkan::Runtime& runtime, Image& image) {
     const auto& info = image.info;
+    image.rotate_prompt = false;
     // El Dorado: BB_BUTTON_PROMPTS_DUMP_ALL=1 (with BB_BUTTON_PROMPTS_DUMP): every small picture the game uploads
     // (32 to 512 pixels a side, any format), each once, to find a prompt of a size or format the table lacks.
     {
@@ -1509,7 +1525,9 @@ void ReplaceButtonPrompts(Vulkan::Runtime& runtime, Image& image) {
         // (<hash>-<width>x<height>-<bc1|rgba8>-<tile mode>.bin), each once, to find a prompt the table lacks.
         static const char* dump = std::getenv("BB_BUTTON_PROMPTS_DUMP");
         static std::set<u64> dumped;
-        if (dump && *dump && dumped.insert(hash).second) {
+        // El Dorado: at most 150 pictures a run (the launcher turns it on in Uncharted 3 to find its missing
+        // Triangle prompt: tools/test_report.py picks it out by its colour).
+        if (dump && *dump && dumped.size() < 150 && dumped.insert(hash).second) {
             const std::string path = fmt::format("{}/{:016x}-{}x{}-{}-{}.bin", dump, hash, info.size.width,
                                                  info.size.height,
                                                  format == ButtonPrompts::Format::Bc1 ? "bc1" : "rgba8",
@@ -1526,6 +1544,15 @@ void ReplaceButtonPrompts(Vulkan::Runtime& runtime, Image& image) {
         const std::pair<VAddr, u32> range{info.guest_address, info.guest_size};
         if (std::ranges::find(prompt_ranges, range) == prompt_ranges.end()) {
             prompt_ranges.push_back(range);
+        }
+    }
+    image.rotate_prompt = ButtonPrompts::IsRotateStick(hash);
+    if (image.rotate_prompt) {
+        static std::atomic<int> told{0};
+        if (told.fetch_add(1) < 4) {
+            std::printf("Button prompts: Uncharted 1 turn-the-stick prompt uploaded (%#llx)\n",
+                        static_cast<unsigned long long>(info.guest_address));
+            std::fflush(stdout);
         }
     }
     if (patches->empty()) {
@@ -2146,6 +2173,29 @@ void TextureCache::GarbageCollectImages() {
             gc_evictions = gc_downloads = 0;
         }
     }
+}
+
+TextureCache::ImageStats TextureCache::GetImageStats() {
+    ImageStats stats{};
+    std::scoped_lock lock{mutex};
+    for (Image& image : slot_images) {
+        u64 bytes = 0;
+        for (const auto& backing : image.backing_images) {
+            bytes += backing.image.size_bytes;
+        }
+        if (image.usage.render_target || image.usage.depth_target) {
+            stats.target_bytes += bytes;
+            ++stats.target_count;
+        } else {
+            stats.texture_bytes += bytes;
+            ++stats.texture_count;
+        }
+        if (True(image.flags & ImageFlagBits::GpuModified)) {
+            stats.gpu_written_bytes += bytes;
+        }
+    }
+    stats.pending_free_bytes = pending_free_bytes.load(std::memory_order_relaxed);
+    return stats;
 }
 
 void TextureCache::GarbageCollectSamplers() {

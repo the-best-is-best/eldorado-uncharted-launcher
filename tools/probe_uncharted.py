@@ -73,18 +73,15 @@ TEMPORAL_UPSCALERS = ("fsr3", "fsr4", "fsr411", "dlss", "xess")
 # The engine's mouse turns the camera 0.15 degrees per pixel at sensitivity 1; the old one about 0.063.
 MOUSE_SENSITIVITY_SCALE = 0.42
 # Our cheats (launcher names) that the engine's scripts/cheats.py applies, by its names.
-CHEAT_NAMES = {"invincible": "health", "ammo": "ammo", "devmode": "devmode", "rewards": "rewards",
-               "grenades": "grenades"}
-# Unlock all rewards in Uncharted 2 and 3: Naughty Dog's debug switches "Give all Store Items" and "Give All Movies"
-# (update 1.02 image offsets), kept set by the engine (BB_POKE, per game through run.py's BB_POKE_U2/U3).
-REWARD_POKES = {"u2": "1114178:b=1,1114179:b=1", "u3": "17b2a94:b=1,17b2a95:b=1"}
+# Unlock all rewards is the engine's own (BB_UNLOCK_REWARDS, all three games, 1.00 and 1.02).
+CHEAT_NAMES = {"invincible": "health", "ammo": "ammo", "devmode": "devmode", "grenades": "grenades"}
 # Infinite grenades: Uncharted 3's own debug switch "Infinite Grenades" (1.02 image offset), kept set the same way.
 # Uncharted 1 and 2 have no such switch: their throw's ammo use is patched out (engine/scripts/cheats.py).
 GRENADE_POKES = {"u3": "17faa92:b=1"}
 # The games' other debug switches the launcher offers (1.02 image offsets, kept set the same way): "No Reload"
 # (Uncharted 2 and 3), "One Hit Kills" (Uncharted 3) and the render setting "hi-res local (lamp / torch) shadow
 # buffer" (Uncharted 2 and 3, PS4 default off, ~0% FPS; U1 not mapped).
-CHEAT_POKES = {"rewards": REWARD_POKES, "grenades": GRENADE_POKES,
+CHEAT_POKES = {"grenades": GRENADE_POKES,
                "noreload": {"u2": "104f84b:b=1", "u3": "17faa93:b=1"}, "onehit": {"u3": "17fab94:b=1"}}
 # The same cheats where a game has no such switch: code patches of engine/scripts/cheats.py (its names), per game.
 # No reload in Uncharted 1 (the player's shot no longer takes a round from the magazine), one hit kills in
@@ -98,6 +95,12 @@ MOUSE_NAMES = {"left": "Mouse Left", "right": "Mouse Right", "middle": "Mouse Mi
 BUTTON_ACTIONS = ("cross", "circle", "square", "triangle", "l1", "r1", "l2", "r2", "l3", "r3", "options",
                   "touchpad", "touchpad_right", "up", "down", "left", "right")
 STICK_ACTIONS = ("ls_up", "ls_down", "ls_left", "ls_right", "rs_up", "rs_down", "rs_left", "rs_right")
+# Held key: walk (the engine's own default Left Ctrl is the launcher's Circle): a settings file from before it gets
+# the launcher's default where free.
+LATER_ACTIONS = {"walk": "B"}
+# The engine's rotate keys (its defaults R and T are the launcher's Triangle) stay unbound: the mouse turns the stick
+# while the wheel prompt is on screen.
+UNBOUND_ACTIONS = ("rotate_ccw", "rotate_cw")
 # The controller buttons of each action as the launcher's defaults name them (SDL names).
 PAD_DEFAULTS = {"cross": "a", "circle": "b", "square": "x", "triangle": "y", "l1": "leftshoulder",
                 "r1": "rightshoulder", "l3": "leftstick", "r3": "rightstick", "options": "start",
@@ -156,10 +159,12 @@ def parse_map(spec):
 def write_input_ini(game, ini, path):
     """input-u<N>.ini for the engine from the game's settings file: every action is listed, so none of
     the engine's own defaults (C for Circle, G for R1, IJKL for the right stick) stays behind."""
-    binds = {action: [] for action in BUTTON_ACTIONS + STICK_ACTIONS}
+    binds = {action: [] for action in BUTTON_ACTIONS + STICK_ACTIONS + tuple(LATER_ACTIONS)}
+    listed = set()
     for action, name in parse_map(ini.get("key_map", "")):
         if action == "touchpad_left":
             action = "touchpad"
+        listed.add(action)
         if action in binds and name:
             binds[action].append(name)
     for action, name in parse_map(ini.get("mouse_map", "")):
@@ -185,7 +190,8 @@ def write_input_ini(game, ini, path):
              f"mouse_invert_y={1 if ini.get('mouse_invert', '0') == '1' else 0}",
              "pad_invert_y=0",
              f"pad_vibration={1 if ini.get('vibration', '1') != '0' else 0}",
-             "pad_vibration_strength=100"]
+             "pad_vibration_strength=100",
+             "walk_toggle=1"]  # the walk key switches between walking and running (not held)
     # The in-game menu's controller shortcut (the launcher's Advanced page): L2 + R3 as before, or the
     # engine's own L3 + R3 (always on), or none but the keyboard's Insert.
     if ini.get("menu_shortcut", "lt_r3") == "lt_r3":
@@ -193,7 +199,13 @@ def write_input_ini(game, ini, path):
     # Without a settings file yet (a first start before the launcher wrote one) the engine's own
     # defaults stay; with one, every action is written, bound or not.
     if "key_map" in ini or "mouse_map" in ini:
-        lines += [f"key.{action}={'|'.join(binds[action][:2])}" for action in BUTTON_ACTIONS + STICK_ACTIONS]
+        used = {name.lower() for names in binds.values() for name in names}
+        for action, key in LATER_ACTIONS.items():
+            if action not in listed and key.lower() not in used:
+                binds[action].append(key)
+        lines += [f"key.{action}={'|'.join(binds[action][:2])}"
+                  for action in BUTTON_ACTIONS + STICK_ACTIONS + tuple(LATER_ACTIONS)]
+        lines += [f"key.{action}=" for action in UNBOUND_ACTIONS]
     if "pad_map" in ini:
         # No controller button for the left side of the touchpad (it was L1+Back): Back stays the right side.
         lines += ["pad.touchpad=none"]
@@ -506,6 +518,8 @@ def game_environment(args, game, executable, game_dir):
                                 + option_cheats + arabic_cheats)
     if "devmode" in cheats:
         env["BB_DEV_MENU"] = "1"
+    if "rewards" in cheats:
+        env["BB_UNLOCK_REWARDS"] = "1"
     if "treasures" in cheats:  # the games' own Dev Menu "Give all Treasures" (runtime_checkpoint.c)
         # Once per save: the engine gives them to the save being played unless it is one of these (given again,
         # the game showed its "all treasures found" message at every start); a new playthrough's save gets them.
@@ -529,6 +543,11 @@ def game_environment(args, game, executable, game_dir):
     # Skip intro (the launcher's cheat, on by default): the boot logo movie of all three games (runtime_file.c).
     if "skipintro" in cheats:
         env.setdefault("BB_SKIP_INTRO", "1")
+    # Uncharted 3's Triangle prompt in its cargo plane scene is not in the engine's prompt table yet (Mevlock #27):
+    # the engine keeps the game's unknown button-sized pictures (at most 150 a run) for tools/test_report.py.
+    if game == "u3":
+        env.setdefault("BB_BUTTON_PROMPTS_DUMP", str(USER / "prompt-dumps"))
+        (USER / "prompt-dumps").mkdir(parents=True, exist_ok=True)
     env["BB_JOB_SLEEP"] = job_sleep(game)
     # U3 characters sinking into the ground, floating or twitching (SuperMedo dca99bb): what the raycaster
     # copy shader writes is read back at the end-of-pipe label. On in Uncharted 3 unless already set;
@@ -633,14 +652,17 @@ GAME_SAVE = re.compile(r"SAVEDATA0[123][0-9]$")
 
 
 def save_signature(folder, meta):
-    """Names, sizes and times of a save's files: a backup is made only when this changed."""
+    """Names and SHA-1 of a save's files, its picture and version note left out: a backup is made only when this
+    changed. (Names, sizes and times made identical copies when only a time or the version note changed, and they
+    pushed real versions out of the BACKUP_KEEP kept.)"""
+    import hashlib
     parts = []
     for base in (folder, meta):
         if base.is_dir():
             for path in sorted(base.rglob("*")):
-                if path.is_file():
-                    stat = path.stat()
-                    parts.append(f"{path.relative_to(base.parent).as_posix()}:{stat.st_size}:{stat.st_mtime_ns}")
+                if path.is_file() and path.name not in ("thumb.png", SAVE_VERSION_FILE):
+                    digest = hashlib.sha1(path.read_bytes()).hexdigest()
+                    parts.append(f"{path.relative_to(base.parent).as_posix()}:{digest}")
     return "\n".join(parts)
 
 
@@ -718,8 +740,10 @@ def stamp_saves(since, version):
     for meta in saves.glob("*/*/SAVEDATA0*.sce_sys"):
         try:
             param = meta / "param.bin"
-            if GAME_SAVE.match(meta.name[:-len(".sce_sys")]) and param.is_file() and param.stat().st_mtime >= since:
-                (meta / SAVE_VERSION_FILE).write_text(version, encoding="utf-8")
+            note = meta / SAVE_VERSION_FILE
+            if GAME_SAVE.match(meta.name[:-len(".sce_sys")]) and param.is_file() and param.stat().st_mtime >= since \
+                    and not (note.is_file() and note.read_text(encoding="utf-8") == version):
+                note.write_text(version, encoding="utf-8")
         except OSError as error:
             print(f"Save version: {meta.name} not marked ({error})")
 
@@ -849,7 +873,9 @@ def run(args, game, executable, game_dir):
                       f"{env.get('BB_LANGUAGE_' + key.upper(), '-')}" for key in GAME_KEYS.values())
                   + f"; cheats {env.get('BB_CHEATS', '') or 'none'}\n"
                   + ("# Straight to the main menu (BB_SKIP_TITLE=1)\n"
-                     if env.get("BB_SKIP_TITLE") == "1" else "")).encode("utf-8")
+                     if env.get("BB_SKIP_TITLE") == "1" else "")
+                  + (f"# update view: {os.environ['ELDORADO_VIEW_NOTE']}\n"
+                     if os.environ.get("ELDORADO_VIEW_NOTE") else "")).encode("utf-8")
         log.write(header)
         try:
             process = subprocess.Popen(command, cwd=str(ENGINE), env=env, stdin=subprocess.DEVNULL,
@@ -961,10 +987,15 @@ def main():
         back_up_saves()
     except Exception as error:  # a backup problem never keeps the game from starting
         print(f"Save backup: skipped ({error})")
+    view_started = time.perf_counter()
     try:
         game_dir = game_with_update(game_dir, ROOT / "analysis" / "views")
     except Exception as error:  # the game still starts, without its update
         print(f"Update: not used ({error})")
+    import game_update_view
+    if game_update_view.LAST_VIEW:  # the boot.log header says it (tools/test_report.py)
+        os.environ["ELDORADO_VIEW_NOTE"] = (f"{game_update_view.LAST_VIEW} in "
+                                            f"{time.perf_counter() - view_started:.2f} s")
     started = time.time() - 2  # file times are coarse on some drives
     version = game_version(game_dir)
     result = run(args, game, args.executable, game_dir)

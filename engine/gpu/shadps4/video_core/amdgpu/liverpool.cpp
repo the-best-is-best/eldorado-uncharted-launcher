@@ -38,6 +38,8 @@
 #include "video_core/landing_gate.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "video_core/renderer_vulkan/vk_guest_sync_stats.h"
+#include "video_core/renderer_vulkan/vk_runtime.h"
 
 namespace VideoCore {
 extern std::atomic<u32> g_async_stalled; // buffer_cache.cpp
@@ -129,6 +131,22 @@ static const char* acb_task_name[] = NAME_ARRAY(ACB_TASK, MAX_NAMES);
 #define RESUME_ASC(task, id) RESUME(task, acb_task_name[id])
 
 std::array<u8, 48_KB> Liverpool::ConstantEngine::constants_heap;
+
+// shadPS4 #5542 (diagnostics first): a chained indirect buffer replaces the rest of the buffer it is
+// in, while the parser runs it as a nested call and goes on after the packet (stale commands in a
+// reused buffer would run). Logged once per engine with the words left after it.
+static void NoteChainedIb(const PM4CmdIndirectBuffer* ib, const char* engine, size_t words_left) {
+    if (!ib->chain) {
+        return;
+    }
+    static std::atomic<int> seen[2];
+    const int which = engine[0] == 'g' ? 0 : 1;
+    if (seen[which].fetch_add(1, std::memory_order_relaxed) == 0) {
+        std::printf("GPU: chained indirect buffer on the %s queue (%zu words after the packet)\n", engine,
+                    words_left);
+        std::fflush(stdout);
+    }
+}
 
 static std::span<const u32> NextPacket(std::span<const u32> span, size_t offset) {
     if (offset > span.size()) {
@@ -963,6 +981,9 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
         }
 
         const PM4ItOpcode opcode = header->type3.opcode;
+        // shadPS4 #5541: the size read before running the packet; once it signals the guest, the
+        // guest may already reuse the buffer.
+        const u32 packet_words = header->type3.NumWords() + 1;
         const auto* it_body = reinterpret_cast<const u32*>(header) + 1;
         if (rasterizer && Vulkan::Rasterizer::HleWaitAt()) {
             rasterizer->WaitHleCopies(8);
@@ -1022,7 +1043,7 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
             UNREACHABLE_MSG("Unknown PM4 type 3 opcode {:#x} with count {}",
                             static_cast<u32>(opcode), count);
         }
-        ccb = NextPacket(ccb, header->type3.NumWords() + 1);
+        ccb = NextPacket(ccb, packet_words);
     }
 
     FIBER_EXIT;
@@ -1279,6 +1300,64 @@ void ScanDcb(std::span<const u32> dcb, int depth) {
 }
 } // namespace
 
+namespace {
+/// bbport diagnosis (BB_GUEST_SYNC_STATS=1, perf10 step 0): counts the guest's sync packets and
+/// hands each sync point to the recording thread in order (vk_guest_sync_stats.h).
+void RunGuestSyncPoint(Vulkan::Rasterizer& rasterizer, const u8* data) {
+    Vulkan::GuestSync::Kind kind;
+    std::memcpy(&kind, data, sizeof(kind));
+    if (Vulkan::GuestSync::On()) {
+        Vulkan::GuestSync::NoteSyncB(kind);
+    }
+    if (Vulkan::GuestSync::GuestBarriers() && Vulkan::GuestSync::IsStrong(kind)) {
+        rasterizer.GetRuntime().guest_barrier_pending = true;
+    }
+}
+
+void NoteGuestSyncPacket(Vulkan::Rasterizer* rasterizer, PM4ItOpcode opcode, const PM4Header* header,
+                         u32 ring) {
+    using namespace Vulkan::GuestSync;
+    Kind kind;
+    switch (opcode) {
+    case PM4ItOpcode::EventWrite: {
+        const auto type = reinterpret_cast<const PM4CmdEventWrite*>(header)->event_type.Value();
+        switch (type) {
+        case EventType::CsPartialFlush: kind = EwCsPartial; break;
+        case EventType::PsPartialFlush: kind = EwPsPartial; break;
+        case EventType::VsPartialFlush: kind = EwVsPartial; break;
+        case EventType::CacheFlush:
+        case EventType::CacheFlushTs:
+        case EventType::CacheFlushAndInvEvent:
+        case EventType::CacheFlushAndInvTsEvent:
+        case EventType::DbCacheFlushAndInv:
+        case EventType::FlushAndInvDbDataTs:
+        case EventType::FlushAndInvDbMeta:
+        case EventType::FlushAndInvCbDataTs:
+        case EventType::FlushAndInvCbMeta:
+        case EventType::FlushAndInvCbPixelData:
+            kind = EwCacheFlush;
+            break;
+        default: kind = EwOther; break;
+        }
+        break;
+    }
+    case PM4ItOpcode::EventWriteEop: kind = Eop; break;
+    case PM4ItOpcode::EventWriteEos: kind = Eos; break;
+    case PM4ItOpcode::AcquireMem: kind = AcquireMem; break;
+    case PM4ItOpcode::ReleaseMem: kind = ReleaseMem; break;
+    case PM4ItOpcode::WaitRegMem: kind = WaitRegMem; break;
+    case PM4ItOpcode::DmaData: kind = DmaData; break;
+    default: return;
+    }
+    if (On()) {
+        NoteStageA(ring, kind);
+    }
+    if (rasterizer && (On() ? IsSyncPoint(kind) : IsStrong(kind))) {
+        rasterizer->RunInOrder(&RunGuestSyncPoint, &kind, sizeof(kind));
+    }
+}
+} // namespace
+
 Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<const u32> ccb,
                                            u64 seq) {
     FIBER_ENTER(dcb_task_name);
@@ -1396,6 +1475,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 rasterizer->DrainDrawPipe(static_cast<u32>(opcode));
                 // They may write guest memory: not before fences deferred earlier.
                 rasterizer->WaitDeferredSignals();
+            }
+            if (Vulkan::GuestSync::On() || Vulkan::GuestSync::GuestBarriers()) {
+                NoteGuestSyncPacket(rasterizer, opcode, header, 0);
             }
             switch (opcode) {
             case PM4ItOpcode::Nop: {
@@ -2069,6 +2151,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             }
             case PM4ItOpcode::IndirectBuffer: {
                 const auto* indirect_buffer = reinterpret_cast<const PM4CmdIndirectBuffer*>(header);
+                NoteChainedIb(indirect_buffer, "graphics", dcb.size());
                 auto task = ProcessGraphics(
                     {indirect_buffer->Address<const u32>(), indirect_buffer->ib_size}, {});
                 // Tasks start suspended: the nested body (and its scan) runs on this resume.
@@ -2165,7 +2248,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 UNREACHABLE_MSG("Unknown PM4 type 3 opcode {:#x} with count {}",
                                 static_cast<u32>(opcode), count);
             }
-            dcb = NextPacket(dcb, header->type3.NumWords() + 1);
+            // shadPS4 #5541: the size read before running the packet (a flip or an EOP interrupt
+            // lets the guest reuse this buffer while we are still on it).
+            dcb = NextPacket(dcb, count + 1);
             break;
         }
     }
@@ -2357,6 +2442,9 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             rasterizer->DrainDrawPipe(by_opcode ? static_cast<u32>(opcode)
                                                 : Vulkan::DrawPipe::ReasonCompute);
         }
+        if (Vulkan::GuestSync::On() || Vulkan::GuestSync::GuestBarriers()) {
+            NoteGuestSyncPacket(rasterizer, opcode, header, 1);
+        }
 
         const auto* it_body = reinterpret_cast<const u32*>(header) + 1;
         switch (opcode) {
@@ -2366,6 +2454,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         }
         case PM4ItOpcode::IndirectBuffer: {
             const auto* indirect_buffer = reinterpret_cast<const PM4CmdIndirectBuffer*>(header);
+            NoteChainedIb(indirect_buffer, "compute", acb.size());
             auto task = ProcessCompute<true>(
                 {indirect_buffer->Address<const u32>(), indirect_buffer->ib_size}, vqid);
             RESUME_ASC(task, vqid);
