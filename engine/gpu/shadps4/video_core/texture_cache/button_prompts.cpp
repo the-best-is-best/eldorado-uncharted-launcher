@@ -115,6 +115,9 @@ const Picture pictures[] = {
     // El Dorado (9 Nov 2026): Uncharted 1's big X when Nate lies on the ground after a fall (captured by
     // BB_BUTTON_PROMPTS_DUMP; the glow is the picture's own periwinkle).
     {0x2bf5d90eb864162full, 256, RoundButton, Cross, {137, 149, 239}, "Uncharted 1 cross prompt"},
+    // El Dorado (10 Nov 2026): the same round prompt for Square (the fight in the Uncharted 1 chapter after the boat),
+    // glow = the picture's own pink.
+    {0x9edd4f2f0f64f6e5ull, 256, RoundButton, Square, {244, 160, 156}, "Uncharted 1 square prompt"},
     {0x25d954ce23a8f5e2ull, 512, Puck, Triangle, {55, 216, 104}, "Uncharted 2 triangle tapping prompt"},
     {0xc96e34fbb203279eull, 512, PressedPuck, Triangle, {55, 216, 104},
      "Uncharted 2 triangle hold prompt"},

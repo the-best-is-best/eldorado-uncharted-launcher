@@ -183,6 +183,11 @@ def u1_crank_mouse(runs, root):
                 what="Uncharted 1 engine room: the machine's crank: the mouse picture shows and the mouse turns it")
 
 
+def u1_square_prompt(runs, root):
+    return seen(runs, r"Button prompts: Uncharted 1 square prompt drawn as keyboard and mouse keys",
+                what="Uncharted 1, the fight after the boat: the Square prompt shows your Square key (mark it)")
+
+
 def trophies_cheat(runs, root):
     return seen(runs, r"Unlock all trophies: \d+ added",
                 what="Settings > CHEATS > Unlock all trophies, then start a game and open the launcher's Trophies page")
@@ -367,6 +372,7 @@ ITEMS = [
     Item("u1_push_prompt", "U1 push-the-stone prompt shows W A S D", u1_push_prompt),
     Item("onehit_jetski", "One hit kills counts Elena's shots on the jet ski only", onehit_jetski),
     Item("u1_crank_mouse", "U1 engine room crank turns with the mouse (the arrow the other way)", u1_crank_mouse),
+    Item("u1_square_prompt", "U1 fight: the big Square prompt shows your Square key", u1_square_prompt),
     Item("trophies_cheat", "Unlock all trophies (CHEATS)", trophies_cheat),
     Item("menu_sensitivity", "Insert menu: aiming and vertical sensitivity", menu_sensitivity),
     Item("checkpoint_jump", "Insert menu: double-click a checkpoint", checkpoint_jump),

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <filesystem>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -1525,13 +1526,19 @@ void ReplaceButtonPrompts(Vulkan::Runtime& runtime, Image& image) {
         // (<hash>-<width>x<height>-<bc1|rgba8>-<tile mode>.bin), each once, to find a prompt the table lacks.
         static const char* dump = std::getenv("BB_BUTTON_PROMPTS_DUMP");
         static std::set<u64> dumped;
-        // El Dorado: at most 150 pictures a run (the launcher turns it on in Uncharted 3 to find its missing
-        // Triangle prompt: tools/test_report.py picks it out by its colour).
-        if (dump && *dump && dumped.size() < 150 && dumped.insert(hash).second) {
+        static u32 written = 0;
+        // El Dorado: at most 150 NEW pictures a run: one already on disk from an earlier run is skipped without
+        // counting, so the menus and loading screens do not use the limit up before the prompt being looked for
+        // (the prompts still missing: Uncharted 3's Triangle, Uncharted 1's Square).
+        if (dump && *dump && written < 150 && dumped.insert(hash).second) {
             const std::string path = fmt::format("{}/{:016x}-{}x{}-{}-{}.bin", dump, hash, info.size.width,
                                                  info.size.height,
                                                  format == ButtonPrompts::Format::Bc1 ? "bc1" : "rgba8",
                                                  static_cast<int>(info.tile_mode));
+            if (std::filesystem::exists(path)) {
+                return;
+            }
+            ++written;
             if (FILE* f = std::fopen(path.c_str(), "wb")) {
                 std::fwrite(guest, 1, mip.size, f);
                 std::fclose(f);
