@@ -268,6 +268,16 @@ Color GameColor() {
     return {0.204f, 0.788f, 0.541f};
 }
 const Color rim = GameColor();
+/// Uncharted 3 (El Dorado, 10 Nov 2026): its keys and buttons take the launcher's own look: the key face is the
+/// launcher's slate (Theme.qml panelHigh to panel, a touch lighter on top), edged in the game's accent (accentU3).
+/// The other games keep the charcoal caps.
+bool IsU3Game() {
+    const char* exe = std::getenv("BB_EXE");
+    return exe && std::string{exe}.find("big3") != std::string::npos;
+}
+const bool u3_game = IsU3Game();
+constexpr Color cap_top_u3{0.169f, 0.188f, 0.231f};    // the launcher's key face (#2b303b), as the stick prompts
+constexpr Color cap_bottom_u3{0.102f, 0.118f, 0.149f}; // Theme.qml panel #1a1e26
 constexpr Color text_color{0.961f, 0.965f, 0.973f};
 constexpr Color highlight{0.969f, 0.694f, 0.396f};  ///< the games' HUD orange (the mouse's lit button, Uncharted 1's push prompt)
 constexpr Color lit_text{0.075f, 0.082f, 0.098f};   ///< letters on a lit (orange) key
@@ -325,9 +335,10 @@ void DrawCap(Canvas& c, float x0, float y0, float x1, float y1, Distance distanc
             }
             c.Blend(x, y, rim, rim_a);
             const float t = std::clamp((y + 0.5f - y0) / std::max(y1 - y0, 1.0f), 0.0f, 1.0f);
-            const Color body{cap_top.r + (cap_bottom.r - cap_top.r) * t,
-                             cap_top.g + (cap_bottom.g - cap_top.g) * t,
-                             cap_top.b + (cap_bottom.b - cap_top.b) * t};
+            const Color& top = u3_game ? cap_top_u3 : cap_top;
+            const Color& bottom = u3_game ? cap_bottom_u3 : cap_bottom;
+            const Color body{top.r + (bottom.r - top.r) * t, top.g + (bottom.g - top.g) * t,
+                             top.b + (bottom.b - top.b) * t};
             c.Blend(x, y, face ? *face : body, Coverage(d + 1.2f));
         }
     }
@@ -795,7 +806,8 @@ void DrawRoundButton(Canvas& up, const Font& font, const std::string& key, int x
             up.Blend(x, y, {0.03f, 0.03f, 0.03f}, Coverage(d));
             const float t = std::clamp((y + 0.5f - (cy - radius)) / (2 * radius), 0.0f, 1.0f);
             up.Blend(x, y, rim, Coverage(d + 1.0f));
-            up.Blend(x, y, Mix(cap_top, cap_bottom, t), Coverage(d + 4.0f));
+            up.Blend(x, y, u3_game && xbox < 0 ? Mix(cap_top_u3, cap_bottom_u3, t) : Mix(cap_top, cap_bottom, t),
+                     Coverage(d + 4.0f));
         }
     }
     if (xbox >= 0) {
@@ -836,7 +848,8 @@ void DrawPuck(Canvas& up, const Font& font, const std::string& key, bool pressed
             up.Blend(x, y, rim, Supersample(x, y, [&](float px, float py) { // the face's edge: the game's color
                          return in_ellipse(px, py, face, 0.0f);
                      }));
-            up.Blend(x, y, Mix(cap_top, cap_bottom, t), Supersample(x, y, [&](float px, float py) {
+            up.Blend(x, y, u3_game && xbox < 0 ? Mix(cap_top_u3, cap_bottom_u3, t) : Mix(cap_top, cap_bottom, t),
+                     Supersample(x, y, [&](float px, float py) {
                          return in_ellipse(px, py, face, -3.0f);
                      }));
         }
@@ -1040,7 +1053,10 @@ std::vector<Patch> BuildPicture(const Picture& picture, u32 levels, Style style)
     const Font font;
     const u32 size = picture.size;
     Canvas up{size, size};
-    const Color glow{picture.glow[0] / 255.0f, picture.glow[1] / 255.0f, picture.glow[2] / 255.0f};
+    Color glow{picture.glow[0] / 255.0f, picture.glow[1] / 255.0f, picture.glow[2] / 255.0f};
+    if (u3_game && style == Style::Keyboard && std::strncmp(picture.name, "Uncharted 3", 11) == 0) {
+        glow = rim; // the launcher's accent around the key instead of the PlayStation button's colour
+    }
     for (u32 y = 0; y < size; ++y) {
         for (u32 x = 0; x < size; ++x) {
             up.Blend(x, y, glow, 1.0f);
