@@ -250,10 +250,10 @@ std::string KeyLabel(const std::string& name) {
 struct Color {
     float r, g, b;
 };
-// El Dorado's keys, in the games' own prompt look: a dark charcoal cap like the PlayStation buttons' face, a thin
-// edge in the game's own color and white letters; no gold, no glow of its own; the d-pad's lit direction in the HUD's orange.
-constexpr Color cap_top{0.165f, 0.176f, 0.196f};
-constexpr Color cap_bottom{0.071f, 0.078f, 0.090f};
+// El Dorado's keys in the launcher's look (launcher/ui/qml/Theme.qml): a key face from panelHigh #232833 down to
+// panel #1a1e26, a thin edge in the game's own color (the launcher's accent), ink #eef1f6 letters; no gold.
+constexpr Color cap_top{0.137f, 0.157f, 0.200f};    // panelHigh #232833
+constexpr Color cap_bottom{0.102f, 0.118f, 0.149f}; // panel #1a1e26
 /// The thin edge (and the mouse's seams): the color of the game being played, as the launcher shows it
 /// (launcher/ui/qml/Theme.qml: Uncharted 1 jungle green, 2 ice blue, 3 desert orange). Each game is its own run.
 Color GameColor() {
@@ -269,8 +269,10 @@ Color GameColor() {
 }
 const Color rim = GameColor();
 constexpr Color text_color{0.961f, 0.965f, 0.973f};
-constexpr Color highlight{0.969f, 0.694f, 0.396f};  ///< the d-pad's lit direction (the games' HUD orange)
+constexpr Color highlight{0.969f, 0.694f, 0.396f};  ///< the games' HUD orange (the mouse's lit button, Uncharted 1's push prompt)
 constexpr Color lit_text{0.075f, 0.082f, 0.098f};   ///< letters on a lit (orange) key
+constexpr Color accent_ink{0.039f, 0.047f, 0.063f}; ///< Theme.qml accentInk #0a0c10: text on an accent fill
+constexpr Color launcher_ink{0.933f, 0.945f, 0.965f}; ///< Theme.qml ink #eef1f6
 constexpr Color side_dark{0.020f, 0.022f, 0.026f};  ///< a raised button's side, its shadowed edge
 constexpr Color side_light{0.110f, 0.118f, 0.133f}; ///< ... and its middle
 
@@ -846,9 +848,29 @@ void DrawPuck(Canvas& up, const Font& font, const std::string& key, bool pressed
     DrawLabel(up, font, key, cx, face, rx * 1.2f, rx * 0.95f, ry / rx);
 }
 
-/// The weapon switch d-pad as the four keys bound to it, the lit ones orange.
+/// A d-pad key in the launcher's look: the panel-coloured face with an edge and a soft glow in the game's colour (the
+/// launcher's accent); a lit direction is filled with the accent itself, its letter in accentInk.
+void DrawLauncherKey(Canvas& c, float cx, float cy, float half, float radius, bool lit) {
+    const float glow = std::max(3.0f, half * 0.2f);
+    const float edge_w = std::max(1.5f, half * 0.07f);
+    const Color face_edge = lit ? Mix(rim, launcher_ink, 0.35f) : Mix(cap_top, rim, 0.8f);
+    const int reach = int(std::ceil(half + glow)) + 2;
+    for (int y = int(cy) - reach; y <= int(cy) + reach; ++y) {
+        for (int x = int(cx) - reach; x <= int(cx) + reach; ++x) {
+            const float d = RoundedRect(x + 0.5f, y + 0.5f, cx, cy, half, half, radius);
+            if (d > 0.0f) {
+                const float fall = std::clamp(1.0f - d / glow, 0.0f, 1.0f);
+                c.Blend(x, y, rim, (lit ? 0.5f : 0.22f) * fall * fall);
+            }
+            c.Blend(x, y, face_edge, Coverage(d));
+            const float t = std::clamp((y + 0.5f - (cy - half)) / (2.0f * half), 0.0f, 1.0f);
+            c.Blend(x, y, lit ? rim : Mix(cap_top, cap_bottom, t), Coverage(d + edge_w));
+        }
+    }
+}
+
+/// The weapon switch d-pad as the four keys bound to it, in the launcher's look; the lit ones in the accent.
 void DrawHudDPad(Canvas& up, const Font& font, const Bindings& b, u8 lit) {
-    constexpr Color hud_orange = highlight;
     struct Key {
         float cx, cy;
         int binding;
@@ -859,12 +881,9 @@ void DrawHudDPad(Canvas& up, const Font& font, const Bindings& b, u8 lit) {
                          {62.0f, 128.0f, 2, LitLeft}, {193.0f, 128.0f, 3, LitRight}};
     const float half = 30.0f;
     for (const Key& k : keys) {
-        DrawCap(
-            up, k.cx - half, k.cy - half, k.cx + half, k.cy + half,
-            [&](float x, float y) { return RoundedRect(x, y, k.cx, k.cy, half, half, 9.0f); },
-            (lit & k.lit) ? &hud_orange : nullptr);
+        DrawLauncherKey(up, k.cx, k.cy, half, 9.0f, lit & k.lit);
         font.Draw(up, KeyLabel(b.dpad[k.binding]), k.cx, k.cy, 2 * half - 8.0f, 34.0f,
-                  (lit & k.lit) ? lit_text : text_color);
+                  (lit & k.lit) ? accent_ink : launcher_ink);
     }
 }
 
@@ -1083,7 +1102,7 @@ Canvas Downsample(const Canvas& level) {
 }
 
 /// The d-pad as the four keys bound to it, arrow-key style (one on top, three below); the
-/// directions the picture lights are orange.
+/// directions the picture lights in the accent.
 void DrawArrows(Canvas& c, const Font& font, const Slot& s, const Bindings& b) {
     const float gap = 2.0f;
     const float k = std::floor(std::min((s.x1 - s.x0 - 2 * gap) / 3.0f, (s.y1 - s.y0 - gap) / 2.0f));
@@ -1101,12 +1120,9 @@ void DrawArrows(Canvas& c, const Font& font, const Slot& s, const Bindings& b) {
     };
     for (const Key& key : keys) {
         const float kx = key.x + k * 0.5f, ky = key.y + k * 0.5f;
-        DrawCap(
-            c, key.x, key.y, key.x + k, key.y + k,
-            [&](float x, float y) { return RoundedRect(x, y, kx, ky, k * 0.5f, k * 0.5f, k * 0.22f); },
-            (s.icon & key.lit) ? &highlight : nullptr);
+        DrawLauncherKey(c, kx, ky, k * 0.5f, k * 0.22f, s.icon & key.lit);
         font.Draw(c, KeyLabel(b.dpad[key.binding]), kx, ky, k - 4.0f, k * 0.62f,
-                  (s.icon & key.lit) ? lit_text : text_color);
+                  (s.icon & key.lit) ? accent_ink : launcher_ink);
     }
 }
 
