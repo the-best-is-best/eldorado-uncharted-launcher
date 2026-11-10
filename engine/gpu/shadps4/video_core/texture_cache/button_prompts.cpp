@@ -126,6 +126,12 @@ const Picture pictures[] = {
     {0x7515a2f4f6a1022dull, 256, RotateStick, Move, {205, 178, 140}, "Uncharted 1 turn-the-stick prompt (2)", 512},
     {0x62ce1cf45bcd3fa6ull, 256, RotateStick, Move, {205, 178, 140}, "Uncharted 1 turn-the-stick prompt (3)", 512},
     {0x8d9e67192111aafbull, 256, RotateStick, Move, {205, 178, 140}, "Uncharted 1 turn-the-stick prompt (4)", 512},
+    // El Dorado (10 Nov 2026): the same prompt with the ring arrow the other way (a machine's crank in the Uncharted 1
+    // engine room), four more frames, found with BB_BUTTON_PROMPTS_DUMP. Known by hash, so the mouse turns it too.
+    {0xc40e867f01db15daull, 256, RotateStick, Move, {205, 178, 140}, "Uncharted 1 turn-the-stick prompt (5)", 512},
+    {0x520ae52d155398d0ull, 256, RotateStick, Move, {205, 178, 140}, "Uncharted 1 turn-the-stick prompt (6)", 512},
+    {0xc79c5d399daa5371ull, 256, RotateStick, Move, {205, 178, 140}, "Uncharted 1 turn-the-stick prompt (7)", 512},
+    {0xde307a2c8adf213full, 256, RotateStick, Move, {205, 178, 140}, "Uncharted 1 turn-the-stick prompt (8)", 512},
     // El Dorado (10 Nov 2026): Uncharted 1's "push the stick left or right" (pushing the stone in the Drowned City
     // puzzle): the stick tilting right, upright, left, found with BB_BUTTON_PROMPTS_DUMP_ALL. The keys show instead,
     // the one pushed lit.

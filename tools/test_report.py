@@ -178,6 +178,11 @@ def onehit_jetski(runs, root):
                 what="Uncharted 1 jet ski with One hit kills on: Elena's shots kill, off the boat only Nate's hits do")
 
 
+def u1_crank_mouse(runs, root):
+    return seen(runs, r"Mouse: the turn-the-stick prompt is on screen",
+                what="Uncharted 1 engine room: the machine's crank: the mouse picture shows and the mouse turns it")
+
+
 def trophies_cheat(runs, root):
     return seen(runs, r"Unlock all trophies: \d+ added",
                 what="Settings > CHEATS > Unlock all trophies, then start a game and open the launcher's Trophies page")
@@ -361,6 +366,7 @@ ITEMS = [
     Item("u1_cross_prompt", "U1 big X prompt (Nate on the ground) shows your key", u1_cross_prompt),
     Item("u1_push_prompt", "U1 push-the-stone prompt shows W A S D", u1_push_prompt),
     Item("onehit_jetski", "One hit kills counts Elena's shots on the jet ski only", onehit_jetski),
+    Item("u1_crank_mouse", "U1 engine room crank turns with the mouse (the arrow the other way)", u1_crank_mouse),
     Item("trophies_cheat", "Unlock all trophies (CHEATS)", trophies_cheat),
     Item("menu_sensitivity", "Insert menu: aiming and vertical sensitivity", menu_sensitivity),
     Item("checkpoint_jump", "Insert menu: double-click a checkpoint", checkpoint_jump),
