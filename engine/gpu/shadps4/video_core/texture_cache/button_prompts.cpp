@@ -113,11 +113,11 @@ const Picture pictures[] = {
     {0x5db884aa1bae54f9ull, 256, RoundButton, Triangle, {55, 216, 104}, "Uncharted 2 triangle prompt"},
     {0x7af1abf688d8c824ull, 256, RoundButton, Circle, {230, 58, 35}, "Uncharted 2 circle prompt"},
     // El Dorado (9 Nov 2026): Uncharted 1's big X when Nate lies on the ground after a fall (captured by
-    // BB_BUTTON_PROMPTS_DUMP; the glow is the picture's own periwinkle).
-    {0x2bf5d90eb864162full, 256, RoundButton, Cross, {137, 149, 239}, "Uncharted 1 cross prompt"},
+    // BB_BUTTON_PROMPTS_DUMP; the glow is the launcher's Uncharted 1 accent #34c98a).
+    {0x2bf5d90eb864162full, 256, RoundButton, Cross, {52, 201, 138}, "Uncharted 1 cross prompt"},
     // El Dorado (10 Nov 2026): the same round prompt for Square (the fight in the Uncharted 1 chapter after the boat),
-    // glow = the picture's own pink.
-    {0x9edd4f2f0f64f6e5ull, 256, RoundButton, Square, {244, 160, 156}, "Uncharted 1 square prompt"},
+    // glow = the launcher's Uncharted 1 accent (Theme.qml accentU1 #34c98a).
+    {0x9edd4f2f0f64f6e5ull, 256, RoundButton, Square, {52, 201, 138}, "Uncharted 1 square prompt"},
     {0x25d954ce23a8f5e2ull, 512, Puck, Triangle, {55, 216, 104}, "Uncharted 2 triangle tapping prompt"},
     {0xc96e34fbb203279eull, 512, PressedPuck, Triangle, {55, 216, 104},
      "Uncharted 2 triangle hold prompt"},
@@ -1003,14 +1003,18 @@ std::vector<Patch> BuildPushStick(const Picture& picture, u32 levels, Style styl
                          {cx - step, cy + step * 0.5f, 1, frame == 2},
                          {cx, cy + step * 0.5f, 2, false},
                          {cx + step, cy + step * 0.5f, 3, frame == 0}};
-    constexpr Color hud_orange = highlight;
+    // The launcher's key hints: the dark key face with the accent edge, the pushed key filled with the accent
+    // (Theme.qml accent, accentInk #0a0c10 on it), not the HUD's orange.
+    constexpr Color key_face{0.169f, 0.188f, 0.231f}; // Theme.qml panelHigh #232833
+    constexpr Color ink{0.933f, 0.945f, 0.965f};      // Theme.qml ink #eef1f6
+    constexpr Color accent_ink{0.039f, 0.047f, 0.063f}; // Theme.qml accentInk #0a0c10
     for (const Key& k : keys) {
         DrawCap(
             up, k.cx - half, k.cy - half, k.cx + half, k.cy + half,
             [&](float x, float y) { return RoundedRect(x, y, k.cx, k.cy, half, half, 8.0f); },
-            k.lit ? &hud_orange : nullptr);
+            k.lit ? &rim : &key_face);
         font.Draw(up, KeyLabel(bindings.move[k.binding]), k.cx, k.cy, 2 * half - 8.0f, 30.0f,
-                  k.lit ? lit_text : text_color);
+                  k.lit ? accent_ink : ink);
     }
     // Stored upside down.
     Canvas level{w, h};
