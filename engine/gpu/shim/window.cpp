@@ -35,7 +35,16 @@ double mouse_cum_x = 0.0, mouse_cum_y = 0.0;
 int mouse_wheel{};
 u32 mouse_buttons{};
 std::atomic<bool> mouse_look{false}, mouse_captured{false};
+// A game menu is on screen (bbgpu_menu_cursor, the menu mouse by antikmewzik): the cursor is free and shown;
+// cursor_state: its look (0 arrow, 1 hand, 2 pressed), applied by the window thread.
+std::atomic<bool> menu_cursor{false};
+std::atomic<int> cursor_state{0};
 bool window_focused{true};
+// Without mouse look (controller play) the cursor was left showing over the game: it hides after
+// two seconds without mouse movement and comes back when the mouse moves (the menu shows it too).
+constexpr u64 CursorIdleNs = 2'000'000'000ull;
+u64 cursor_moved_ns = 0;
+bool cursor_hidden = false;
 // The game window is in front (Windows' own answer, set each event poll): the controller is read
 // only then (runtime_pad.c, bbgpu_window_foreground). SDL's keyboard focus can be lost while the
 // window stays in front, and with it SDL dropped the gamepad events (from BilalReloaded's port).
@@ -69,6 +78,14 @@ u32 MouseBit(u8 button) {
 
 extern "C" void bbgpu_mouse_configure(int look) {
     mouse_look = look != 0;
+}
+
+extern "C" void bbgpu_menu_cursor(int open) {
+    menu_cursor = open != 0;
+}
+
+extern "C" void bbgpu_set_cursor(int state) {
+    cursor_state = state;
 }
 
 // The mouse's movement over the last `window_s` seconds, per second (pixels/s), from the event times.
@@ -168,6 +185,16 @@ extern "C" void bbgpu_ask_close(void) {
 
 extern "C" int bbgpu_window_enter_swallowed(void) {
     return enter_swallowed.load(std::memory_order_relaxed) ? 1 : 0;
+}
+
+// The menu mouse (runtime_menumouse.c): a widened gameplay frame fills the window (its 16:9 layout stretched across it, so
+// the pause menu over the play is too); other frames are shown at 16:9 in the middle.
+namespace Vulkan {
+extern std::atomic<bool> g_last_frame_scene; // vk_rasterizer.cpp
+}
+extern "C" int runtime_ultrawide_fill;
+extern "C" int bbgpu_frame_fills_window(void) {
+    return runtime_ultrawide_fill && Vulkan::g_last_frame_scene.load(std::memory_order_relaxed) ? 1 : 0;
 }
 
 namespace Frontend {
@@ -380,7 +407,7 @@ bool WindowSDL::PollEvents() {
     // the settings menu, text entry and a held Left Alt give it back.
     {
         const bool* keys = SDL_GetKeyboardState(nullptr);
-        const bool want = mouse_look && window_focused && !text_active &&
+        const bool want = mouse_look && window_focused && !text_active && !menu_cursor &&
                           !BbOverlay::CapturesInput() && !(keys && keys[SDL_SCANCODE_LALT]);
         if (want != mouse_captured) {
             SDL_SetWindowRelativeMouseMode(window, want);
@@ -389,12 +416,49 @@ bool WindowSDL::PollEvents() {
             mouse_dx = mouse_dy = 0.0f;
             mouse_buttons = 0;
         }
+        // Mouse look's relative mode hides the cursor itself; otherwise an idle cursor is hidden
+        // while the game has the focus and nothing needs it (menu, text entry).
+        const bool hide = window_focused && !text_active && !BbOverlay::CapturesInput() &&
+                          SDL_GetTicksNS() - cursor_moved_ns > CursorIdleNs;
+        // In a game menu the cursor shows a hand over what answers a click (the menu mouse).
+        {
+            static SDL_Cursor* arrow = nullptr;
+            static SDL_Cursor* hand = nullptr;
+            static int shown = -1;
+            const int state = menu_cursor ? cursor_state.load() : 0;
+            const int want_shape = state == 0 ? 0 : 1;
+            if (want_shape != shown) {
+                if (!arrow) {
+                    arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
+                    hand = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
+                }
+                if (SDL_Cursor* c = want_shape ? hand : arrow) {
+                    SDL_SetCursor(c);
+                }
+                shown = want_shape;
+            }
+        }
+        if (!mouse_captured && hide != cursor_hidden) {
+            if (hide) {
+                SDL_HideCursor();
+            } else {
+                SDL_ShowCursor();
+            }
+            cursor_hidden = hide;
+        }
     }
     if (pause_pending && bbgpu_loading_done()) {
         PauseRequest(true); // loaded while away: the pause follows now
     }
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_EVENT_MOUSE_MOTION && !mouse_captured) {
+            cursor_moved_ns = SDL_GetTicksNS();
+            if (cursor_hidden) { // back at once, not at the next poll
+                SDL_ShowCursor();
+                cursor_hidden = false;
+            }
+        }
         if (text_active && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN)) {
             std::scoped_lock lock{text_mutex};
             if (event.type == SDL_EVENT_TEXT_INPUT) {
@@ -484,6 +548,13 @@ bool WindowSDL::PollEvents() {
             SDL_StopTextInput(window);
             UpdateTextTitle();
             continue;
+        }
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+            // A release always reaches the game's mouse state, also when the overlay takes the event: the click
+            // that opens the in-game save list is released over the list, and its button would stay held for the
+            // game (its next click no press).
+            std::scoped_lock lock{mouse_mutex};
+            mouse_buttons &= ~MouseBit(event.button.button);
         }
         if (BbOverlay::HandleEvent(event)) {
             continue;

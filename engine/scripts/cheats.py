@@ -58,8 +58,38 @@ DEVMODE = {
     US['big3-ps4_Shipping.elf']: (0x56cb8b, '4180bc24014c0000000f85551a0000418a8c24fc4b000084c90f84451a0000',
                                   '41c68424014c000000eb04551a000041c68424fc4b000001eb0584451a0000'),
 }
+# The debug text on and off, also while the game runs. The check guards the block that draws the text (FPS, ms Game/
+# Rend/GPU, memory, PlayGo, build date; all six executables). The edit's last 7 bytes (eb 05 + 5 bytes never run)
+# become a 2-byte switch and a jmp rel32 past the block (to the check's own je target, where the retail game goes):
+#   eb 05 | e9 rel32   text on: over the jmp, into the block
+#   66 90 | e9 rel32   text off (devmode_quiet): a 2-byte nop, then past the block
+# The runtime flips the switch (F7 in developer mode, runtime_pad.c; BB_DEV_TEXT_SWITCH = its address).
+DEV_TEXT_ON, DEV_TEXT_OFF = b'\xeb\x05', b'\x66\x90'
+
+
+def _dev_text(address, original, replacement, shown):
+    original, replacement = bytes.fromhex(original), bytes.fromhex(replacement)
+    assert replacement[-7:-5] == b'\xeb\x05' and len(original) == len(replacement)
+    past_block = address + len(original) + struct.unpack('<i', original[-4:])[0]
+    jump = past_block - (address + len(original))
+    switch = DEV_TEXT_ON if shown else DEV_TEXT_OFF
+    return address, original.hex(), (replacement[:-7] + switch + b'\xe9' + struct.pack('<i', jump)).hex()
+
+
 for _code, _patch in DEVMODE.items():
-    PATCHES[_code]['devmode'] = _patch
+    PATCHES[_code]['devmode'] = _dev_text(*_patch, True)
+    PATCHES[_code]['devmode_quiet'] = _dev_text(*_patch, False)
+
+
+def dev_text_switch(path):
+    """Image address of the debug text switch of one executable (hex text), '' when it has no developer mode."""
+    try:
+        patch = DEVMODE.get(code_hash(Path(path).read_bytes()))
+    except OSError:
+        return ''
+    return f'{patch[0] + len(bytes.fromhex(patch[1])) - 7:x}' if patch else ''
+
+
 # grenades (El Dorado's "Infinite grenades", 1.02 code): the player's grenade throw no longer calls the ammo use
 # that takes one grenade away. Uncharted 1: weaponcontroller.cpp PostJointUpdate, the kGrenade branch, calls the use
 # (dec [weapon+slot*0x30+0x440]) at 0x734a78. Uncharted 2: player-fast-grenade.cpp Release calls it

@@ -109,6 +109,7 @@ extern "C" const unsigned char bb_font_ja_ttf_end[];
 extern "C" void runtime_restart(void); // bb-probe (probe.c)
 extern "C" void runtime_mouse_get(float* look, float* aim, float* vertical); // runtime_pad.c
 extern "C" void runtime_mouse_set(float look, float aim, float vertical);
+extern "C" int runtime_dev_text_shown(void);  // runtime_pad.c: developer text 1 shown, 0 hidden, -1 no developer mode
 
 namespace BbOverlay {
 
@@ -1232,6 +1233,12 @@ void FpsCounter() {
                      ImGuiWindowFlags_NoFocusOnAppearing);
     ImGui::SetWindowFontScale(look.scale / 100.0f);
     ImGui::TextUnformatted(text.c_str());
+    // Mevlock 0.3.6.52: developer mode with Naughty Dog's debug text hidden (launcher, or F7 in play): "DEV MODE" in green
+    // beside the counter, so it is still plain that the mode is on.
+    if (runtime_dev_text_shown() == 0) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.35f, 1.0f, 0.35f, 1.0f), " DEV MODE");
+    }
     ImGui::End();
     ImGui::PopStyleVar();
 }

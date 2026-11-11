@@ -79,6 +79,13 @@ int bbgpu_camera_yaw(float *yaw_degrees, double *age_seconds);
 int bbgpu_mouse_sample(float *dx, float *dy, uint32_t *buttons, int *wheel);
 /* The game window is in front (Windows; 1 without a window): the controller is read only then. */
 int bbgpu_window_foreground(void);
+/* The mouse in the game menus (src/runtime_menumouse.c, by antikmewzik): open=1 while a menu is on screen (the cursor is
+ * given back and shown, mouse look's capture waits); the cursor's look: 0 the arrow, 1 over something that answers a
+ * click (the hand), 2 the left button held. */
+void bbgpu_menu_cursor(int open);
+void bbgpu_set_cursor(int state);
+/* 1 when the last frame filled the window (a widened gameplay frame: its 16:9 layout stretched), 0 when shown at 16:9. */
+int bbgpu_frame_fills_window(void);
 /* 1 while the Enter of an Alt+Enter (window <-> fullscreen) is still held: the game must not see it. */
 int bbgpu_window_enter_swallowed(void);
 /* El Dorado: Uncharted 1's turn-the-stick prompt (wheels, valves) was drawn in the last 250 ms. */

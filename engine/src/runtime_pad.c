@@ -26,6 +26,7 @@
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/bbgpu.h"
+#include "runtime_menumouse.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdatomic.h>
@@ -2364,6 +2365,13 @@ static void mouse_turns_stick(PadData *d, int keys, float *mdx, float *mdy, int 
 }
 
 static void injected_mouse(float *dx, float *dy);
+static void injected_menu(PadData *d);
+/* For the menu mouse (runtime_menumouse.c, which asks it under the name of Mevlock's mouse look): a follow or cover camera
+ * ran in the last 250 ms, so the game is in play, not in a menu. Ours: the stamps of the camera hooks above. */
+int runtime_mouselook_camera_recent(void) {
+    const uint64_t now=now_us();
+    return (camera_hook_us && (int64_t)(now-camera_hook_us)<250000) || (cover_hook_us && (int64_t)(now-cover_hook_us)<250000);
+}
 static void sample_host(PadData *d) {
     host_rotate=0;
     memset(d,0,sizeof(*d));
@@ -2389,6 +2397,18 @@ static void sample_host(PadData *d) {
     }
     if (scripted) { injected_mouse(&mdx,&mdy); captured=1; mouse=0; wheel=0; }
     const uint64_t now=now_us();
+    /* A game menu on screen (runtime_menumouse.c): the cursor is free, the mouse buttons and the wheel go to the
+     * menu (hover, click, back), not to the keys of the play. */
+    const int menu=runtime_menumouse_active();
+    bbgpu_menu_cursor(menu);
+    if (menu && scripted) { injected_menu(d); mdx=mdy=0.0f; }
+    uint32_t menu_buttons=0;
+    int menu_wheel=0;
+    if (menu && !scripted) {
+        menu_buttons=mouse; menu_wheel=wheel;
+        mouse=0; wheel=0; wheel_until_us[0]=wheel_until_us[1]=0;
+        mdx=mdy=0.0f; captured=0;
+    }
     int rx=0, ry=0; /* the keyboard's right stick */
     if (!scripted) { /* the player's controller and keyboard */
         if (wheel>0) wheel_until_us[0]=now+80000;
@@ -2439,6 +2459,14 @@ static void sample_host(PadData *d) {
     const int pad_used=g && (d->buttons || d->l2>60 || d->r2>60 || abs(d->left_x-128)>64 ||
                              abs(d->left_y-128)>64 || abs(d->right_x-128)>64 || abs(d->right_y-128)>64);
     int keys_used=mouse || wheel || (captured && SDL_fabsf(mdx)+SDL_fabsf(mdy)>3.0f);
+    if (menu) {   /* in a menu the cursor is free (no relative motion): its moves count as the mouse in use */
+        static float last_x=-1.0f, last_y=-1.0f;
+        float x=0.0f, y=0.0f;
+        SDL_GetMouseState(&x,&y);
+        if (last_x>=0.0f && SDL_fabsf(x-last_x)+SDL_fabsf(y-last_y)>3.0f) keys_used=1;
+        last_x=x; last_y=y;
+        keys_used|=menu_buttons!=0 || menu_wheel!=0;
+    }
     for (int a=0;a<ACTIONS && !keys_used;++a) keys_used=action_down(a,k,mouse,now);
     static int prompts_device=-1;
     if (pad_used!=keys_used) {
@@ -2481,6 +2509,9 @@ static void sample_host(PadData *d) {
             if (lx) d->left_x=(uint8_t)(lx<0 ? 0 : 255);
             if (ly) d->left_y=(uint8_t)(ly<0 ? 0 : 255);
         }
+        /* (a controller used last: the cursor resting over a row must not pull the highlight back from the pad's moves) */
+        if (menu && keyboard_in_use) d->buttons|=runtime_menumouse_buttons(k,menu_buttons,menu_wheel,0,0.0f,0.0f);
+        if (menu && keyboard_in_use && runtime_menumouse_stick_x()) d->left_x=runtime_menumouse_stick_x()<0 ? 0 : 255;
         host_rotate=action_down(A_ROT_CW,k,mouse,now)-action_down(A_ROT_CCW,k,mouse,now);
         mouse_turns_stick(d,lx || ly || host_rotate,&mdx,&mdy,&captured,now);
         rx=action_down(A_RS_RIGHT,k,mouse,now)-action_down(A_RS_LEFT,k,mouse,now);
@@ -2488,6 +2519,8 @@ static void sample_host(PadData *d) {
         if (rx) d->right_x=(uint8_t)(rx<0 ? 0 : 255);
         if (ry) d->right_y=(uint8_t)(ry<0 ? 0 : 255);
     }
+    /* (a game menu: the menu mouse's changes that hold a button back, e.g. the cross on a statistic) */
+    if (menu) d->buttons=runtime_menumouse_filter(d->buttons,keyboard_in_use || scripted);
     /* Where the game's camera or joypad state takes the mouse directly (their callbacks ran in the
      * last 100 ms), the motion goes there. U2 and U3 have no joypad callback: the follow camera turns
      * with the mouse (vertically too where its arc is known), with the right stick held a little the
@@ -2539,7 +2572,7 @@ static void sample_host(PadData *d) {
  * options touchpad touchpad_left touchpad_right up down left right) are held while listed;
  * touchpad defaults to a left-side click; lx= ly= rx= ry= (0..255) override
  * the sticks; rot_ccw rot_cw turn the left stick round (the rotate keys). An empty file releases everything. */
-static struct { uint32_t buttons; int stick[4]; int touch_side; float mouse[2]; int rotate; } injected={0,{-1,-1,-1,-1},-1,{0,0},0};
+static struct { uint32_t buttons; int stick[4]; int touch_side; float mouse[2]; int rotate; float cursor[2]; uint32_t mouse_buttons; int wheel; } injected={0,{-1,-1,-1,-1},-1,{0,0},0,{-1,-1},0,0};
 static int replay_armed;      /* 1 while a BB_PAD_REPLAY recording plays, 2 once it ended */
 static uint64_t replay_start; /* 0: (re)start at the next sample */
 /* Scripted mouse motion (mx= my=, pixels/s) as this sample's mouse movement (sample_host). */
@@ -2551,6 +2584,16 @@ static void injected_mouse(float *dx, float *dy) {
     last=now;
     *dx=injected.mouse[0]*dt; *dy=injected.mouse[1]*dt;
     scripted_rate[0]=injected.mouse[0]; scripted_rate[1]=injected.mouse[1];
+}
+/* BB_PAD_FILE cx= cy= click rclick back wheel=: the menu mouse, scripted (runtime_menumouse.c). */
+static void injected_menu(PadData *d) {
+    static int wheel_given;
+    const int w=injected.wheel-wheel_given;   /* wheel=<count>: a running count of notches (up +, down -) */
+    wheel_given=injected.wheel;
+    if (injected.cursor[0]>=0.0f) {
+        d->buttons|=runtime_menumouse_buttons(NULL,injected.mouse_buttons,w,1,injected.cursor[0],injected.cursor[1]);
+        if (runtime_menumouse_stick_x()) d->left_x=runtime_menumouse_stick_x()<0 ? 0 : 255;
+    }
 }
 static void read_inject(void) {
     static const char *path; static int checked; static uint64_t last_check; static struct timespec mtime;
@@ -2583,6 +2626,8 @@ static void read_inject(void) {
     for (int i=0;i<4;++i) injected.stick[i]=-1;
     injected.mouse[0]=injected.mouse[1]=0.0f;
     injected.rotate=0;
+    injected.cursor[0]=injected.cursor[1]=-1.0f;
+    injected.mouse_buttons=0;
     char token[64];
     while (fscanf(f,"%63s",token)==1) {
         if (!strcmp(token,"rot_ccw")) injected.rotate=-1; /* the rotate keys, scripted */
@@ -2595,6 +2640,13 @@ static void read_inject(void) {
         for (size_t i=0;i<sizeof(names)/sizeof(*names);++i) if (!strcmp(token,names[i].name)) injected.buttons|=names[i].ps;
         for (int i=0;i<4;++i) if (!strncmp(token,sticks[i],3)) { int v=atoi(token+3); injected.stick[i]=v<0 ? 0 : v>255 ? 255 : v; }
         if (!strncmp(token,"mx=",3)) injected.mouse[0]=(float)atof(token+3); /* mouse motion, pixels/s */
+        /* the menu mouse (runtime_menumouse.c): the cursor (0..1 of the 16:9 menu picture), its buttons, wheel notches */
+        if (!strncmp(token,"cx=",3)) injected.cursor[0]=(float)atof(token+3);
+        if (!strncmp(token,"cy=",3)) injected.cursor[1]=(float)atof(token+3);
+        if (!strcmp(token,"click")) injected.mouse_buttons|=1u;
+        if (!strcmp(token,"rclick")) injected.mouse_buttons|=2u;
+        if (!strcmp(token,"back")) injected.mouse_buttons|=8u;
+        if (!strncmp(token,"wheel=",6)) injected.wheel=atoi(token+6);   /* a running count of notches: each change scrolls by the difference */
         if (!strncmp(token,"my=",3)) injected.mouse[1]=(float)atof(token+3);
     }
     fclose(f);
@@ -2673,25 +2725,68 @@ static void replay_sample(PadData *d) {
 /* BB_DEV_MENU=1 (experiment, all three games 1.02, EU and US): F11 opens and closes Naughty Dog's developer menu,
  * which the retail games build but give no way to open: the menu's "open" byte (the game's code checks it) is
  * flipped. Per build, the root pointers of the menus, where their names lie (the names tell which build this
- * is; any other game or release is left alone) and the open byte. Uncharted 1 has no Quick Menu (quick_name 0).
+ * is; any other game or release is left alone) and the open byte. Uncharted 1's Quick Menu (Invincible Player,
+ * Infinite Ammo, ...) is built by a function of its own right after the Dev Menu (EU 0x2a3da0, US 0x2a4390), the
+ * same menu class (0xb0 bytes, open byte +0x88), its name copied from a packed string table.
  * US = CUSA02320 / CUSA02344 (one executable per game). */
 static const struct { uintptr_t dev_name, quick_name, dev_root, quick_root; unsigned open; } dev_menu_builds[]={
     {0xf60a72,0xfacfe0,0x142ee88,0x196cdd0,0x90},   /* Uncharted 3 EU CUSA02343 */
     {0x1458d8a,0x1470aa3,0x17b4a38,0x1ae9ef8,0x90}, /* Uncharted 3 US */
     {0xb4eeab,0xb9700b,0xebbdc8,0xfaf1c0,0x90},     /* Uncharted 2 EU */
     {0xe7cf5c,0xe96390,0x11160c8,0x1161ef8,0x90},   /* Uncharted 2 US */
-    {0x79eaf5,0,0xa8dbf0,0,0x88},                   /* Uncharted 1 EU */
-    {0x7962c5,0,0xa51af0,0,0x88},                   /* Uncharted 1 US */
+    {0x79eaf5,0x7d2020,0xa8dbf0,0xaf7920,0x88},     /* Uncharted 1 EU */
+    {0x7962c5,0x7c97f0,0xa51af0,0xabb820,0x88},     /* Uncharted 1 US */
 };
 static int dev_menu_name_at(uintptr_t base, size_t size, uintptr_t at, const char *name) {
     const size_t n=strlen(name)+1;
     return at && at+n<=size && !memcmp((const void *)(base+at),name,n);
 }
+/* Developer mode's debug text (FPS, ms Game/Rend/GPU, memory, PlayGo), on and off while the game runs: a 2-byte
+ * switch in the developer-mode patch (scripts/cheats.py: eb 05 = into the text block, 66 90 = past it), at the
+ * image address BB_DEV_TEXT_SWITCH (run.py). Swapped in one locked write, so the game's thread runs one form or the
+ * other, never half of each. */
+/* Looked up once the image is ready (runtime_image_ready; reading it before faults: it is reserved, unreadable),
+ * then until found: the window and the controllers (F7, the FPS counter) start before the code is loaded.
+ * `report`: say why there is none (on F7). */
+static unsigned char *dev_text_switch(int report) {
+    static int parsed;
+    static uintptr_t offset;
+    static unsigned char *at;
+    if (!parsed) {
+        parsed=1;
+        const char *e=getenv("BB_DEV_TEXT_SWITCH");
+        offset=e && *e ? (uintptr_t)strtoull(e,NULL,16) : 0;
+    }
+    if (!at && offset) {
+        const uintptr_t base=runtime_image_base();
+        unsigned char *p=base && runtime_image_ready() && offset+2<=runtime_image_size() ? (unsigned char *)(base+offset)
+                                                                                         : NULL;
+        if (p && ((p[0]==0xeb && p[1]==0x05) || (p[0]==0x66 && p[1]==0x90))) at=p;
+        else if (report) printf("Runtime: developer text switch not found at %#llx (%s): F7 does nothing\n",
+                                (unsigned long long)offset, p ? "other code there" : "the game is not loaded yet");
+    }
+    return at;
+}
+/* 1 shown, 0 hidden, -1 no developer mode (the overlay's FPS counter shows DEV MODE while it is hidden). */
+int runtime_dev_text_shown(void) {
+    const unsigned char *p=dev_text_switch(0);
+    return p ? p[0]==0xeb : -1;
+}
+static void dev_text_toggle(void) {
+    unsigned char *p=dev_text_switch(1);
+    if (!p) return;
+    const uint16_t on=0xeb|0x05<<8, off=0x66|0x90<<8, now=p[0]==0xeb ? on : off;
+    if (runtime_code_swap16(p,now,now==on ? off : on)) printf("Runtime: developer text switch could not be changed\n");
+    else printf("Runtime: developer text %s (F7)\n",p[0]==0xeb ? "shown" : "hidden");
+}
 static void dev_menu_key(void) {
-    static int checked, on, f11_was_down, f8_was_down;
+    static int checked, on, f11_was_down, f8_was_down, f7_was_down;
     if (!checked) { const char *e=getenv("BB_DEV_MENU"); on=e && e[0]=='1'; checked=1; }
     if (!on || !sdl_ready) return;
     const bool *k=SDL_GetKeyboardState(NULL);
+    const int f7=k && k[SDL_SCANCODE_F7];
+    if (f7 && !f7_was_down) dev_text_toggle();
+    f7_was_down=f7;
     const int f11=k && k[SDL_SCANCODE_F11], f8=k && k[SDL_SCANCODE_F8];
     /* F8: the "Quick Menu" (player and actor tools: Invincible Player, Reset Actors, ...), the game's second
      * debug menu, built at the same start-up step (root pointers in dev_menu_builds). (Shift is a game

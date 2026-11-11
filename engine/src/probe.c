@@ -17,6 +17,7 @@ uint64_t runtime_guest_tsc(void);
 #include "red_zone.h"
 #endif
 #include "cpu_check.h"
+#include "runtime_menumouse.h"
 #include "isa_rewrite.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
@@ -792,6 +793,9 @@ typedef struct { volatile uint64_t calls, rdi, rsi, rdx, rcx, r8, r15; uint64_t 
 static GuestHook *guest_hooks;
 static size_t guest_hook_count;
 static uint64_t guest_image_size;
+/* 1 once the image is loaded, patched and protected: its code can be read (it is reserved, unreadable, before). */
+static int image_ready;
+int runtime_image_ready(void) { return __atomic_load_n(&image_ready, __ATOMIC_ACQUIRE); }
 uintptr_t runtime_image_base(void) { return (uintptr_t)image; }
 size_t runtime_image_size(void) { return (size_t)guest_image_size; }
 #ifdef _WIN32
@@ -1046,14 +1050,17 @@ static int callback_thunk(unsigned char *f, size_t moved, const void *callback) 
     return 1;
 }
 static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t image_size) {
-    size_t count=0;
+    size_t count=0, menu_count=0;
     const RuntimeGuestCallback *callbacks=runtime_guest_callbacks(&count);
     guest_image_size=image_size;
+    /* The mouse in the menus (runtime_menumouse.c, by antikmewzik): the sites of the code found here, after the others. */
+    runtime_menumouse_prepare(image,image_size);
+    const RuntimeGuestCallback *menu=runtime_menumouse_callbacks(&menu_count);
     /* A patch in two parts (a stub in a dead path, ", stub)", then the jump or call to it, ", jump)" or ", call)",
      * the next entry): the jump goes in only after its stub did. */
     int stub_in=0;
-    for (size_t i=0;i<count;++i) {
-        const RuntimeGuestCallback *c=&callbacks[i];
+    for (size_t i=0;i<count+menu_count;++i) {
+        const RuntimeGuestCallback *c=i<count ? &callbacks[i] : &menu[i-count];
         const int is_stub=strstr(c->name,", stub)")!=NULL;
         const int needs_stub=strstr(c->name,", jump)")!=NULL || strstr(c->name,", call)")!=NULL;
         if (is_stub) stub_in=0;
@@ -2358,6 +2365,7 @@ int main(int argc, char **argv) {
             executable_entry = 1;
     }
     if (!executable_entry) fail("entry is not executable");
+    __atomic_store_n(&image_ready, 1, __ATOMIC_RELEASE);
     printf("Mapped %" PRIu64 " bytes, %" PRIu64 " segments; applied %" PRIu64 " relocations\n", size, ns, nr);
     printf("Guest image at %p\n", (void *)image);
     if (native_libc) {

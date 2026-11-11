@@ -270,11 +270,15 @@ static void old_frame(const OldBuild *b, uint64_t image) {
     }
     const int active=b->is_active ? ((TaskTest)(uintptr_t)(image+b->is_active))(t)
                                   : **(int *const *)((unsigned char *)t+0x40)==1;
-    printf("Checkpoints: jumping to task %08x (%s%s)\n",task,b->name,active ? ", already the active task: reset" : "");
-    fflush(stdout);
     if (active) {
-        ((ResetTasks)(uintptr_t)(image+b->reset))(b->reset_active);
+        /* El Dorado: a jump to the task that is already running does nothing. The game's own sequence only calls
+         * ResetTasks here, which empties the scene (no Nate, no enemies, no HUD) and never starts it again
+         * (11 Nov 2026: the same checkpoint picked twice). */
+        printf("Checkpoints: task %08x (%s) is already the active task: no jump\n",task,b->name);
+        fflush(stdout);
     } else {
+        printf("Checkpoints: jumping to task %08x (%s)\n",task,b->name);
+        fflush(stdout);
         const int index=((TaskIndex)(uintptr_t)(image+b->task_index))(t);
         if (((StartAtTaskIndex)(uintptr_t)(image+b->start))(base+b->game_flow,index,1,0)) {
             ((ResetTasks)(uintptr_t)(image+b->reset))(1);

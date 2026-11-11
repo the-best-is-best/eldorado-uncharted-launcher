@@ -84,6 +84,12 @@ void *runtime_image_map(size_t size, int prot);
 uintptr_t runtime_image_base(void);
 /* Its size in bytes (0 before it is mapped). */
 size_t runtime_image_size(void);
+/* 1 once the image is loaded, patched and protected (its code readable). */
+int runtime_image_ready(void);
+/* Two bytes of the game's code swapped in one locked write (expect -> value); 0 done. */
+int runtime_code_swap16(void *at, uint16_t expect, uint16_t value);
+/* Developer mode's debug text: 1 shown, 0 hidden, -1 no developer mode (runtime_pad.c). */
+int runtime_dev_text_shown(void);
 /* Windows: reserves the PS4 user address range as a placeholder (no-op elsewhere). */
 void runtime_memory_reserve(void);
 uintptr_t runtime_ajm_resolve(const char *name);
@@ -131,6 +137,7 @@ void __attribute__((ms_abi)) runtime_exit_menu_u1_eu_handler(uint64_t rdi, uint6
                                                              const uint64_t *regs);
 void __attribute__((ms_abi)) runtime_exit_menu_u1_us_handler(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
                                                              const uint64_t *regs);
+void runtime_menumouse_u2_host(uint64_t host);   /* runtime_menumouse.c: U2's menu host, from the menu builder */
 void __attribute__((ms_abi)) runtime_exit_menu_u2_data(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
     const uint64_t *regs);
 void __attribute__((ms_abi)) runtime_exit_menu_u3_data(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,

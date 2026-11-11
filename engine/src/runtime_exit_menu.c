@@ -251,8 +251,57 @@ static void dc_add_item(const DcLayout *l, unsigned char *menu, uint32_t page_si
     }
 }
 
+/* The photo mode row of the Options' Game pages (antikmewzik; label text 0xa3da9f13, "Photo Mode Enable", the last item of
+ * its page): the port has no photo mode, so the row is left out of every page that holds it (the count one less when it is the
+ * last item, else a copy of the items without it). BB_PHOTO_ROW=1 keeps it. */
+#define DC_PHOTO_TEXT 0xa3da9f13u
+static void dc_drop_photo_row(const DcLayout *l, unsigned char *menu) {
+    const char *keep=getenv("BB_PHOTO_ROW");
+    if (keep && keep[0]=='1') return;
+    uint32_t pages;
+    unsigned char *page_array;
+    memcpy(&pages,menu,4);
+    memcpy(&page_array,menu+8,sizeof(page_array));
+    if (!page_array || pages>4096) return;
+    int dropped=0;
+    for (uint32_t p=0;p<pages;++p) {
+        unsigned char *page=page_array+(size_t)p*l->page_stride, *header;
+        memcpy(&header,page+l->page_items,sizeof(header));
+        if (!header) continue;
+        uint32_t count;
+        unsigned char *items;
+        memcpy(&count,header,4);
+        memcpy(&items,header+8,sizeof(items));
+        if (!items || count<2 || count>256) continue;
+        for (uint32_t i=0;i<count;++i) {
+            uint32_t label;
+            memcpy(&label,items+(size_t)i*l->item_stride+0x28,4);
+            if (label!=DC_PHOTO_TEXT) continue;
+            const uint32_t left=count-1;
+            if (i==count-1) memcpy(header,&left,4);
+            else {   /* kept for the life of the process, as the Quit items */
+                unsigned char *copy=calloc(count,l->item_stride), *new_header=calloc(1,16);
+                if (!copy || !new_header) { free(copy); free(new_header); break; }
+                memcpy(copy,items,(size_t)i*l->item_stride);
+                memcpy(copy+(size_t)i*l->item_stride,items+(size_t)(i+1)*l->item_stride,(size_t)(count-i-1)*l->item_stride);
+                memcpy(new_header,&left,4);
+                memcpy(new_header+8,&copy,sizeof(copy));
+                memcpy(page+l->page_items,&new_header,sizeof(new_header));
+            }
+            uint32_t sid;
+            memcpy(&sid,page+8,4);
+            printf("Exit menu: %s: photo mode row left out of page %08x (item %u of %u)\n",l->name,sid,i+1,count);
+            ++dropped;
+            break;
+        }
+    }
+    static int told;   /* (the data looked up again: the row is gone already) */
+    if (!dropped && !told++) printf("Exit menu: %s: no photo mode row found in the menus\n",l->name);
+}
+
 static void dc_add_quit(const DcLayout *l, unsigned char *menu) {
     if (!menu) return;
+    dc_drop_photo_row(l,menu);
     /* Main menu: closes the game at once (nothing to lose there). */
     dc_add_item(l,menu,DC_PROFILE_PAGE,DC_LOADGAME_ID,"BUTTON_QUIT_GAME",DC_QUIT_ID,0,"main menu");
     /* Pause menu: opens the game's Yes/No page, set up by the handler hook below. */
@@ -278,9 +327,17 @@ static void dc_handler(const DcLayout *l, unsigned char *host, uint32_t id) {
 /* regs: rbx r11 r10 r9 r8 rdx rcx rax rflags: the menu data's pointer is in rax (regs[7]). */
 void __attribute__((ms_abi)) runtime_exit_menu_u2_data(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
                                                        const uint64_t *regs) {
-    (void)rdi; (void)rsi; (void)image; (void)r14;
+    (void)rdi; (void)rsi;
     runtime_menu_host[1]=(const unsigned char *)(uintptr_t)regs[0];  /* 1.02: mov [rbx+0x17a8], rax */
     dc_add_quit(&dc_u2,(unsigned char *)(uintptr_t)regs[7]);
+    /* the menu builder's host (its first argument; the store here is host+0x17a8): the builder keeps it in rbx on 1.02
+     * (0x5c53b4 mov rbx,rdi) and in r14 on 1.00 (0x29d764 mov r14,rdi); told apart by those instructions (the hook site itself
+     * is patched). The menu mouse finds the page on screen through it (runtime_menumouse.c, U2 direct jump). */
+    static const unsigned char keep_102[]={0x48,0x89,0xfb,0x48,0x89,0x9d,0xa8,0xfe,0xff,0xff};   /* mov rbx,rdi; mov [rbp-0x158],rbx */
+    static const unsigned char keep_100[]={0x48,0x81,0xec,0x88,0x01,0x00,0x00,0x49,0x89,0xfe};   /* sub rsp,0x188; mov r14,rdi */
+    const unsigned char *code=(const unsigned char *)(uintptr_t)image;
+    if (!memcmp(code+0x5c53b4,keep_102,sizeof(keep_102))) runtime_menumouse_u2_host(regs[0]);
+    else if (!memcmp(code+0x29d75d,keep_100,sizeof(keep_100))) runtime_menumouse_u2_host(r14);
 }
 void __attribute__((ms_abi)) runtime_exit_menu_u3_data(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
                                                        const uint64_t *regs) {

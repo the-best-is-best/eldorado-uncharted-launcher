@@ -1310,3 +1310,27 @@ void runtime_memory_report(void) {
            flexible_maps, flexible_bytes, protects, queries, vma_count);
 }
 
+/* Two bytes of the game's code swapped while it runs (developer text switch, runtime_pad.c): from `expect` to
+ * `value` in one locked write (the game's thread runs the old or the new form, never half of each). 0 done.
+ * The two bytes may sit at an odd address (4 of the 6 developer switches do): a locked cmpxchg is one atomic write
+ * on x86-64 as long as it stays within one cache line, so a pair across a 64-byte line is refused. */
+int runtime_code_swap16(void *at, uint16_t expect, uint16_t value) {
+    if (((uintptr_t)at&63)==63) return -1;
+#ifdef _WIN32
+    DWORD old;
+    if (!VirtualProtect(at,2,PAGE_EXECUTE_READWRITE,&old)) return -1;
+    const SHORT was=InterlockedCompareExchange16((volatile SHORT *)at,(SHORT)value,(SHORT)expect);
+    VirtualProtect(at,2,old,&old);
+    FlushInstructionCache(GetCurrentProcess(),at,2);
+    return was==(SHORT)expect ? 0 : -1;
+#else
+    /* The image's code pages are read + execute: writable for the swap, then as they were. */
+    const long page=sysconf(_SC_PAGESIZE);
+    void *start=(void *)((uintptr_t)at&~(uintptr_t)(page-1));
+    if (mprotect(start,(size_t)page,PROT_READ|PROT_WRITE|PROT_EXEC)) return -1;
+    uint16_t e=expect;
+    const int ok=__atomic_compare_exchange_n((uint16_t *)at,&e,value,0,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST);
+    mprotect(start,(size_t)page,PROT_READ|PROT_EXEC);
+    return ok ? 0 : -1;
+#endif
+}
