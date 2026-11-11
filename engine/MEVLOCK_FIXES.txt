@@ -10,3 +10,5 @@ e27f9e0 (+ stamp part of 0b2e9c6)  AMD / Intel: thin lines at the right and bott
 f27fb77                   shader variant lists of a player's cache
 # Not taken: dd2a1e1 (ours has the same fix), the mouse look, menu mouse, key pictures, Xbox style, sharpening, depth of field,
 # texture filtering, developer mode, the save list, pause in the background, camera up/down, 16:10 view, preparation page look.
+# Taken because the user asked for them (11 Nov 2026): sharpening at native size, texture filtering on Uncharted's scene draws,
+# Depth of field Off = the engine's own switch (U2/U3): e9a78f0 with a628ae1 and ba0b06d (their cheats.py machinery, no launcher toggles).

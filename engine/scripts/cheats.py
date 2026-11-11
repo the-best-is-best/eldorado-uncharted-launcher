@@ -6,6 +6,7 @@ anything else is reported and skipped, never an error.
 Addresses are image offsets (virtual addresses of the SELF's load segments).
 """
 import hashlib
+import re
 from pathlib import Path
 import struct
 
@@ -369,9 +370,107 @@ def reward_switches(data, code):
     return offsets
 
 
+# Extra quality (launcher Display: Full resolution textures, Hi-res lamp and flashlight shadows; BB_FULL_RES_TEXTURES=1,
+# BB_HIRES_SHADOWS=1): Uncharted 2 and 3's debug-menu render switches "Force Full Resolution Textures" (every texture at its full
+# size, none of the streamed smaller versions; off on the PS4) and "Enable Hires Local Shadow Buffer" (a bigger shadow map for
+# lamps and the flashlight), kept set like the cheats (BilalReloaded's QUALITY_POKES: render-settings block + 0x7c0 / + 0x1c4,
+# measured ~1% / ~0% FPS). Found from the menu items in every build (his addresses are US 1.02's): the full-resolution item
+# loads the block (lea reg, [rip + block]) and stores the switch's address (lea rax, [reg + 0x7c0]); the shadow item's
+# address is lea rax, [r12 + 0x1c4] with the same block in r12.
+# lea reg, [rip + disp32] (48 or 4c, 8d, a ModRM with mod 00 and r/m 101)
+LEA_RIP = re.compile(b'(?=' + re.escape(bytes([0x48])).join([b'(?:', b'|' + re.escape(bytes([0x4c])) + b')']) + re.escape(bytes([0x8d])) +
+                     b'[' + b''.join(re.escape(bytes([m])) for m in (0x05, 0x0d, 0x15, 0x1d, 0x25, 0x2d, 0x35, 0x3d)) + b'])', re.S)   # (a lookahead: overlapping candidates too)
+QUALITY_LABELS = {'fullres': b'Force Full Resolution Textures', 'hiresshadow': b'Enable Hires Local Shadow Buffer'}
+# Depth of field off (launcher Depth of field: Off everywhere, BB_DOF=0): the engines' own "Enable Depth of Field" switch in the
+# same block (+ 0x1bd, BilalReloaded's no_dof) kept at 0: the frame stays full resolution (skipping the blur shaders alone left the
+# composite mixing in the half-size picture where the focus mask is set: soft, shimmering distance). Not a menu label of its own.
+QUALITY_EXTRA = {'nodof': (0x1bd, 0)}
+
+
+def quality_switches(data, names):
+    """{name: image offset} of the extra-quality switches asked for whose menu code is as expected; the rest reported."""
+    elf, _header, program_headers, _segments, _missing = prepare.parse_self(data)
+    loads = [p for p in program_headers if p['type'] in (1, 0x61000010) and p['filesz']]
+    def address_of(text):
+        for p in loads:
+            at = bytes(elf[p['offset']:p['offset'] + p['filesz']]).find(text + bytes(1))
+            if at >= 0:
+                return p['vaddr'] + at
+        return None
+    code = next((p for p in loads if p['flags'] & 1), None)
+    if code is None:
+        return {}
+    text = bytes(elf[code['offset']:code['offset'] + code['filesz']])
+    leas = {}   # rip-relative lea targets -> their offsets (one pass over the code)
+    for m in LEA_RIP.finditer(text):
+        i = m.start()
+        if i + 7 <= len(text):
+            leas.setdefault(code['vaddr'] + i + 7 + struct.unpack_from('<i', text, i + 3)[0], []).append(i)
+    def label_leas(target):
+        return leas.get(target, [])
+    result = {}
+    full = address_of(QUALITY_LABELS['fullres'])
+    block = None
+    for i in label_leas(full) if full is not None else []:
+        window = text[i:i + 0x60]
+        # lea r13, [rip + block] (4c 8d 2d) followed by lea rax, [r13 + 0x7c0] (49 8d 85 c0 07 00 00)
+        j = window.find(bytes.fromhex('498d85c0070000'))
+        k = window.find(bytes.fromhex('4c8d2d'))
+        if j > 0 and 0 <= k < j:
+            block = code['vaddr'] + i + k + 7 + struct.unpack_from('<i', window, k + 3)[0]
+            break
+    if block is None:
+        # Uncharted 3 1.02 (EU and US share the code): r13 holds the block from further up; BilalReloaded's address 0x18c6280,
+        # taken when this build's full-resolution item stores [r13 + 0x7c0] right after its label
+        if full is not None and any(text[i:i + 0x60].find(bytes.fromhex('498d85c0070000')) > 0 for i in label_leas(full)) and                 any(code['vaddr'] + i == 0xe127f1 for i in label_leas(full)):
+            block = 0x18c6280
+    if block is None:
+        # 1.00 (EU and US): the item's constructor gets the switch's address in rdx right before the label,
+        # lea rdx, [r12-r15 + 0x7c0 / 0x1c4], and that register was loaded with the block (lea reg, [rip + block]) earlier
+        # in the same function: both items must give the same block
+        def block_1_00(label, offset):
+            if label is None:
+                return None
+            for i in label_leas(label):
+                for reg, modrm, size in ((12, bytes.fromhex('9424'), 8), (13, bytes.fromhex('95'), 7), (14, bytes.fromhex('96'), 7), (15, bytes.fromhex('97'), 7)):
+                    lea_rdx = bytes.fromhex('498d') + modrm + struct.pack('<i', offset)
+                    if text[i - size:i] != lea_rdx:
+                        continue
+                    load = bytes((0x4c, 0x8d, ((reg - 8) << 3) | 5))
+                    j = text.rfind(load, max(0, i - 0x4000), i - size)
+                    if j >= 0:
+                        return code['vaddr'] + j + 7 + struct.unpack_from('<i', text, j + 3)[0]
+            return None
+        a = block_1_00(full, 0x7c0)
+        b = block_1_00(address_of(QUALITY_LABELS['hiresshadow']), 0x1c4)
+        if a is not None and a == b:
+            block = a
+            result['_100'] = True
+    if block is None:
+        print('Extra quality: the render-settings block was not found in this build; not applied')
+        return {}
+    if 'fullres' in names:
+        result['fullres'] = block + 0x7c0
+    for name, (offset, _value) in QUALITY_EXTRA.items():
+        if name in names:
+            result[name] = block + offset
+    if result.pop('_100', False):   # (both switches already checked against their items)
+        if 'hiresshadow' in names:
+            result['hiresshadow'] = block + 0x1c4
+        return result
+    if 'hiresshadow' in names:
+        shadow = address_of(QUALITY_LABELS['hiresshadow'])
+        ok = any(text[i:i + 0x50].find(bytes.fromhex('498d8424c4010000')) > 0 for i in label_leas(shadow)) if shadow else False
+        if ok:
+            result['hiresshadow'] = block + 0x1c4
+        else:
+            print('Extra quality: the hi-res shadow switch was not found in this build; not applied')
+    return result
+
+
 def keep_bytes(path, cheats):
     """BB_KEEP_BYTES ("offset=1,...") for the enabled switch cheats of one executable; '' when none applies."""
-    if not any(c in ('noreload', 'onehit', 'rewards') for c in cheats):
+    if not any(c in ('noreload', 'onehit', 'rewards', 'fullres', 'hiresshadow', 'nodof') for c in cheats):
         return ''
     try:
         data, code = executable(path)
@@ -380,7 +479,17 @@ def keep_bytes(path, cheats):
     except (OSError, ValueError, KeyError, IndexError, struct.error) as error:
         print(f'Cheats: switches not kept ({error})')
         return ''
+    quality = {}
+    if any(c in QUALITY_LABELS or c in QUALITY_EXTRA for c in cheats):
+        try:   # (on its own: a surprise here must not drop the cheats and rewards)
+            quality = quality_switches(data, [c for c in cheats if c in QUALITY_LABELS or c in QUALITY_EXTRA])
+        except (ValueError, KeyError, IndexError, struct.error) as error:
+            print(f'Extra quality: not applied ({error})')
     keep = []
+    for name, offset in quality.items():
+        keep.append(f'{offset:x}={QUALITY_EXTRA[name][1] if name in QUALITY_EXTRA else 1}')
+        what = {'fullres': 'full resolution textures on', 'hiresshadow': 'hi-res local shadows on', 'nodof': 'depth of field off (the engine switch)'}
+        print(f'Extra quality: {what.get(name, name)} ({offset:#x})')
     for name in cheats:
         for offset in table.get(name, []):
             keep.append(f'{offset:x}=1')
