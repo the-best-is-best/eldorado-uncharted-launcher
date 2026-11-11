@@ -1,0 +1,12 @@
+# Mevlock/uncharted_pc-dev fixes taken on top of 0.3.6.50 (fixes only: no pictures, no look, no new features).
+# Source: tag v0.3.6.52.2, commits of its src/ gpu/ shaders/ (partly: only the parts named).
+6a4ee35 daba76f ce63ecd  Intel GPU hang: a barrier inside a divergence scope (U3 chateau forest), shader f8fa9165 own cache name
+18a1cdc                   a garbage descriptor (SNORM_NZ with a 32-bit channel) no longer stops the game
+c1f7ded (vk_rasterizer)   textures with a tile mode the GPU has not (garbage T# after a checkpoint load) are skipped, not an abort
+e27f9e0 (+ stamp part of 0b2e9c6)  AMD / Intel: thin lines at the right and bottom of the picture with FSR 4 (upscaler jitter in the vertex shaders); shaders prepared once again there
+2cc62e8                   practice mode covers every campaign save, not only the first
+02822f3                   PlayGo: 100 chunks when the package has no chunk table (U2 art gallery)
+3fde557 de8d8a7 24ee2b4 d83ac3d 56dd820 (buffer_cache)  speed in busy scenes (cache lines apart, raw fences, read-back prefetch)
+f27fb77                   shader variant lists of a player's cache
+# Not taken: dd2a1e1 (ours has the same fix), the mouse look, menu mouse, key pictures, Xbox style, sharpening, depth of field,
+# texture filtering, developer mode, the save list, pause in the background, camera up/down, 16:10 view, preparation page look.

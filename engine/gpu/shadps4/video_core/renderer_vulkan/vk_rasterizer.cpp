@@ -696,6 +696,15 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     scene_targets = std::make_unique<SceneTargets>(instance, scheduler, runtime, texture_cache);
     // Object motion first: it fixes the buffer addresses the motion shader variants embed.
     object_motion = std::make_unique<ObjectMotion>(instance, scheduler);
+    // bbport: the upscaler jitter in the vertex shaders (runtime_info.h, ClipJitter) on every driver but NVIDIA's,
+    // whose shader variants (and the players' prepared caches) stay as they were; fixed before any shader is
+    // translated. BB_CLIP_JITTER=0 / 1: off / on everywhere.
+    {
+        const char* env = std::getenv("BB_CLIP_JITTER");
+        Shader::ClipJitter::enabled = env && *env ? env[0] != '0'
+                                                  : instance.GetDriverID() != vk::DriverId::eNvidiaProprietary;
+        std::printf("Upscaler jitter: %s\n", Shader::ClipJitter::enabled ? "in the vertex shaders" : "viewport offset");
+    }
     // bbport: from here the stored pipelines load on background threads (the motion shaders
     // among them need the buffer addresses fixed just above).
     pipeline_cache.StartWarmUp();
@@ -928,6 +937,13 @@ inline AmdGpu::CbDbExtent Rasterizer::DbExtent() const {
 }
 
 namespace {
+/// A tile mode the GPU has (0-26, 31): a T# with another (27-30) is garbage, a resource table read before the
+/// game filled it (it reached GetArrayMode's unreachable and stopped the game: tile mode 28, 2026-11-11).
+bool IsKnownTileMode(AmdGpu::TileMode mode) {
+    const u32 value = static_cast<u32>(mode);
+    return value <= static_cast<u32>(AmdGpu::TileMode::Thick3DXThick) ||
+           mode == AmdGpu::TileMode::DisplayLinearGeneral;
+}
 /// magic_enum::enum_contains, from a table: it scans every enumerator (per texture per draw).
 bool IsKnownFormat(AmdGpu::DataFormat data_fmt, AmdGpu::NumberFormat num_fmt) {
     static const auto tables = [] {
@@ -2112,6 +2128,11 @@ extern "C" void BbHleSrcCheck(unsigned long long src, unsigned long long dst) {
     }
 }
 
+/// perf11: whether BbHleReadCheck can do anything (BB_HLE_READ_WATCH=1), read once by its callers.
+extern "C" bool BbHleReadWatchOn() {
+    return HleReadWatch::Enabled();
+}
+
 extern "C" void BbHleReadCheck(u64 address, u64 size, const char* what) {
     if (!HleReadWatch::Enabled() || HleReadWatch::count.load(std::memory_order_acquire) == 0 || !address || !size ||
         DrawPipe::OnStageB()) {
@@ -2824,16 +2845,17 @@ static bool DrawBatchEnabled() {
     return enabled;
 }
 
-/// bbport diagnosis (causal profiling): BB_SLOW_A_NS / BB_SLOW_B_NS=<ns> spin that long per draw
-/// or dispatch on stage A (PostDraw) / stage B (each draw or dispatch packet). How much the frame
-/// rate drops shows how much that stage limits it.
+/// bbport diagnosis (causal profiling): BB_SLOW_A_NS / BB_SLOW_B_DRAW_NS=<ns> spin that long per draw
+/// or dispatch on stage A (PostDraw) / stage B (each draw or dispatch packet only). How much the frame
+/// rate drops shows how much that stage limits it. BB_SLOW_B_NS (bbport_causal.h) is every stage B
+/// packet in the draw pipe; until perf11 both read BB_SLOW_B_NS, so draws and dispatches got it twice.
 static void SlowStage(const char* name) {
     static const u64 a_ns = [] {
         const char* env = std::getenv("BB_SLOW_A_NS");
         return env ? std::strtoull(env, nullptr, 10) : 0ull;
     }();
     static const u64 b_ns = [] {
-        const char* env = std::getenv("BB_SLOW_B_NS");
+        const char* env = std::getenv("BB_SLOW_B_DRAW_NS");
         return env ? std::strtoull(env, nullptr, 10) : 0ull;
     }();
     const u64 ns = name[0] == 'A' ? a_ns : b_ns;
@@ -4150,6 +4172,19 @@ static bool SkipShader(u64 hash) {
     return SkipDepthOfField(hash);
 }
 
+// bbport (runtime_info.h, ClipJitter): a pipeline whose vertex shader adds the jitter gets it in the push data
+// offsets (NDC: pixels over the half viewport size, which push xscale / yscale hold for clip-enabled draws, also
+// flipped), 0 when the draw is not jittered (the offsets otherwise hold the game's viewport offset, which only
+// clip-disabled shaders read), and the viewport stays on whole pixels.
+void Rasterizer::ClipJitterPush(const GraphicsPipeline* pipeline) {
+    if (!pipeline->UsesClipJitter()) {
+        return;
+    }
+    push_data.xoffset = draw_jitter[0] != 0.f && push_data.xscale != 0.f ? draw_jitter[0] / push_data.xscale : 0.f;
+    push_data.yoffset = draw_jitter[1] != 0.f && push_data.yscale != 0.f ? draw_jitter[1] / push_data.yscale : 0.f;
+    draw_jitter = {};
+}
+
 void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw* used_prepared,
                             bool is_indexed, u32 index_offset) {
     if (GuestSync::On()) {
@@ -4736,12 +4771,38 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             });
         }
     }
-    if (!batch_variant) {
-        pipeline->BindResources(set_writes, push_data, set1_first_write);
-    }
     // bbport: jitter geometry drawn with the scene depth, not full-screen passes (a shifted
     // full-screen quad leaves an edge column unwritten).
     draw_jitter = {};
+    // A draw of up to 6 indices is usually a full-screen quad (not jittered), but a quad that
+    // writes depth or tests it for equality is scene geometry: U3's chateau wall panels are single
+    // quads. Left unjittered, they sat a fraction of a pixel off their jittered neighbours and the
+    // seams opened into pinholes showing the scene colour's clear (0, 0, 1, 0): rows of bright
+    // blue dots, only with an upscaler on. BB_JITTER_SMALL=0: off.
+    static const bool jitter_small = [] {
+        const char* env = std::getenv("BB_JITTER_SMALL");
+        return !(env && env[0] == '0');
+    }();
+    const auto small_scene_geometry = [&] {
+        if (!jitter_small || !regs.depth_control.depth_enable) {
+            return false;
+        }
+        // Full-screen depth copies and resolves write depth with an always-passing test: not these.
+        const auto func = LiverpoolToVK::CompareOp(regs.depth_control.depth_func);
+        return func != vk::CompareOp::eAlways &&
+               (bool(regs.depth_control.depth_write_enable) || func == vk::CompareOp::eEqual);
+    };
+    if (upscaler->Enabled() && db_desc.first &&
+        (regs.num_indices > 6 || regs.num_instances.NumInstances() > 1 || small_scene_geometry())) {
+        draw_jitter = SceneJitterFor(db_desc.first);
+    } else if (const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+               ps && upscaler->Enabled() && JitterFullScreenPass(ps->pgm_hash)) {
+        draw_jitter = upscaler->Jitter();
+    }
+    ClipJitterPush(pipeline);
+    if (!batch_variant) {
+        pipeline->BindResources(set_writes, push_data, set1_first_write);
+    }
     // bbport diagnosis (BB_JITTER_DIAG=1): depth-tested draws jittered, drawn before the scene
     // depth was known, or into another depth buffer, every 5 s.
     if (static const bool jitter_diag = std::getenv("BB_JITTER_DIAG") != nullptr;
@@ -4782,31 +4843,6 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             scene_mrts.clear();
             window = now;
         }
-    }
-    // A draw of up to 6 indices is usually a full-screen quad (not jittered), but a quad that
-    // writes depth or tests it for equality is scene geometry: U3's chateau wall panels are single
-    // quads. Left unjittered, they sat a fraction of a pixel off their jittered neighbours and the
-    // seams opened into pinholes showing the scene colour's clear (0, 0, 1, 0): rows of bright
-    // blue dots, only with an upscaler on. BB_JITTER_SMALL=0: off.
-    static const bool jitter_small = [] {
-        const char* env = std::getenv("BB_JITTER_SMALL");
-        return !(env && env[0] == '0');
-    }();
-    const auto small_scene_geometry = [&] {
-        if (!jitter_small || !regs.depth_control.depth_enable) {
-            return false;
-        }
-        // Full-screen depth copies and resolves write depth with an always-passing test: not these.
-        const auto func = LiverpoolToVK::CompareOp(regs.depth_control.depth_func);
-        return func != vk::CompareOp::eAlways &&
-               (bool(regs.depth_control.depth_write_enable) || func == vk::CompareOp::eEqual);
-    };
-    if (upscaler->Enabled() && db_desc.first &&
-        (regs.num_indices > 6 || regs.num_instances.NumInstances() > 1 || small_scene_geometry())) {
-        draw_jitter = SceneJitterFor(db_desc.first);
-    } else if (const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
-               ps && upscaler->Enabled() && JitterFullScreenPass(ps->pgm_hash)) {
-        draw_jitter = upscaler->Jitter();
     }
     UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
@@ -5066,7 +5102,6 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     push_data.xoffset *= target_scale[0];
     push_data.yscale *= target_scale[1];
     push_data.yoffset *= target_scale[1];
-    pipeline->BindResources(set_writes, push_data, set1_first_write);
     draw_jitter = {};
     if (upscaler->Enabled() && db_desc.first) {
         draw_jitter = SceneJitterFor(db_desc.first);
@@ -5074,6 +5109,8 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
                ps && upscaler->Enabled() && JitterFullScreenPass(ps->pgm_hash)) {
         draw_jitter = upscaler->Jitter();
     }
+    ClipJitterPush(pipeline);
+    pipeline->BindResources(set_writes, push_data, set1_first_write);
     UpdateDynamicState(pipeline, is_indexed);
     MarkPass(pipeline, state);
     FullBarrierBeforeDraw(scheduler);
@@ -6111,7 +6148,7 @@ bool Rasterizer::TexturesBindableOnHelper(const Shader::Info& stage,
         const auto num_fmt = tsharp.GetNumberFmt();
         if (tsharp.Address() == 0 || data_fmt == AmdGpu::DataFormat::FormatInvalid ||
             !memory->IsValidGpuMapping(tsharp.Address(), 0) ||
-            !IsKnownFormat(data_fmt, num_fmt)) {
+            !IsKnownFormat(data_fmt, num_fmt) || !IsKnownTileMode(tsharp.GetTileMode())) {
             continue; // null descriptor
         }
         const auto& entry =
@@ -6814,10 +6851,129 @@ static bool SpanInvalidate() {
     return on;
 }
 
+// perf11 MEASUREMENT ONLY (BB_BIND_MEMO_CEILING=1, UNSAFE, off): the ceiling of a binding memo. A stage
+// whose buffers are all read-only plain buffers (no ring copies, no special buffers) and whose V#s equal those of
+// its last binding in the same command buffer (tick) and stream buffer lap replays that binding's results: the
+// descriptor infos, push offsets and barrier ranges, with the barrier check redone. NOT checked: CPU writes to the
+// buffers since (no upload) - wrong data possible. Counts hits/misses every 5 s.
+namespace {
+struct BindMemoEntry {
+    u64 key = 0;
+    u64 tick = ~u64{0};
+    u64 lap = 0;
+    const Shader::Info* stage = nullptr;
+    u32 count = 0;
+    struct Item {
+        vk::Buffer handle;
+        u64 offset;
+        u64 range;
+        u32 adjust;
+        const VideoCore::Buffer* buffer; ///< null: not tracked
+        u64 track_offset;
+        u64 track_size;
+    };
+    std::array<Item, 16> items;
+};
+std::array<BindMemoEntry, 1024> g_bind_memo;
+u64 g_bind_memo_hits = 0, g_bind_memo_misses = 0, g_bind_memo_ineligible = 0;
+bool BindMemoCeiling() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_BIND_MEMO_CEILING");
+        return env && env[0] == '1';
+    }();
+    return on;
+}
+} // namespace
+
 void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* prepared,
                              Shader::Backend::Bindings& binding,
                              Shader::PushData& push_data, u32& write_index) {
     const u64 alignment = instance.StorageMinAlignment();
+    BindMemoEntry* memo_entry = nullptr;
+    u64 memo_key = 0;
+    if (BindMemoCeiling() && DrawPipe::OnStageB()) {
+        static auto window = std::chrono::steady_clock::now();
+        if (const auto now = std::chrono::steady_clock::now(); now - window >= std::chrono::seconds(5)) {
+            std::printf("Bind memo ceiling (5 s): hits %llu, misses %llu, ineligible %llu\n",
+                        (unsigned long long)g_bind_memo_hits, (unsigned long long)g_bind_memo_misses,
+                        (unsigned long long)g_bind_memo_ineligible);
+            g_bind_memo_hits = g_bind_memo_misses = g_bind_memo_ineligible = 0;
+            window = now;
+        }
+        bool eligible = !stage.buffers.empty() && stage.buffers.size() <= 16 && !FrameCapture::Active() && !gbuffer_draw &&
+                        !DrawLog::Active();
+        u64 key = stage.pgm_hash * 0x9E3779B97F4A7C15ull ^ reinterpret_cast<u64>(&stage);
+        for (u32 i = 0; eligible && i < stage.buffers.size(); ++i) {
+            const auto& desc = stage.buffers[i];
+            // Ring copies and the flat user data buffer are made again on a hit (cheap); other special buffers
+            // and written buffers leave the stage to the full path.
+            if (num_ring_stages && FindRingBinding(stage, i)) {
+                continue;
+            }
+            if (desc.IsSpecial() && desc.buffer_type == Shader::BufferType::Flatbuf) {
+                continue;
+            }
+            if (desc.IsSpecial() || desc.is_written) {
+                eligible = false;
+                break;
+            }
+            const AmdGpu::Buffer v = prepared ? prepared->buffer_sharps[i] : desc.GetSharp(stage);
+            u64 words[2];
+            std::memcpy(words, &v, sizeof(words));
+            key = (key ^ words[0]) * 0x100000001B3ull;
+            key = (key ^ words[1]) * 0x100000001B3ull;
+        }
+        if (!eligible) {
+            ++g_bind_memo_ineligible;
+        } else {
+            memo_key = key | 1;
+            auto& e = g_bind_memo[(memo_key >> 7) % g_bind_memo.size()];
+            const u64 tick = scheduler.CurrentTick();
+            const u64 lap = buffer_cache.GetStreamBuffer().Laps();
+            if (e.key == memo_key && e.stage == &stage && e.tick == tick && e.lap == lap &&
+                e.count == stage.buffers.size()) {
+                ++g_bind_memo_hits;
+                for (u32 i = 0; i < e.count; ++i) {
+                    const auto& item = e.items[i];
+                    const auto& desc = stage.buffers[i];
+                    if (const RingBinding* ring = num_ring_stages ? FindRingBinding(stage, i) : nullptr) {
+                        if (!desc.IsSpecial()) {
+                            push_data.AddOffset(binding.buffer, 0);
+                        }
+                        buffer_infos.emplace_back(constant_ring->Handle(), ring->offset, ring->size);
+                    } else if (desc.IsSpecial()) {
+                        auto& vk_buffer = buffer_cache.GetStreamBuffer();
+                        const u32 ubo_size = stage.FlatUserData().size() * sizeof(u32);
+                        const u64 offset = vk_buffer.Copy(stage.FlatUserData().data(), ubo_size, alignment);
+                        buffer_infos.emplace_back(vk_buffer.Handle(), offset, ubo_size);
+                    } else {
+                        push_data.AddOffset(binding.buffer, item.adjust);
+                        buffer_infos.emplace_back(item.handle, item.offset, item.range);
+                    }
+                    if (item.buffer) {
+                        bound_buffers.emplace_back(item.buffer, item.track_offset, item.track_size, false);
+                        needs_barrier |= runtime.IsBufferAccessed(item.buffer, item.track_offset, item.track_size,
+                                                                  false);
+                    }
+                    auto& set_write = set_writes[write_index++];
+                    set_write.dstSet = VK_NULL_HANDLE;
+                    set_write.dstBinding = binding.unified++;
+                    set_write.dstArrayElement = 0;
+                    set_write.descriptorCount = 1;
+                    set_write.descriptorType = vk::DescriptorType::eStorageBuffer;
+                    set_write.pBufferInfo = &buffer_infos.back();
+                    ++binding.buffer;
+                }
+                return;
+            }
+            ++g_bind_memo_misses;
+            memo_entry = &e;
+            e.key = 0; // filled at the end
+        }
+    }
+    const size_t memo_infos_before = buffer_infos.size();
+    const size_t memo_bound_before = bound_buffers.size();
+    const u32 memo_first_buffer = binding.buffer;
     // bbport diagnosis: BB_TRACE_BUFFERS=<hash> prints the V# of every buffer binding of that
     // shader and the first bytes of guest memory behind it (first 6 draws).
     static const u64 trace_hash = [] {
@@ -7322,6 +7478,37 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
         set_write.pBufferInfo = &buffer_infos.back();
         ++binding.buffer;
     }
+    // BB_BIND_MEMO_CEILING: this binding's results for the next identical one. Barrier ranges are matched to the
+    // buffers by order (one bound_buffers entry per tracked buffer; a coalesced span is tracked by its first view).
+    if (memo_entry && buffer_infos.size() - memo_infos_before == stage.buffers.size()) {
+        auto& e = *memo_entry;
+        const size_t tracked = bound_buffers.size() - memo_bound_before;
+        size_t next_bound = memo_bound_before;
+        bool ok = true;
+        for (u32 i = 0; i < stage.buffers.size(); ++i) {
+            const auto& info = buffer_infos[memo_infos_before + i];
+            auto& item = e.items[i];
+            item.handle = info.buffer;
+            item.offset = info.offset;
+            item.range = info.range;
+            item.adjust = push_data.buf_offsets[memo_first_buffer + i];
+            item.buffer = nullptr;
+            if (next_bound < bound_buffers.size() && bound_buffers[next_bound].buffer->Handle() == info.buffer) {
+                item.buffer = bound_buffers[next_bound].buffer;
+                item.track_offset = bound_buffers[next_bound].offset;
+                item.track_size = bound_buffers[next_bound].size;
+                ++next_bound;
+            }
+        }
+        ok = next_bound - memo_bound_before == tracked;
+        if (ok) {
+            e.key = memo_key;
+            e.stage = &stage;
+            e.tick = scheduler.CurrentTick();
+            e.lap = buffer_cache.GetStreamBuffer().Laps();
+            e.count = u32(stage.buffers.size());
+        }
+    }
     if (BindMemoStats() && DrawPipe::OnStageB() && !stage.buffers.empty()) {
         u64 key = stage.pgm_hash * 0x9E3779B97F4A7C15ull;
         bool cpu_written = false;
@@ -7573,7 +7760,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         }
 
         if (!memory->IsValidGpuMapping(tsharp.Address(), 0) ||
-            !IsKnownFormat(data_fmt, num_fmt)) {
+            !IsKnownFormat(data_fmt, num_fmt) || !IsKnownTileMode(tsharp.GetTileMode())) {
             LOG_WARNING(Render_Vulkan,
                         "Rejecting invalid T# address={:#x}, pitch={}, width={}, "
                         "data_format={}, num_format={}",
@@ -9102,6 +9289,39 @@ void Rasterizer::UpdateViewportScissorState() const {
                 .offset = {vp_scsr.top_left_x, vp_scsr.top_left_y},
                 .extent = {vp_scsr.GetWidth(), vp_scsr.GetHeight()},
             });
+        }
+    }
+
+    // bbport diagnosis (BB_JITTER_EDGE_SIM=1): what AMD's drivers do with a fractional viewport edge, on any GPU: the
+    // implicit viewport scissor ends at int(x + width) / int(y + height), so a viewport shifted left or up by the
+    // jitter leaves out its last column / row (runtime_info.h, ClipJitter).
+    static const bool edge_sim = [] {
+        const char* env = std::getenv("BB_JITTER_EDGE_SIM");
+        return env && env[0] == '1';
+    }();
+    if (edge_sim) {
+        for (size_t i = 0; i < viewports.size() && i < scissors.size(); ++i) {
+            const auto& v = viewports[i];
+            auto& r = scissors[i];
+            static u64 cut = 0, seen = 0;
+            const u32 w0 = r.extent.width, h0 = r.extent.height;
+            if (v.width > 0.f) {
+                const s32 right = s32(v.x + v.width);
+                r.extent.width = u32(std::max(0, std::min(r.offset.x + s32(r.extent.width), right) - r.offset.x));
+            }
+            if (v.height != 0.f) { // (a flipped viewport, negative height, ends at y)
+                const s32 bottom = s32(std::max(v.y, v.y + v.height));
+                r.extent.height = u32(std::max(0, std::min(r.offset.y + s32(r.extent.height), bottom) - r.offset.y));
+            }
+            ++seen;
+            if (r.extent.width != w0 || r.extent.height != h0) {
+                if (++cut % 20000 == 1) {
+                    std::printf("Jitter edge sim: %llu of %llu viewports cut (viewport %.2f %.2f %.2fx%.2f, scissor %ux%u -> "
+                                "%ux%u)\n",
+                                (unsigned long long)cut, (unsigned long long)seen, v.x, v.y, v.width, v.height, w0, h0,
+                                r.extent.width, r.extent.height);
+                }
+            }
         }
     }
 

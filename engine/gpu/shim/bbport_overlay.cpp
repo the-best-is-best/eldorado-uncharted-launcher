@@ -661,8 +661,10 @@ void CheckpointsPage() {
             if (ImGui::Selectable(label.c_str(), i == picked || (is_current && picked < 0),
                                   ImGuiSelectableFlags_AllowDoubleClick)) {
                 picked = i;
-                // A double click goes there at once (the same as picking it and pressing Go there).
-                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                // A double click goes there at once (the same as picking it and pressing Go there), but never to the
+                // checkpoint the player is at: the game's task reset there leaves the scene with no characters.
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+                    !(now.known && list[i].task == now.task)) {
                     BbSaves::Jump(list[i], message);
                 }
             }
@@ -682,8 +684,9 @@ void CheckpointsPage() {
     // games' opening "kiosk-trailer" are left out.
     const bool starts_movie = picked >= 0 && (list[picked].name.find("movie") != std::string::npos ||
                                               list[picked].name == "kiosk-trailer");
-    ImGui::BeginDisabled(picked < 0 || starts_movie);
-    if (ImGui::Button(TI("Go there")) && picked >= 0 && !starts_movie) {
+    const bool already_here = picked >= 0 && now.known && list[picked].task == now.task;
+    ImGui::BeginDisabled(picked < 0 || starts_movie || already_here);
+    if (ImGui::Button(TI("Go there")) && picked >= 0 && !starts_movie && !already_here) {
         BbSaves::Jump(list[picked], message);
     }
     ImGui::EndDisabled();

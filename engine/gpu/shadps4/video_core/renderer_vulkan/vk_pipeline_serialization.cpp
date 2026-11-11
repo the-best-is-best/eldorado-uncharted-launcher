@@ -224,6 +224,12 @@ static std::string BinaryName(u64 pgm_hash, size_t perm_idx) {
         !cloth.empty()) {
         return fmt::format("{:#018x}_{}_{}", pgm_hash, perm_idx, cloth);
     }
+    // _bs1 (BB_SCOPE_SPLIT_BARRIER): the shaders whose barriers it moves out of a branch. Shader
+    // preparation of all three games' lists with BB_BARRIER_CHECK=1 found one: U3's shadow-filter
+    // prefix sum cs f8fa9165 (the Intel GPU hang). Only it is translated again, not the whole cache.
+    if (pgm_hash == 0xf8fa9165 && Shader::Gcn::ScopeSplitBarrier()) {
+        return fmt::format("{:#018x}_{}_bs1", pgm_hash, perm_idx);
+    }
     // _lc2: pixel shader 689d1af9 (its first clamp builds patched nothing; not to be taken).
     return Shader::Optimization::EffectLoopClamp(pgm_hash)
                ? fmt::format("{:#018x}_{}_{}", pgm_hash, perm_idx,
@@ -1627,6 +1633,11 @@ void PipelineCache::WarmUpThread() {
         // El Dorado: the list's size and a hash of its text (a list changed but of the same size kept the old
         // marker, and the page was skipped with variants missing).
         prepared_stamp = std::to_string(std::filesystem::file_size(list_path, ec));
+        // The jitter in the vertex shaders (non-NVIDIA, runtime_info.h ClipJitter) changes every vertex pipeline:
+        // a cache prepared without it is prepared again once.
+        if (Shader::ClipJitter::enabled) {
+            prepared_stamp += " clip-jitter " + std::to_string(Shader::ClipJitter::Version);
+        }
         if (std::FILE* f = std::fopen(list_path.string().c_str(), "rb")) {
             std::string text;
             char chunk[65536];
@@ -2396,6 +2407,7 @@ void PipelineCache::WarmUpThread() {
         std::array<vk::ShaderModule, MaxShaderStages> modules{};
         std::optional<Shader::Gcn::FetchShaderData> fetch_shader;
         std::array<u32, MaxShaderStages> starts{}, counts{};
+        bool clip_jitter = false;
         for (u32 stage = 0; stage < MaxShaderStages; ++stage) {
             const auto hash = entry.gkey.stage_hashes[stage];
             if (!hash) {
@@ -2417,6 +2429,18 @@ void PipelineCache::WarmUpThread() {
             modules[stage] = it->second->module;
             starts[stage] = it->second->spec.start.unified;
             const auto& own_spec = it->second->spec;
+            clip_jitter |= own_spec.runtime_info.hw_stage == Shader::HwStage::Vertex &&
+                           own_spec.runtime_info.hw.vs.clip_jitter != 0;
+            // (runtime_info.h, ClipJitter) A stored vertex shader from before the jitter moved into the shaders: left
+            // to the game, which builds it with the jitter code. Mixed with new ones, the depth pre-pass and the main
+            // pass of the same geometry would take the jitter two ways and could miss each other's depth. Its
+            // key goes (no use to this driver again; the preparation, run again by the stamp, builds the new ones).
+            if (Shader::ClipJitter::enabled && own_spec.runtime_info.hw_stage == Shader::HwStage::Vertex &&
+                !own_spec.runtime_info.hw.vs.clip_disable && own_spec.runtime_info.hw.vs.clip_jitter == 0) {
+                ++stale_no_stage;
+                remove_key(i, removed_stale);
+                return;
+            }
             counts[stage] = u32(own_spec.buffers.size() + own_spec.images.size() + own_spec.samplers.size());
             if (it->second->fetch_shader) {
                 fetch_shader = it->second->fetch_shader;
@@ -2475,6 +2499,7 @@ void PipelineCache::WarmUpThread() {
             return;
         }
         pipeline->RebindStages(program_infos);
+        pipeline->SetClipJitter(clip_jitter);
         bool added = false;
         {
             std::unique_lock lock{pipelines_mutex};

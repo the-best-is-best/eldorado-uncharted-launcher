@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include "common/assert.h"
@@ -58,6 +59,22 @@ static IR::Condition MakeCondition(const GcnInst& inst) {
 bool ScopeSplitScalar() {
     static const bool enabled = [] {
         const char* env = std::getenv("BB_SCOPE_SPLIT_SCALAR");
+        return !(env && env[0] == '0');
+    }();
+    return enabled;
+}
+
+// bbport (Intel GPU hang, U3 chateau forest: the shadow-filter prefix sum cs f8fa9165): an
+// s_barrier inside a divergence scope runs for every wave on GCN whatever EXEC is, but in a SPIR-V
+// branch it is a barrier in non-uniform control flow: undefined; NVIDIA and AMD let it pass, Intel
+// hardware threads whose lanes all skip it never arrive and the workgroup waits forever. It splits
+// the scope like a scalar instruction (ends it before, reopens it after), also when nothing of the
+// scope follows it. BB_SCOPE_SPLIT_BARRIER=0 turns it off. The shaders it changes (BB_BARRIER_CHECK
+// over every listed variant: only cs f8fa9165) get their own cache names (BinaryName), so the rest
+// of a player's cache stays valid.
+bool ScopeSplitBarrier() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_SCOPE_SPLIT_BARRIER");
         return !(env && env[0] == '0');
     }();
     return enabled;
@@ -124,11 +141,75 @@ CFG::CFG(Common::ObjectPool<Block>& block_pool_, std::span<const GcnInst> inst_l
     : block_pool{block_pool_}, inst_list{inst_list_} {
     index_to_pc.resize(inst_list.size() + 1);
     labels.reserve(LabelReserveSize);
+    DropBarrierExeczSkips();
     EmitLabels();
     EmitBlocks();
     LinkBlocks();
     SplitDivergenceScopes();
     RemoveUnreachableBlocks();
+}
+
+// bbport (BB_SCOPE_SPLIT_BARRIER): an s_cbranch_execz that skips s_barrier. On GCN a wave with no
+// lanes left jumps over the barriers and the other waves' barriers wait only until it ends; as a
+// SPIR-V branch it is a barrier in non-uniform control flow, which Intel GPUs never get past
+// (U3 chateau forest: the shadow-filter prefix sum cs f8fa9165). When the skipped instructions are
+// only vector ones (no-ops without lanes), waits and barriers, the skip is dropped: the code
+// becomes an EXEC scope and SplitDivergenceScopes moves its barriers out of it.
+void CFG::DropBarrierExeczSkips() {
+    if (!ScopeSplitBarrier()) {
+        return;
+    }
+    u32 pc = 0;
+    std::vector<u32> pcs(inst_list.size() + 1);
+    for (size_t i = 0; i < inst_list.size(); i++) {
+        pcs[i] = pc;
+        pc += inst_list[i].length;
+    }
+    pcs[inst_list.size()] = pc;
+    for (size_t i = 0; i < inst_list.size(); i++) {
+        const GcnInst& inst = inst_list[i];
+        if (inst.opcode != Opcode::S_CBRANCH_EXECZ) {
+            continue;
+        }
+        const u32 target = inst.BranchTarget(pcs[i]);
+        if (target <= pcs[i]) {
+            continue;
+        }
+        bool barrier = false;
+        bool only_vector = true;
+        size_t j = i + 1;
+        for (; j < inst_list.size() && pcs[j] < target; j++) {
+            const GcnInst& skipped = inst_list[j];
+            if (skipped.opcode == Opcode::S_BARRIER) {
+                barrier = true;
+                continue;
+            }
+            if (skipped.opcode == Opcode::S_WAITCNT || skipped.opcode == Opcode::S_NOP) {
+                continue;
+            }
+            bool writes_exec = skipped.IsCmpx();
+            for (u32 d = 0; d < skipped.dst_count; d++) {
+                writes_exec |= skipped.dst[d].field == OperandField::ExecLo ||
+                               skipped.dst[d].field == OperandField::ExecHi;
+            }
+            if (IgnoresExecMask(skipped) || writes_exec) {
+                only_vector = false;
+                break;
+            }
+        }
+        if (!barrier || !only_vector || j >= inst_list.size() || pcs[j] != target) {
+            continue;
+        }
+        static std::atomic<u32> logged{0};
+        if (logged.fetch_add(1) < 20) {
+            std::printf("Shader recompiler: s_cbranch_execz at pc %#x skips s_barrier: dropped "
+                        "(BB_SCOPE_SPLIT_BARRIER)\n",
+                        pcs[i]);
+            std::fflush(stdout);
+        }
+        // The program's instruction list, which the CFG only reads otherwise.
+        const_cast<GcnInst&>(inst).opcode = Opcode::S_NOP;
+    }
 }
 
 void CFG::EmitLabels() {
@@ -204,9 +285,10 @@ void CFG::SplitDivergenceScopes() {
     // for the whole wave (ScopeSplitScalar). The scope ends before it and reopens after it.
     const auto splits_scope = [&](const Block& blk, size_t index, s32 curr_begin) {
         const auto& inst = inst_list[index];
-        if (!ScopeSplitScalar() || curr_begin == -1 || index >= blk.end_index ||
-            (inst.category != InstCategory::ScalarALU &&
-             inst.category != InstCategory::ScalarMemory)) {
+        const bool barrier = inst.opcode == Opcode::S_BARRIER && ScopeSplitBarrier();
+        if (curr_begin == -1 || index >= blk.end_index ||
+            (!barrier && (!ScopeSplitScalar() || (inst.category != InstCategory::ScalarALU &&
+                                                  inst.category != InstCategory::ScalarMemory)))) {
             return false;
         }
         for (u32 i = 0; i < inst.dst_count; i++) {
@@ -218,6 +300,17 @@ void CFG::SplitDivergenceScopes() {
         const auto first = inst_list.begin();
         if (std::all_of(first + curr_begin + 1, first + index, IgnoresExecMask)) {
             return false;
+        }
+        if (barrier) {
+            // Vector work of the scope comes before it: it leaves the scope, whatever follows.
+            static std::atomic<u32> logged{0};
+            if (logged.fetch_add(1) < 20) {
+                std::printf("Shader recompiler: s_barrier at pc %#x moved out of a divergence scope "
+                            "(BB_SCOPE_SPLIT_BARRIER)\n",
+                            index_to_pc[index]);
+                std::fflush(stdout);
+            }
+            return true;
         }
         for (size_t next = index + 1; next <= blk.end_index; next++) {
             const auto& later = inst_list[next];
