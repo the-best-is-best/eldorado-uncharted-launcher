@@ -183,6 +183,10 @@ def u1_crank_mouse(runs, root):
                 what="Uncharted 1 engine room: the machine's crank: the mouse picture shows and the mouse turns it")
 
 
+def prompts_launcher_look(runs, root):
+    return Result(LOOK, "Prompts in the launcher's look: U1 X/Square/push-the-stone (green), U2 weapon d-pad (blue), U3 circle prompts (orange). Mark it.")         if runs else Result(NOT_TRIED, "Play and look at the button prompts: they carry the game's launcher colour")
+
+
 def u1_square_prompt(runs, root):
     return seen(runs, r"Button prompts: Uncharted 1 square prompt drawn as keyboard and mouse keys",
                 what="Uncharted 1, the fight after the boat: the Square prompt shows your Square key (mark it)")
@@ -372,6 +376,7 @@ ITEMS = [
     Item("u1_push_prompt", "U1 push-the-stone prompt shows W A S D", u1_push_prompt),
     Item("onehit_jetski", "One hit kills counts Elena's shots on the jet ski only", onehit_jetski),
     Item("u1_crank_mouse", "U1 engine room crank turns with the mouse (the arrow the other way)", u1_crank_mouse),
+    Item("prompts_launcher_look", "Button prompts take the launcher look (key face, accent glow, lit key)", prompts_launcher_look),
     Item("u1_square_prompt", "U1 fight: the big Square prompt shows your Square key", u1_square_prompt),
     Item("trophies_cheat", "Unlock all trophies (CHEATS)", trophies_cheat),
     Item("menu_sensitivity", "Insert menu: aiming and vertical sensitivity", menu_sensitivity),
