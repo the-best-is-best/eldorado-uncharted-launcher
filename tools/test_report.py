@@ -195,6 +195,10 @@ def u2_nepal_helicopter(runs, root):
     return Result(LOOK, "U2 Nepal helicopter: destroyed after 3 / 10 / 14 hits by the launcher level. Mark it.")         if runs else Result(NOT_TRIED, "Play the Nepal helicopter fight: it falls after 3 / 10 / 14 explosion hits by level")
 
 
+def story_banner(runs, root):
+    return Result(LOOK, "Story progress banner at the top of the screen over the Insert menu and the game's pause menu. Mark it.")         if runs else Result(NOT_TRIED, "Open the game's pause menu in play: the percentage, chapter and bar show at the top")
+
+
 def u1_square_prompt(runs, root):
     return seen(runs, r"Button prompts: Uncharted 1 square prompt drawn as keyboard and mouse keys",
                 what="Uncharted 1, the fight after the boat: the Square prompt shows your Square key (mark it)")
@@ -386,6 +390,7 @@ ITEMS = [
     Item("u1_crank_mouse", "U1 engine room crank turns with the mouse (the arrow the other way)", u1_crank_mouse),
     Item("prompts_launcher_look", "Button prompts take the launcher look (key face, accent glow, lit key)", prompts_launcher_look),
     Item("u1_square_prompt", "U1 fight: the big Square prompt shows your Square key", u1_square_prompt),
+    Item("story_banner", "Story progress banner over the pause menu (percentage, chapter, bar)", story_banner),
     Item("u2_train_helicopter", "U2 train chapter: the cliff helicopter falls after 111 / 151 / 221 hits (by level)", u2_train_helicopter),
     Item("u2_nepal_helicopter", "U2 Nepal helicopter: 3 / 10 / 14 hits (by level)", u2_nepal_helicopter),
     Item("trophies_cheat", "Unlock all trophies (CHEATS)", trophies_cheat),
