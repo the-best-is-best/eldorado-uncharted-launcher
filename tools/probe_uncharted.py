@@ -998,6 +998,12 @@ def main():
     if game_update_view.LAST_VIEW:  # the boot.log header says it (tools/test_report.py)
         os.environ["ELDORADO_VIEW_NOTE"] = (f"{game_update_view.LAST_VIEW} in "
                                             f"{time.perf_counter() - view_started:.2f} s")
+    # Uncharted 2's Nepal helicopter: hits that destroy it as on Damage to Nate's level (tools/u2_helicopter.py). Only in
+    # the view of the game with its update, never in the game's own folder.
+    if game_dir.name == game_update_view.VIEW_NAME and game == "u2":
+        import u2_helicopter
+        level = os.environ.get("UNCHARTED_NATE_DAMAGE", "").strip()
+        print(u2_helicopter.apply(game_dir, int(level) if level in ("0", "1", "2", "3") else None))
     started = time.time() - 2  # file times are coarse on some drives
     version = game_version(game_dir)
     result = run(args, game, args.executable, game_dir)
