@@ -10,6 +10,7 @@
  * Called every frame from the menu update hooks (runtime_checkpoint.c). BB_MENU_PROBE=1 also logs every field of
  * the host that changes after holding still (to find these fields again in another build). */
 #include "runtime.h"
+#include "runtime_menumouse.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,7 +47,10 @@ int runtime_menu_at_main(void) {
 /* The pause menu or one of its pages is on screen (host depth 1 or more once the game was in play; Uncharted 1's pause
  * Options page counts: its depth is the main menu's). */
 int runtime_menu_open(void) {
-    return pause_menu_seen > 0 && now_s() - pause_menu_seen < 0.25 && !before_play();
+    if (before_play()) return 0;
+    /* The menu mouse already knows when a game menu is on screen (its log: "Menu mouse: menu on screen"), in the pause
+     * menu too; the host depth is the second witness. */
+    return runtime_menumouse_active() || (pause_menu_seen > 0 && now_s() - pause_menu_seen < 0.7);
 }
 
 static void continue_watch(int game, const unsigned char *host);
