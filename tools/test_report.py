@@ -187,6 +187,14 @@ def prompts_launcher_look(runs, root):
     return Result(LOOK, "Prompts in the launcher's look: U1 X/Square/push-the-stone (green), U2 weapon d-pad (blue), U3 circle prompts (orange). Mark it.")         if runs else Result(NOT_TRIED, "Play and look at the button prompts: they carry the game's launcher colour")
 
 
+def u2_train_helicopter(runs, root):
+    return Result(LOOK, "U2 train chapter, the cliff helicopter: destroyed after 30 / 50 / 100 hits by the launcher level (Damage to Nate). Mark it.")         if runs else Result(NOT_TRIED, "Play the train chapter helicopter fight with the truck gun: it falls much sooner than the game's own 111 / 151 / 221 hits")
+
+
+def u2_nepal_helicopter(runs, root):
+    return Result(LOOK, "U2 Nepal helicopter: stage 2 at 3 hits, stage 3 at 6, destroyed at 9 on every level. Mark it.")         if runs else Result(NOT_TRIED, "Play the Nepal helicopter fight: it falls after 9 explosion hits")
+
+
 def u1_square_prompt(runs, root):
     return seen(runs, r"Button prompts: Uncharted 1 square prompt drawn as keyboard and mouse keys",
                 what="Uncharted 1, the fight after the boat: the Square prompt shows your Square key (mark it)")
@@ -378,6 +386,8 @@ ITEMS = [
     Item("u1_crank_mouse", "U1 engine room crank turns with the mouse (the arrow the other way)", u1_crank_mouse),
     Item("prompts_launcher_look", "Button prompts take the launcher look (key face, accent glow, lit key)", prompts_launcher_look),
     Item("u1_square_prompt", "U1 fight: the big Square prompt shows your Square key", u1_square_prompt),
+    Item("u2_train_helicopter", "U2 train chapter: the cliff helicopter falls after 30 / 50 / 100 hits (by level)", u2_train_helicopter),
+    Item("u2_nepal_helicopter", "U2 Nepal helicopter: 3 / 6 / 9 hits", u2_nepal_helicopter),
     Item("trophies_cheat", "Unlock all trophies (CHEATS)", trophies_cheat),
     Item("menu_sensitivity", "Insert menu: aiming and vertical sensitivity", menu_sensitivity),
     Item("checkpoint_jump", "Insert menu: double-click a checkpoint", checkpoint_jump),
