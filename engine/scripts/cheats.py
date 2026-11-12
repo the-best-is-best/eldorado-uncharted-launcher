@@ -181,7 +181,11 @@ def exposure_patch(name):
 #   0x4aba00 at 0x24fc50/0x24fe4c/0x24fe6e, and the attack helicopter's machine-gun bullet (helicopter.cpp 0xa855e0,
 #   damage = the MG stat * this value) at 0xa8624a. The helicopter's rockets and wreck explosions hurt Nate through
 #   the explosion process (process-explosion.cpp 0x98c800, "Explosive Damage to Player", the getter's case 8 above).
-#   U3: the NPC weapon damage 0x366af0 calls the difficulty object's (0x16fb750) value 0x552a20 at 0x366c2b/0x366def.
+#   U3: the NPC weapon damage 0x366af0 calls the difficulty object's (0x16fb750) value 0x552a20 at 0x366c2b/0x366def,
+#   and the two aircraft guns that share the global difficulty table's field +0x50 (damage = the gun's int * this
+#   value): the attack helicopter's (helicopter.cpp 0xcba300) at 0xcbafb9 and the strafing plane's (strafe-plane.cpp
+#   UpdateFiring 0xcee5b0) at 0xcefc3a. Explosions go through the explosion process (case 8
+#   above); no other vehicle code reads the difficulty table.
 # - The same functions' own Hard/Crushing/Brutal multipliers and Explorer's damage floor: their difficulty loads
 #   become "mov reg, L".
 # Stubs: U1 after the onehit stub, U2/U3 right after the code's last byte (the ultrawide stubs move 0x100 on).
@@ -293,7 +297,7 @@ def _u3_nate(level):
                                  (0x12c254c, '83f805754dc5fa10471cc3', 0x44)])
     stub, back = 0x16466d0, 0x552b39                                            # rax holds the call target: rcx only
     items = []
-    for ret in (0x366c2e, 0x366df2):
+    for ret in (0x366c2e, 0x366df2, 0x365a03, 0xcbafbc, 0xcefc3d):              # NPC weapon x2, 0x365160's %-of-health hit, helicopter gun, strafing plane
         items += [('rip', b'\x48\x8d\x0d', ret, b''), bytes.fromhex('48394d08'), ('je', 'nate')]
     items += [('rip', b'\x48\x8d\x0d', 0x17b6368, b''), bytes.fromhex('8bb1484c0000'), ('jmp', back),
               ('label', 'nate'), _imm(0xbe, level, 5), ('jmp', back)]
@@ -304,7 +308,25 @@ def _u3_nate(level):
         (0x366e7f, '488d0de2f444018b89484c0000', _imm(0xb9, level, 13).hex()),
         (0x366f60, '488d0501f444018b80484c0000', _imm(0xb8, level, 13).hex()),
         (0x366fd8, '488d0d89f344018b89484c0000', _imm(0xb9, level, 13).hex()),
-        (stub, '00' * len(code), code.hex())]
+        (stub, '00' * len(code), code.hex())] + _u3_melee(level)
+
+
+def _u3_melee(level):
+    """Soldier melee: melee-util.cpp GetMeleeDamageDealtByCharacter (0x8d2460) indexes a byte table by the chosen
+    difficulty (0x8d259e); the table is the dealer's: the Player component's, else the Npc component's (0x8d252d, the
+    fall-through). The Npc path leaves a mark in the function's unused stack slot [rbp-0x10] (zeroed at entry: "push rax"
+    becomes "xor eax, eax / push rax"), and the difficulty load takes level L when the mark is set (index 0..3 -> fields
+    0..3, as the game's own). Nate's own punches (the Player table) keep the chosen difficulty."""
+    npc_cave, read_cave = 0x1646730, 0x1646750
+    npc = _asm(npc_cave, [bytes.fromhex('bf0b153819'), bytes.fromhex('7205'), ('jmp', 0x8d25df),
+                          bytes.fromhex('48c745f001000000'), ('jmp', 0x8d2538)])
+    read = _asm(read_cave, [bytes.fromhex('48837df000'), ('jne', 'npc'), ('rip', b'\x48\x8d\x05', 0x17b6368, b''),
+                            bytes.fromhex('8b88484c0000'), ('jmp', 0x8d25ab), ('label', 'npc'),
+                            _imm(0xb9, level, 5), ('jmp', 0x8d25ab)])
+    return [(0x8d2465, '5031c0', '31c050'),
+            (0x8d252d, 'bf0b1538190f83a7000000', _jump_to(0x8d252d, npc_cave, 11).hex()),
+            (0x8d259e, '488d05c33dee008b88484c0000', _jump_to(0x8d259e, read_cave, 13).hex()),
+            (npc_cave, '00' * len(npc), npc.hex()), (read_cave, '00' * len(read), read.hex())]
 
 
 for _code, _build in ((US['eboot.bin'], _u1_nate), (US['big2-ps4_Shipping.elf'], _u2_nate),
