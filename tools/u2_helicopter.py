@@ -29,18 +29,6 @@ TRAIN_LIMITS = ((1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110),
                 (1, 15, 30, 45, 60, 75, 90, 105, 120, 130, 140, 150),
                 (1, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220))
 
-# The train helicopter is destroyed on the hit after its last threshold; the game's own numbers (111 / 151 / 221) took
-# too long to shoot down with the truck's gun, so the launcher's levels use these hits instead (the stage thresholds
-# between 1 and the last are spread evenly, so smoke and fire still come in stages).
-TRAIN_KILL_HITS = {0: 30, 1: 30, 2: 50, 3: 100}
-
-
-def train_thresholds(level):
-    kill = TRAIN_KILL_HITS[level]
-    last = kill - 1
-    return tuple([1] + [1 + round((last - 1) * i / 11) for i in range(1, 12)])
-
-
 FILES = {
     "ss-warzone.bin": {   # update 1.02's file (Game and Game original agree)
         "md5": "51bd4f5d54af1e18868aac6091edf936",
@@ -48,7 +36,6 @@ FILES = {
         "declared": (0x1A004, 0x1A00C, 0x1A014),   # the script's starting values (int32, little endian)
         "tiers": ((0xC0C2, 0xC0E2, 0xC102), (0xC14E, 0xC16E, 0xC18E), (0xC1B2, 0xC1D2, 0xC1F2)),
         "name": "Nepal helicopter",
-        "want": lambda level: (3, 6, 9),   # stage 2 at 3 hits, stage 3 at 6, destroyed at 9, on every level, as asked
     },
     "ss-train.bin": {
         "md5": "71d02e22ef5be69d2b6b68d45547c0a6",
@@ -58,7 +45,6 @@ FILES = {
                   tuple(0x55CF2 + 0x20 * i for i in range(12)),
                   tuple(0x55F1E + 0x20 * i for i in range(12))),
         "name": "train helicopter",
-        "want": train_thresholds,
     },
 }
 
