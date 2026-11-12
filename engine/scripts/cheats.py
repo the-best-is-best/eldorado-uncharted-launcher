@@ -173,6 +173,13 @@ def exposure_patch(name):
 #   cases 2 "Damage by NPCs Multiplier", 3 "Damage by NPCs (Melee)", 5/6 "Player Health Regen Rate/Delay", 8
 #   "Explosive Damage to Player" (Explorer field +0x24/+0x28/+0x30/+0x34/+0x44 of the block, Brutal +0/+4/+0xc/+0x10/
 #   +0x1c). Each case's "cmp eax, 5 / jne / read Brutal's" becomes "read Explorer's" (L 0) or "return 1.0".
+#   Regen, read from the code (all three games, 1.02): the tweak block's constructor stores its final values after
+#   the DC file's, so Explorer's regen rate is 1.0 and delay 0.7, Brutal's rate 2.05 and delay 1.0, every other level
+#   1.0 / 1.0. Only these two cases are called for the regen: U1 0x2650ad (rate, per frame) and 0x2624f6 (the delay
+#   timer [player+0x142c] is set there) through the wrapper 0x3aaeb0; U2 0x7efe7d/0x7eff0d and U3 0x9f8edc/0x9f8f88 in one handler that calls the
+#   Health object's rate/delay setters (U2 vtable 0x103f200 +0x30/+0x38, U3 0x16e13a0 +0x50/+0x58). No other
+#   difficulty-dependent value reaches the regen in single player ("health-regen-speed"/"health-regen-delay" tunings
+#   are only defined by the multiplayer DC files and read behind the multiplayer check).
 # - Naughty Dog's difficulty value (ApplyDifficultySetting, task.cpp: the difficulty's *<level>-difficulty-settings*
 #   interpolated by the dynamic difficulty), read by a shared function whose difficulty load jumps to a stub: when the
 #   return address is the NPC damage code's call, the level is L, else the game's own. U1: npc.cpp's damage to the
