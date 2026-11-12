@@ -29,6 +29,7 @@ static const MenuFields fields[3]={{"Uncharted 1",0x790,0x794},{"Uncharted 2",0x
 static void probe(const char *game, const unsigned char *manager);
 
 static double now_s(void);
+static volatile double pause_menu_seen; /* a menu page on screen after play began (the pause menu and its pages) */
 static volatile double main_menu_seen; /* when a menu update last saw the main menu on screen (depth 1, page 0x0c) */
 /* Uncharted 1's pause menu Options page has the main menu's depth and page too (7 Nov 2026: Back there asked to close
  * the game). The main menu of a start comes before any play (camera hooks: runtime_play_calls), the pause menu after
@@ -40,6 +41,12 @@ static int before_play(void) {
 
 int runtime_menu_at_main(void) {
     return main_menu_seen > 0 && now_s() - main_menu_seen < 0.25 && before_play();
+}
+
+/* The pause menu or one of its pages is on screen (host depth 1 or more once the game was in play; Uncharted 1's pause
+ * Options page counts: its depth is the main menu's). */
+int runtime_menu_open(void) {
+    return pause_menu_seen > 0 && now_s() - pause_menu_seen < 0.25 && !before_play();
 }
 
 static void continue_watch(int game, const unsigned char *host);
@@ -54,6 +61,7 @@ void runtime_menu_watch(int game, const unsigned char *host) {
     memcpy(&depth, host + fields[game].depth, 4);
     memcpy(&page, host + fields[game].page, 4);
     if (depth == 1 && page == MAIN_MENU_PAGE) main_menu_seen = now_s();
+    if (depth >= 1 && depth < 16 && !before_play()) pause_menu_seen = now_s();
     if (host == last_host[game] && last_depth[game] == 1 && depth == 0 && last_page[game] == MAIN_MENU_PAGE &&
         before_play()) {
         printf("Menu: %s: back from the main menu, asking whether to close the game\n", fields[game].name);

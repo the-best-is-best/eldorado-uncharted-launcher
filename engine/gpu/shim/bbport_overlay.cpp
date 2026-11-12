@@ -109,6 +109,7 @@ extern "C" const unsigned char bb_font_ja_ttf_end[];
 extern "C" void runtime_restart(void); // bb-probe (probe.c)
 extern "C" void runtime_mouse_get(float* look, float* aim, float* vertical); // runtime_pad.c
 extern "C" void runtime_mouse_set(float look, float aim, float vertical);
+extern "C" int runtime_menu_open(void);        // runtime_menu_watch.c: a pause menu page is on screen in play
 extern "C" int runtime_dev_text_shown(void);  // runtime_pad.c: developer text 1 shown, 0 hidden, -1 no developer mode
 
 namespace BbOverlay {
@@ -2433,6 +2434,8 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     ImGui::NewFrame();
     if (menu_open) {
         Menu();
+    } else if (runtime_menu_open()) {
+        StoryProgressBanner();  // over the game's own pause menu
     }
     // Not over the preparation page or the loading screen: a "0 FPS" there says nothing.
     if (BbSettings::Get().show_fps && !menu_open && !prep_screen.load(std::memory_order_relaxed) &&
