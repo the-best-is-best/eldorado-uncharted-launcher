@@ -179,10 +179,7 @@ def exposure_patch(name):
 #   player 0x16150 calls 0x31ef00 (pow of the damage base) at 0x16200 (the weapon damage 0x15e50, which serves every
 #   shooter, is left alone). U2: the NPC weapon damage 0x24fbe0 calls
 #   0x4aba00 at 0x24fc50/0x24fe4c/0x24fe6e, and the attack helicopter's machine-gun bullet (helicopter.cpp 0xa855e0,
-#   damage = the MG stat * this value) at 0xa8624a, and the soldiers' melee blows on Nate (player-fight-npc-moves.cpp:
-#   two moves, 0x831e30 / 0x832920, damage = the move's min/max pair lerped by this value, sent to the player handle
-#   0x115bd20 as the attack's int at +0x24) at 0x832270/0x832d60. Explosions: process-explosion.cpp 0x98a4f0 drops the
-#   lethal inner zone for a player-type target on Explorer; that difficulty==0 test reads L as well. The helicopter's rockets and wreck explosions hurt Nate through
+#   damage = the MG stat * this value) at 0xa8624a. The helicopter's rockets and wreck explosions hurt Nate through
 #   the explosion process (process-explosion.cpp 0x98c800, "Explosive Damage to Player", the getter's case 8 above).
 #   U3: the NPC weapon damage 0x366af0 calls the difficulty object's (0x16fb750) value 0x552a20 at 0x366c2b/0x366def,
 #   and the two aircraft guns that share the global difficulty table's field +0x50 (damage = the gun's int * this
@@ -283,20 +280,14 @@ def _u2_nate(level):
                                  (0xd5070d, '83f805754dc5fa10471cc3', 0x44)])
     stub, back = 0xfe2be0, 0x4abaf5
     items = [bytes.fromhex('488b4508')]                                         # mov rax, [rbp+8]
-    # NPC weapon damage x3, helicopter gun, soldier melee blows on Nate (player-fight-npc-moves.cpp, two moves)
-    for ret in (0x24fc55, 0x24fe51, 0x24fe73, 0xa8624f, 0x832275, 0x832d65):
+    for ret in (0x24fc55, 0x24fe51, 0x24fe73, 0xa8624f):
         items += [('rip', b'\x48\x8d\x0d', ret, b''), bytes.fromhex('4839c8'), ('je', 'nate')]
     items += [('rip', b'\x48\x8d\x05', 0x1059640, b''), bytes.fromhex('8bb8a4480000'), ('jmp', back),
               ('label', 'nate'), _imm(0xbf, level, 5), ('jmp', back)]
     code = _asm(stub, items)
-    # Explosion zones (process-explosion.cpp 0x98a4f0): on Explorer a player-type target (flag 0x80000) whose explosion
-    # has [params+0x88] set skips the innermost, lethal zone. "lea rdx, [game]; cmp [rdx+0x48a4], 0" (the jne after it
-    # decides) becomes "mov edx, L; test edx, edx" (rdx is dead there).
-    explosion = _imm(0xba, level, 5) + bytes.fromhex('85d2')
     return patches + [
         (0x4abae8, '488d0551dbba008bb8a4480000', _jump_to(0x4abae8, stub, 13).hex()),
         (0x24feb0, '488d0d8997e0008b89a4480000', _imm(0xb9, level, 13).hex()),
-        (0x98a5c7, '488d1572f06c0083baa448000000', explosion.ljust(14, b'\x90').hex()),
         (stub, '00' * len(code), code.hex())]
 
 
