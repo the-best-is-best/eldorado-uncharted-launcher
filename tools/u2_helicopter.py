@@ -48,7 +48,7 @@ FILES = {
         "declared": (0x1A004, 0x1A00C, 0x1A014),   # the script's starting values (int32, little endian)
         "tiers": ((0xC0C2, 0xC0E2, 0xC102), (0xC14E, 0xC16E, 0xC18E), (0xC1B2, 0xC1D2, 0xC1F2)),
         "name": "Nepal helicopter",
-        "want": lambda level: (1, 2, 3),   # 3 hits on every level, as asked (the game: 3 / 10 / 14)
+        "want": lambda level: (3, 6, 9),   # stage 2 at 3 hits, stage 3 at 6, destroyed at 9, on every level, as asked
     },
     "ss-train.bin": {
         "md5": "71d02e22ef5be69d2b6b68d45547c0a6",
