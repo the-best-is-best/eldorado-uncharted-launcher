@@ -29,6 +29,18 @@ TRAIN_LIMITS = ((1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110),
                 (1, 15, 30, 45, 60, 75, 90, 105, 120, 130, 140, 150),
                 (1, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220))
 
+# The train helicopter is destroyed on the hit after its last threshold; the game's own numbers (111 / 151 / 221) took
+# too long to shoot down with the truck's gun, so the launcher's levels use these hits instead (the stage thresholds
+# between 1 and the last are spread evenly, so smoke and fire still come in stages).
+TRAIN_KILL_HITS = {0: 30, 1: 30, 2: 50, 3: 100}
+
+
+def train_thresholds(level):
+    kill = TRAIN_KILL_HITS[level]
+    last = kill - 1
+    return tuple([1] + [1 + round((last - 1) * i / 11) for i in range(1, 12)])
+
+
 FILES = {
     "ss-warzone.bin": {   # update 1.02's file (Game and Game original agree)
         "md5": "51bd4f5d54af1e18868aac6091edf936",
@@ -45,6 +57,7 @@ FILES = {
                   tuple(0x55CF2 + 0x20 * i for i in range(12)),
                   tuple(0x55F1E + 0x20 * i for i in range(12))),
         "name": "train helicopter",
+        "want": train_thresholds,
     },
 }
 
@@ -60,7 +73,7 @@ def patched_file(name, data, level):
     if hashlib.md5(data).hexdigest() != spec["md5"] or level not in TIER_OF_LEVEL:
         return None
     out = bytearray(data)
-    want = spec["limits"][TIER_OF_LEVEL[level]]
+    want = spec["want"](level) if "want" in spec else spec["limits"][TIER_OF_LEVEL[level]]
     # The declared values are the top tier's; the dda function's three tiers hold their own.
     for offset, old, value in zip(spec["declared"], spec["limits"][2], want):
         if out[offset] != old:
@@ -107,7 +120,7 @@ def _apply_one(view, name, level):
     if data != new:
         path.unlink()          # a hard link: only the view's name goes, the game's file stays
         path.write_bytes(new)
-    kill = spec["limits"][TIER_OF_LEVEL[level]][-1]
+    kill = (spec["want"](level) if "want" in spec else spec["limits"][TIER_OF_LEVEL[level]])[-1]
     return f"{spec['name']}: destroyed at {kill}{'' if name == 'ss-warzone.bin' else ' + 1'} hits (level {level})"
 
 
