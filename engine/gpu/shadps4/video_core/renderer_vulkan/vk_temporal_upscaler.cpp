@@ -336,6 +336,21 @@ void TemporalUpscaler::OnSceneColor(VideoCore::ImageId color) {
 }
 
 namespace {
+/// bbport: the last DLSS evaluation was in a fade (FadeReset: its history reset, or the picture still getting
+/// brighter or darker): the next frame is drawn without jitter (BB_DLSS_FADE_NOJITTER=0: with it, as before). Through a fade (a load, a checkpoint restart, U3's
+/// white haze) the jitter showed the games' screen-door dither (haze, dust trails) as a blocky checkerboard band and
+/// a shimmer for ~1-2 s, at 60 FPS clearly (a player's RTX 5060 at ~68), at 144 hardly: with the history reset each
+/// frame and with it kept alike (and with preset K too). U3 #389 checkpoint restart at 60 FPS: band gone; U2 #213
+/// (the fade stripes the reset is for) stays clean (0.04, reset with jitter 0.00, no reset 1.13). DLSS only.
+bool fade_was_resetting = false;
+bool FadeNoJitter() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_DLSS_FADE_NOJITTER");
+        return !(env && env[0] == '0');
+    }();
+    return on;
+}
+
 float Halton(u32 index, u32 base) {
     float f = 1.0f, result = 0.0f;
     for (u32 i = index; i > 0; i /= base) {
@@ -491,6 +506,9 @@ bool TemporalUpscaler::OnFrameStart() {
     jitter_flip = flip;
     jitter_index = jitter_index % phases + 1;
     jitter = {Halton(jitter_index, 2) - 0.5f, Halton(jitter_index, 3) - 0.5f};
+    if (fade_was_resetting && FadeNoJitter() && BbSettings::Get().upscaler == BbSettings::UpscalerDlss) {
+        jitter = {};
+    }
     // bbport diagnosis (BB_JITTER_DIAG=1): jitter steps per shown frame, and the distinct jitter
     // positions the upscaler was given over 5 s.
     if (static const bool diag = std::getenv("BB_JITTER_DIAG") != nullptr; diag) {
@@ -2546,13 +2564,18 @@ u32 fade_next = 0;
 std::chrono::steady_clock::time_point fade_window_until{}, fade_last_call{};
 float fade_previous = -1.0f;
 int fade_steady = 0;
-std::array<float, 32> fade_history{}; // brightness readings of the window, a ring
-size_t fade_history_count = 0;
+int fade_quiet = 0; // frames in a row with the brightness neither rising nor falling (the jitter's hold)
 constexpr u32 FadeSamples = 64;
+std::array<float, 32> fade_history{}; // brightness readings of the window, a ring
+// The same readings per sample point: a fade moves (nearly) all of them the same way, a moving camera some up and
+// some down (U3 chapter 2, walking in the street: the mean wobbled 0.78x-1.24x and kept the history resetting).
+std::array<std::array<float, FadeSamples>, 32> fade_sample_history{};
+size_t fade_history_count = 0;
 } // namespace
 std::atomic<long long> g_fade_cut_ns{0}; // set at a camera cut (ConsumeCut)
 
 bool TemporalUpscaler::FadeReset(vk::CommandBuffer cmdbuf, const Dlss::Resource& color, bool reset) {
+    fade_was_resetting = false; // set again below while a fade is on
     static const bool enabled = [] {
         const char* env = std::getenv("BB_DLSS_FADE_RESET");
         return !(env && env[0] == '0');
@@ -2567,6 +2590,7 @@ bool TemporalUpscaler::FadeReset(vk::CommandBuffer cmdbuf, const Dlss::Resource&
     if (first || now - fade_last_call > std::chrono::milliseconds(300) || cut_ns != 0) {
         fade_window_until = now + std::chrono::seconds(5);
         fade_steady = 0;
+        fade_quiet = 0;
         fade_previous = -1.0f;
         fade_history_count = 0;
     }
@@ -2588,13 +2612,15 @@ bool TemporalUpscaler::FadeReset(vk::CommandBuffer cmdbuf, const Dlss::Resource&
     // The brightness of a frame copied a few frames ago (finished on the GPU by now).
     FadeSlot& slot = fade_slots[fade_next];
     float brightness = -1.0f;
+    std::array<float, FadeSamples> samples{};
     if (slot.pending && scheduler.IsFree(slot.tick)) {
         vmaInvalidateAllocation(instance.GetAllocator(), slot.allocation, 0, VK_WHOLE_SIZE);
         float sum = 0.0f;
         for (u32 i = 0; i < FadeSamples; ++i) {
+            float value = 0.0f;
             if (slot.bytes_per_pixel == 4) {
                 const u8* p = static_cast<const u8*>(slot.mapped) + i * 4;
-                sum += (p[0] + p[1] + p[2]) / (3.0f * 255.0f);
+                value = (p[0] + p[1] + p[2]) / (3.0f * 255.0f);
             } else {
                 const u16* p = reinterpret_cast<const u16*>(static_cast<const u8*>(slot.mapped) + i * 8);
                 for (int c = 0; c < 3; ++c) {
@@ -2602,9 +2628,11 @@ bool TemporalUpscaler::FadeReset(vk::CommandBuffer cmdbuf, const Dlss::Resource&
                     const u32 e = (h >> 10) & 0x1f, m = h & 0x3ff;
                     const float v = e == 0 ? m / 1024.0f / 16384.0f
                                            : (1.0f + m / 1024.0f) * std::ldexp(1.0f, int(e) - 15);
-                    sum += std::min(v, 4.0f) / 3.0f;
+                    value += std::min(v, 4.0f) / 3.0f;
                 }
             }
+            samples[i] = value;
+            sum += value;
         }
         brightness = sum / FadeSamples;
         slot.pending = false;
@@ -2667,18 +2695,39 @@ bool TemporalUpscaler::FadeReset(vk::CommandBuffer cmdbuf, const Dlss::Resource&
     // the rise is measured against the reading ~32 frames earlier (3% and a small floor). Readings
     // are kept on every frame; a (near) black picture also opens the window: a checkpoint restart
     // fades out and in without any camera cut (Drake restarts where he stood).
-    bool brightening = false;
+    // A rise or fall counts as a fade only when the sample points that changed (by more than 1%) went the same way:
+    // 4 in 5 of them at least, and 8 or more changed (a fade from black leaves its black parts as they are; the
+    // camera moving over the scene brightens some and darkens others).
+    bool brightening = false, darkening = false, fast_rise = false;
+    int rising = 0, falling = 0;
     const bool have_reading = brightness >= 0.0f;
     if (have_reading) {
         const bool have_earlier = fade_history_count >= fade_history.size();
-        const float oldest = have_earlier ? fade_history[fade_history_count % fade_history.size()]
-                                          : fade_history[0];
-        brightening = fade_history_count > 0 && brightness > oldest * 1.03f + 0.002f;
+        const size_t oldest_index = have_earlier ? fade_history_count % fade_history.size() : 0;
+        const float oldest = fade_history[oldest_index];
+        if (fade_history_count > 0) {
+            const auto& before = fade_sample_history[oldest_index];
+            for (u32 i = 0; i < FadeSamples; ++i) {
+                rising += samples[i] > before[i] * 1.01f + 0.002f;
+                falling += samples[i] < before[i] * 0.99f - 0.002f;
+            }
+        }
+        const int changed = rising + falling;
+        const bool together_up = changed >= 8 && rising * 5 >= changed * 4;
+        const bool together_down = changed >= 8 && falling * 5 >= changed * 4;
+        brightening = fade_history_count > 0 && brightness > oldest * 1.03f + 0.002f && together_up;
+        darkening = fade_history_count > 0 && brightness < oldest * 0.97f - 0.002f && together_down;
+        // The history is reset only while the picture brightens fast (more than 10% on 32 frames): U2's ice cave
+        // builds its stripes there (+13-25% to the end of its fade-in), while the slow tail of a fade-in (U3's
+        // loads: +7-10% for ~0.75 s, the picture already clear enough to walk in) keeps it, the jitter still off.
+        fast_rise = brightening && brightness > oldest * 1.10f + 0.002f;
+        fade_sample_history[fade_history_count % fade_history.size()] = samples;
         fade_history[fade_history_count % fade_history.size()] = brightness;
         ++fade_history_count;
         if (brightness < 0.03f) {
             fade_window_until = now + std::chrono::seconds(5);
             fade_steady = 0;
+            fade_quiet = 0;
         }
         fade_previous = brightness;
     }
@@ -2687,17 +2736,39 @@ bool TemporalUpscaler::FadeReset(vk::CommandBuffer cmdbuf, const Dlss::Resource&
     }
     // In the window: reset while the picture gets brighter (darkness alone does not: a dark scene
     // keeps its history), then until 8 steady frames. No reading yet: the start of the window.
-    const bool fading = !have_reading ? fade_steady == 0 : brightening;
+    const bool fading = !have_reading ? fade_steady == 0 : fast_rise;
     fade_steady = fading ? 0 : fade_steady + 1;
     const bool resetting = fade_steady < 8;
+    // The jitter stays off while the picture changes either way (U3's checkpoint restart: black, a white flash,
+    // then the haze clears, darker for ~2 s, then the eye adaptation brightens): a reset frame, or any rise or
+    // fall, until 8 quiet frames.
+    const bool changing = !have_reading ? fade_quiet == 0 : (brightening || darkening);
+    fade_quiet = changing ? 0 : fade_quiet + 1;
+    fade_was_resetting = resetting || fade_quiet < 8;
     static int noted = 0;
     if (noted < 4000 && std::getenv("BB_DLSS_FADE_LOG")) {
         ++noted;
-        std::printf("DLSS fade: t=%.3f brightness %.4f %s (steady %d)\n",
+        std::printf("DLSS fade: t=%.3f brightness %.4f %s (steady %d)%s up %d down %d\n",
                     std::chrono::duration<double>(now.time_since_epoch()).count(), brightness,
-                    resetting ? "reset" : "kept", fade_steady);
+                    resetting ? "reset" : "kept", fade_steady, fade_was_resetting ? " no jitter" : "", rising,
+                    falling);
     }
-    return resetting;
+    // The history is reset in fades in Uncharted 2 only: its ice cave builds stripes from the fade frames without
+    // (stripe score 1.15 kept, 0.04 reset). Uncharted 1 and 3 keep it, the jitter still off: their loads fade in
+    // from black fast too, and walking during it showed thin detail without DLSS's history for ~2 s (U3 chapter 2's
+    // chain railings); they never had stripes. BB_DLSS_FADE_KEEP_HISTORY=1 / =0: keep / reset in every game.
+    static const bool keep_history = [] {
+        const char* env = std::getenv("BB_DLSS_FADE_KEEP_HISTORY");
+        if (env && *env) {
+            return env[0] == '1';
+        }
+        const char* exe = std::getenv("BB_EXE");
+        const bool u2 = exe && std::strstr(exe, "big2");
+        std::printf("DLSS fade: history %s during fades (%s)\n", u2 ? "reset" : "kept",
+                    u2 ? "Uncharted 2" : "not Uncharted 2");
+        return !u2;
+    }();
+    return resetting && !keep_history;
 }
 
 bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource& color,
