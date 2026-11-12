@@ -844,8 +844,11 @@ void SaveSlotsPage() {
                                 "unlocks and trophies are not changed."));
 }
 
+void StoryProgressBanner();
+
 void Menu() {
     auto& s = BbSettings::Get();
+    StoryProgressBanner();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 40.0f * base_scale,
                                    viewport->WorkPos.y + 40.0f * base_scale),
@@ -1544,6 +1547,59 @@ void LoadingScreen() {
     const float phase = std::fmod(t * 0.6f, 1.0f);
     look.Bar(-1.0f, phase * phase * (3.0f - 2.0f * phase));
     look.Centred(T("Loading"), look.cy + 178.0f * look.s, 20.0f * look.s, look.dim);
+}
+
+// While this menu is open: at the very top of the screen, how far through the story the player is, in the game's
+// colour (the launcher's look, like the loading page): the percentage, a rounded bar, and the chapter. The share is
+// the place of the current checkpoint among the game's playable checkpoints (game order), 0% at the first, 100% at
+// the last. Shown only while the current checkpoint is known.
+void StoryProgressBanner() {
+    static std::vector<BbSaves::Checkpoint> list;
+    if (list.empty()) {
+        list = BbSaves::Checkpoints();
+    }
+    const BbSaves::Checkpoint now = BbSaves::Current();
+    if (!now.known || list.size() < 2) {
+        return;
+    }
+    int current = -1;
+    for (int i = 0; i < static_cast<int>(list.size()); ++i) {
+        if (list[i].task == now.task) {
+            current = i;
+            break;
+        }
+        if (now.row >= 0 && list[i].row >= 0 && list[i].row <= now.row &&
+            (current < 0 || list[i].row > list[current].row)) {
+            current = i;
+        }
+    }
+    if (current < 0) {
+        return;
+    }
+    const float fraction = static_cast<float>(current) / static_cast<float>(list.size() - 1);
+    const PageLook look(ImGui::GetForegroundDrawList());
+    const float s = look.s, w = 520.0f * s, h = 66.0f * s, x = look.p0.x + (look.size.x - w) * 0.5f, y = look.p0.y;
+    ImDrawList* draw = look.draw;
+    // A plate hanging from the top edge, a line of the game's colour along its bottom.
+    draw->AddRectFilled(ImVec2(x, y - 20.0f * s), ImVec2(x + w, y + h), IM_COL32(0x12, 0x15, 0x1b, 235), 14.0f * s);
+    draw->AddRect(ImVec2(x, y - 20.0f * s), ImVec2(x + w, y + h), look.Accent(90), 14.0f * s, 0, std::max(1.0f, 1.5f * s));
+    char percent[16];
+    std::snprintf(percent, sizeof(percent), "%d%%", static_cast<int>(fraction * 100.0f + 0.5f));
+    const float pad = 22.0f * s;
+    const float pct_px = 30.0f * s;
+    const float pct_w = look.font->CalcTextSizeA(pct_px, FLT_MAX, 0.0f, percent).x;
+    draw->AddText(look.font, pct_px, ImVec2(x + pad, y + 8.0f * s), look.Accent(), percent);
+    std::string chapter = std::string(T("Chapter")) + " " + std::to_string(now.chapter);
+    if (!now.chapter_title.empty()) {
+        chapter += "  " + now.chapter_title;
+    }
+    const float tx = x + pad + pct_w + 18.0f * s, tpx = 17.0f * s;
+    draw->AddText(look.font, tpx, ImVec2(tx, y + 12.0f * s), look.ink, chapter.c_str());
+    const float bx = tx, bw = x + w - pad - tx, bh = std::max(4.0f, 6.0f * s), by = y + 42.0f * s;
+    draw->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), look.track, bh * 0.5f);
+    if (fraction > 0.0f) {
+        draw->AddRectFilled(ImVec2(bx, by), ImVec2(bx + std::max(bh, bw * fraction), by + bh), look.Accent(), bh * 0.5f);
+    }
 }
 
 void ScreenshotNotice() {
