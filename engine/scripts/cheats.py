@@ -178,8 +178,10 @@ def exposure_patch(name):
 #   return address is the NPC damage code's call, the level is L, else the game's own. U1: npc.cpp's damage to the
 #   player 0x16150 calls 0x31ef00 (pow of the damage base) at 0x16200 (the weapon damage 0x15e50, which serves every
 #   shooter, is left alone). U2: the NPC weapon damage 0x24fbe0 calls
-#   0x4aba00 at 0x24fc50/0x24fe4c/0x24fe6e. U3: the NPC weapon damage 0x366af0 calls the difficulty object's
-#   (0x16fb750) value 0x552a20 at 0x366c2b/0x366def.
+#   0x4aba00 at 0x24fc50/0x24fe4c/0x24fe6e, and the attack helicopter's machine-gun bullet (helicopter.cpp 0xa855e0,
+#   damage = the MG stat * this value) at 0xa8624a. The helicopter's rockets and wreck explosions hurt Nate through
+#   the explosion process (process-explosion.cpp 0x98c800, "Explosive Damage to Player", the getter's case 8 above).
+#   U3: the NPC weapon damage 0x366af0 calls the difficulty object's (0x16fb750) value 0x552a20 at 0x366c2b/0x366def.
 # - The same functions' own Hard/Crushing/Brutal multipliers and Explorer's damage floor: their difficulty loads
 #   become "mov reg, L".
 # Stubs: U1 after the onehit stub, U2/U3 right after the code's last byte (the ultrawide stubs move 0x100 on).
@@ -274,7 +276,7 @@ def _u2_nate(level):
                                  (0xd5070d, '83f805754dc5fa10471cc3', 0x44)])
     stub, back = 0xfe2be0, 0x4abaf5
     items = [bytes.fromhex('488b4508')]                                         # mov rax, [rbp+8]
-    for ret in (0x24fc55, 0x24fe51, 0x24fe73):
+    for ret in (0x24fc55, 0x24fe51, 0x24fe73, 0xa8624f):
         items += [('rip', b'\x48\x8d\x0d', ret, b''), bytes.fromhex('4839c8'), ('je', 'nate')]
     items += [('rip', b'\x48\x8d\x05', 0x1059640, b''), bytes.fromhex('8bb8a4480000'), ('jmp', back),
               ('label', 'nate'), _imm(0xbf, level, 5), ('jmp', back)]
