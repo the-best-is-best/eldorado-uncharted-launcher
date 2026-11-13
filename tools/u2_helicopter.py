@@ -29,6 +29,12 @@ TRAIN_LIMITS = ((1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110),
                 (1, 15, 30, 45, 60, 75, 90, 105, 120, 130, 140, 150),
                 (1, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220))
 
+GUARDIAN_HIT_POINTS = {0: 15, 1: 75, 2: 125, 3: 200}
+# (offset, offset + 4, old value) of the five H immediates: difficulty 0, difficulty 1, retries > 3, dda < 16, else.
+GUARDIAN_HEALTH = ((0x4CF6, 0x4CFA, 15), (0x4D52, 0x4D56, 75), (0x4DBE, 0x4DC2, 75), (0x4E1E, 0x4E22, 125),
+                   (0x4E66, 0x4E6A, 200))
+
+
 def ice_cave_guardian(data, level):
     """ss-ice-cave.bin, the first Guardian pin (state-script 0x850): after Nate's first hit the script heals the Guardian
     to 0.85 of its health when the GAME's difficulty is Normal or Hard (lambda 0x24ae0: get-difficulty not 0 or 1), so only
@@ -48,6 +54,14 @@ def ice_cave_guardian(data, level):
         out[0x3E720:0x3E724] = bytes.fromhex("0000003f")
         for offset in (0xD3DC, 0xCE5C):
             out[offset:offset + 4] = bytes.fromhex("cdcccc3d")
+    # The Guardians' hit points (lambda 0x1b70, set-health-parameters(npc, -1, -1, H, H)): the game picks H from ITS
+    # difficulty (0 -> 15, 1 -> 75), a retry counter (75) and get-dda (< 16 -> 125, else 200). Every branch gets the
+    # launcher level's own value instead: 15, 75, 125, 200. Whether this lambda reaches the ice cave beast in play is not
+    # proven (the lift ride sets its Guardians to 100 itself), so this may show nothing.
+    for (a, b, old) in GUARDIAN_HEALTH:
+        if out[a] != old or out[b] != old:
+            return None
+        out[a] = out[b] = GUARDIAN_HIT_POINTS[level]
     return bytes(out)
 
 
@@ -72,7 +86,7 @@ FILES = {
         "md5": "3145bc9d7c6babc9471874fef251f5da",
         "builder": ice_cave_guardian,
         "name": "ice cave Guardian",
-        "log": lambda level: "no heal after the first hit, lift ride needs 10% damage" if level in (0, 1) else "the game's own (healed to 85%, lift ride needs 30%)",
+        "log": lambda level: ("no heal after the first hit, lift ride needs 10% damage" if level in (0, 1) else "heal to 85%, lift ride needs 30% (the game's own)") + f", Guardians {GUARDIAN_HIT_POINTS[level]} hit points",
     },
 }
 
