@@ -38,8 +38,16 @@ def ice_cave_guardian(data, level):
     out = bytearray(data)
     if bytes(out[0x3E720:0x3E724]) != bytes.fromhex("9a99593f"):
         return None
+    # The lift ride (state-script 0x8d0, two Guardians): the grab is won when either Guardian lost more than the tag
+    # 0x7c4fcd26 of its health (0.3 declared at 0xd3dc; the same tag is declared again, unused, at 0xce5c). Explorer and Easy:
+    # 0.1 (a third of the game's); Normal and Hard keep the game's own.
+    for offset in (0xD3DC, 0xCE5C):
+        if bytes(out[offset:offset + 4]) != bytes.fromhex("9a99993e"):
+            return None
     if level in (0, 1):
         out[0x3E720:0x3E724] = bytes.fromhex("0000003f")
+        for offset in (0xD3DC, 0xCE5C):
+            out[offset:offset + 4] = bytes.fromhex("cdcccc3d")
     return bytes(out)
 
 
@@ -64,7 +72,7 @@ FILES = {
         "md5": "3145bc9d7c6babc9471874fef251f5da",
         "builder": ice_cave_guardian,
         "name": "ice cave Guardian",
-        "log": lambda level: "no heal after the first hit" if level in (0, 1) else "healed to 85% after the first hit (the game's own)",
+        "log": lambda level: "no heal after the first hit, lift ride needs 10% damage" if level in (0, 1) else "the game's own (healed to 85%, lift ride needs 30%)",
     },
 }
 
