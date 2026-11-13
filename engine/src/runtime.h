@@ -126,6 +126,7 @@ void runtime_menu_watch(int game, const unsigned char *host);
 /* True while a game's main menu is on screen (its back button then asks to close the game, runtime_pad.c). */
 int runtime_menu_at_main(void);
 int runtime_menu_open(void);
+void runtime_pause_armed(void);
 /* runtime_menu_watch.c, BB_SKIP_TITLE=1: the Cross taps that move the title page and the start screens on, up to
  * the main menu (or-ed into the pad, runtime_pad.c). */
 uint32_t runtime_continue_buttons(void);

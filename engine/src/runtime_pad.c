@@ -2851,7 +2851,7 @@ static void sample(PadData *d) {
         const uint64_t t=now_us();
         const int options=(d->buttons & BTN_OPTIONS)!=0;
         if (t>=options_until_us) {
-            if (options && !options_held) menu_up=!menu_up;
+            if (options && !options_held) { menu_up=!menu_up; if (menu_up) runtime_pause_armed(); }
             else if (d->buttons & (BTN_CIRCLE|BTN_CROSS)) menu_up=0;
         }
         options_held=options;
@@ -2859,6 +2859,7 @@ static void sample(PadData *d) {
             if (runtime_play_calls && !menu_up) {
                 options_until_us=t+150000u;
                 menu_up=1;
+                runtime_pause_armed();
                 printf("Pause: back from the background: the game's pause menu\n");
             } else {
                 printf("Pause: back from the background (%s): no menu pressed\n",

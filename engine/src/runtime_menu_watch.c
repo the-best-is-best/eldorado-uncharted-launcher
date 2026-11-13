@@ -30,7 +30,6 @@ static const MenuFields fields[3]={{"Uncharted 1",0x790,0x794},{"Uncharted 2",0x
 static void probe(const char *game, const unsigned char *manager);
 
 static double now_s(void);
-static volatile double pause_menu_seen; /* a menu page on screen after play began (the pause menu and its pages) */
 static volatile double main_menu_seen; /* when a menu update last saw the main menu on screen (depth 1, page 0x0c) */
 /* Uncharted 1's pause menu Options page has the main menu's depth and page too (7 Nov 2026: Back there asked to close
  * the game). The main menu of a start comes before any play (camera hooks: runtime_play_calls), the pause menu after
@@ -44,13 +43,23 @@ int runtime_menu_at_main(void) {
     return main_menu_seen > 0 && now_s() - main_menu_seen < 0.25 && before_play();
 }
 
-/* The pause menu or one of its pages is on screen (host depth 1 or more once the game was in play; Uncharted 1's pause
- * Options page counts: its depth is the main menu's). */
+/* The pause menu is open: Options (Esc) was pressed in play (runtime_pad.c arms this) and the menu mouse sees a game menu
+ * on screen. The menu mouse alone also reports menus in play (after an autosave, 7 Nov 2026 log), so it only counts after
+ * Options; it ends the first time the menu is gone, or if none came up within 2 s of the press. */
+static volatile double pause_armed_at;
+static volatile int pause_seen;
+void runtime_pause_armed(void) {
+    pause_armed_at = now_s();
+    pause_seen = 0;
+}
 int runtime_menu_open(void) {
-    if (before_play()) return 0;
-    /* The menu mouse already knows when a game menu is on screen (its log: "Menu mouse: menu on screen"), in the pause
-     * menu too; the host depth is the second witness. */
-    return runtime_menumouse_active() || (pause_menu_seen > 0 && now_s() - pause_menu_seen < 0.7);
+    if (before_play() || pause_armed_at <= 0) return 0;
+    if (runtime_menumouse_active()) {
+        pause_seen = 1;
+        return 1;
+    }
+    if (pause_seen || now_s() - pause_armed_at > 2.0) pause_armed_at = 0;
+    return 0;
 }
 
 static void continue_watch(int game, const unsigned char *host);
@@ -65,7 +74,6 @@ void runtime_menu_watch(int game, const unsigned char *host) {
     memcpy(&depth, host + fields[game].depth, 4);
     memcpy(&page, host + fields[game].page, 4);
     if (depth == 1 && page == MAIN_MENU_PAGE) main_menu_seen = now_s();
-    if (depth >= 1 && depth < 16 && !before_play()) pause_menu_seen = now_s();
     if (host == last_host[game] && last_depth[game] == 1 && depth == 0 && last_page[game] == MAIN_MENU_PAGE &&
         before_play()) {
         printf("Menu: %s: back from the main menu, asking whether to close the game\n", fields[game].name);
