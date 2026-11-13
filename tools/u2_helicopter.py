@@ -29,6 +29,20 @@ TRAIN_LIMITS = ((1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110),
                 (1, 15, 30, 45, 60, 75, 90, 105, 120, 130, 140, 150),
                 (1, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220))
 
+def ice_cave_guardian(data, level):
+    """ss-ice-cave.bin, the first Guardian pin (state-script 0x850): after Nate's first hit the script heals the Guardian
+    to 0.85 of its health when the GAME's difficulty is Normal or Hard (lambda 0x24ae0: get-difficulty not 0 or 1), so only
+    ~5% has to be shot off in the second pin; on Explorer and Easy it is not healed. The 0.85 (float at 0x3e720, shared by the
+    compare and the set) becomes 0.5 for the launcher's Explorer and Easy, which is the Guardian's health at the pounce:
+    no heal. Normal and Hard keep the game's own 0.85."""
+    out = bytearray(data)
+    if bytes(out[0x3E720:0x3E724]) != bytes.fromhex("9a99593f"):
+        return None
+    if level in (0, 1):
+        out[0x3E720:0x3E724] = bytes.fromhex("0000003f")
+    return bytes(out)
+
+
 FILES = {
     "ss-warzone.bin": {   # update 1.02's file (Game and Game original agree)
         "md5": "51bd4f5d54af1e18868aac6091edf936",
@@ -46,6 +60,12 @@ FILES = {
                   tuple(0x55F1E + 0x20 * i for i in range(12))),
         "name": "train helicopter",
     },
+    "ss-ice-cave.bin": {
+        "md5": "3145bc9d7c6babc9471874fef251f5da",
+        "builder": ice_cave_guardian,
+        "name": "ice cave Guardian",
+        "log": lambda level: "no heal after the first hit" if level in (0, 1) else "healed to 85% after the first hit (the game's own)",
+    },
 }
 
 # Kept for the older callers and tests: the Nepal helicopter's table.
@@ -59,6 +79,8 @@ def patched_file(name, data, level):
     spec = FILES[name]
     if hashlib.md5(data).hexdigest() != spec["md5"] or level not in TIER_OF_LEVEL:
         return None
+    if "builder" in spec:
+        return spec["builder"](data, level)
     out = bytearray(data)
     want = spec["want"](level) if "want" in spec else spec["limits"][TIER_OF_LEVEL[level]]
     # The declared values are the top tier's; the dda function's three tiers hold their own.
@@ -107,6 +129,8 @@ def _apply_one(view, name, level):
     if data != new:
         path.unlink()          # a hard link: only the view's name goes, the game's file stays
         path.write_bytes(new)
+    if "log" in spec:
+        return f"{spec['name']}: {spec['log'](level)} (level {level})"
     kill = (spec["want"](level) if "want" in spec else spec["limits"][TIER_OF_LEVEL[level]])[-1]
     return f"{spec['name']}: destroyed at {kill}{'' if name == 'ss-warzone.bin' else ' + 1'} hits (level {level})"
 
