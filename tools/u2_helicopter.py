@@ -16,6 +16,7 @@ The view of the game (tools/game_update_view.py) holds each file as a link to th
 IN THE VIEW ONLY and puts the link back for a level that needs no patch. The game's files are not touched.
 """
 import hashlib
+import struct
 import os
 from pathlib import Path
 
@@ -33,6 +34,27 @@ GUARDIAN_HIT_POINTS = {0: 15, 1: 75, 2: 125, 3: 200}
 # (offset, offset + 4, old value) of the five H immediates: difficulty 0, difficulty 1, retries > 3, dda < 16, else.
 GUARDIAN_HEALTH = ((0x4CF6, 0x4CFA, 15), (0x4D52, 0x4D56, 75), (0x4DBE, 0x4DC2, 75), (0x4E1E, 0x4E22, 125),
                    (0x4E66, 0x4E6A, 200))
+
+
+# sla-fights.bin, the horned Guardians' attack records (type 0x777f1065, +0x50 points at five floats): the damage an attack
+# does to Nate is those floats interpolated at a rating the GAME's difficulty picks (engine 0x4abec0 with dda-settings.bin),
+# truncated to an int. At the default ratings Explorer 0.01, Easy 2.0, Normal 5.0, Hard 7.5 that is the table below.
+# Each array becomes five copies of the launcher level's value (+0.25, the int cut keeps the table's number), so the
+# damage no longer depends on the game's difficulty. It serves every sla-beast fight of the game, not only the ice cave.
+SLA_ARRAYS = ((0x3A8, (10, 20, 25, 40, 45), (10, 18, 25, 32)),      # close-b
+              (0x3FC, (20, 30, 40, 50, 60), (20, 28, 40, 45)),      # close-a
+              (0x448, (20, 30, 40, 50, 60), (20, 28, 40, 45)),      # dive attack
+              (0x49C, (20, 30, 40, 50, 60), (20, 28, 40, 45)),      # close-c
+              (0x5C8, (20, 30, 40, 50, 60), (20, 28, 40, 45)))      # jump attack
+
+
+def sla_fights(data, level):
+    out = bytearray(data)
+    for offset, old, by_level in SLA_ARRAYS:
+        if struct.unpack("<5f", bytes(out[offset:offset + 20])) != tuple(float(v) for v in old):
+            return None
+        out[offset:offset + 20] = struct.pack("<5f", *([by_level[level] + 0.25] * 5))
+    return bytes(out)
 
 
 def ice_cave_guardian(data, level):
@@ -81,6 +103,12 @@ FILES = {
                   tuple(0x55CF2 + 0x20 * i for i in range(12)),
                   tuple(0x55F1E + 0x20 * i for i in range(12))),
         "name": "train helicopter",
+    },
+    "sla-fights.bin": {
+        "md5": "a847202834f2fb667f35c8e381af963c",
+        "builder": sla_fights,
+        "name": "Guardian attacks",
+        "log": lambda level: f"{SLA_ARRAYS[1][2][level]} damage to Nate (close attack; the game's difficulty no longer matters)",
     },
     "ss-ice-cave.bin": {
         "md5": "3145bc9d7c6babc9471874fef251f5da",
