@@ -12,3 +12,20 @@ f27fb77                   shader variant lists of a player's cache
 # texture filtering, developer mode, the save list, pause in the background, camera up/down, 16:10 view, preparation page look.
 # Taken because the user asked for them (11 Nov 2026): sharpening at native size, texture filtering on Uncharted's scene draws,
 # Depth of field Off = the engine's own switch (U2/U3): e9a78f0 with a628ae1 and ba0b06d (their cheats.py machinery, no launcher toggles).
+
+# Taken on top of 0.3.6.53 (14 Nov 2026; Mevlock tags v0.3.6.54 .. v0.3.6.56; fixes only: no look, no new feature).
+# Commits of its src/ gpu/ (parts named):
+42cada1                   U3 chapters 13 and 14: no red flash on the ship (a resource table read while the game still wrote it)
+2089934                   practice mode: the save search lists the campaign saves of the practice folder (new save in practice crashed)
+387dce3                   Load Game could hang: kernel timer requests are taken before the timers run
+21549b7                   a depth target's stencil attachment is not linked to another image at the same address
+1cb3f0f                   U3 container yard: only a jump no platform can make is zeroed (characters hopped)
+6b0d7f2 + 41ffa12 (compat_win.c only)  file reads on a second handle of the file (positioned reads never move the file pointer)
+3489bd5 45be6b7 7b3c6a9   U2 Siege (ch. 19, #257): Tenzin no longer jitters after the double door (BB_U2_BUDDY_ZONE=0: off;
+                          BB_NPC_LOG=1 turns its diagnosis hooks on). The game's combat AI sends him to a 1 m zone, the walk code calls
+                          him "arrived" outside it, so it sent him again every few frames: the zone now accepts him once he walks there.
+864f1bb 5bf7298 d0013aa   U1 chapter 7 jeep judder with 8 threads or fewer: a job resumed by a counter wakes the sleeping workers
+f4c3054 66f2fb7 b2d392a   (U1 frame time: step cap carried over, BB_U1_FRAME_STATS / BB_U1_DT_LOG diagnostics, off unless asked)
+# Not taken: 8c962dc (U1 One-Hit jet ski: ours has its own, runtime_pad.c), 297f0e1 (checkpoint: ours has it), 50895f5 and 9b6c7e8
+# (Photo mode), e159c78 and fc096a7 (their golden cursor: ours is our own, gpu/shim/bbport_cursor.inc), 3f3100a 084cd9b f7b6a3c 659fbfb
+# dc442db 0fb08b3 (Controls tab, Keyboard / Mouse row, menu keys), 35bba45 (#830, to be looked at), the launcher's FSR 4 download.

@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <vector>
 #include <SDL3/SDL.h>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -74,6 +75,8 @@ u32 MouseBit(u8 button) {
     default: return 0u;
     }
 }
+
+#include "bbport_cursor.inc"
 } // namespace
 
 extern "C" void bbgpu_mouse_configure(int look) {
@@ -420,19 +423,35 @@ bool WindowSDL::PollEvents() {
         // while the game has the focus and nothing needs it (menu, text entry).
         const bool hide = window_focused && !text_active && !BbOverlay::CapturesInput() &&
                           SDL_GetTicksNS() - cursor_moved_ns > CursorIdleNs;
-        // In a game menu the cursor shows a hand over what answers a click (the menu mouse).
+        // In a game menu the cursor shows El Dorado's gold arrow (normal, over something that answers a click,
+        // pressed: the menu mouse), or the system arrow and hand.
         {
             static SDL_Cursor* arrow = nullptr;
             static SDL_Cursor* hand = nullptr;
-            static int shown = -1;
-            const int state = menu_cursor ? cursor_state.load() : 0;
-            const int want_shape = state == 0 ? 0 : 1;
+            static int shown = -1; // 0 arrow, 1 hand, 10 + n the menu cursor's look n
+            const int state = menu_cursor ? std::clamp(cursor_state.load(), 0, 2) : 0;
+            int want_shape = state == 0 ? 0 : 1;
+            if (menu_cursor && MenuCursorsOn() && !BbOverlay::CapturesInput()) {
+                int w = 0, h = 0;
+                SDL_GetWindowSizeInPixels(window, &w, &h);
+                const int size = std::clamp(static_cast<int>(h * 26.0f / 1080.0f + 0.5f), 16, 128);
+                if (size != menu_cursor_size || !menu_cursors[0]) {
+                    if (shown >= 10) { // (the one shown is about to be freed)
+                        SDL_SetCursor(SDL_GetDefaultCursor());
+                        shown = -1;
+                    }
+                    menu_cursors_failed = !BuildMenuCursors(size);
+                }
+                if (!menu_cursors_failed) {
+                    want_shape = 10 + state;
+                }
+            }
             if (want_shape != shown) {
                 if (!arrow) {
                     arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
                     hand = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
                 }
-                if (SDL_Cursor* c = want_shape ? hand : arrow) {
+                if (SDL_Cursor* c = want_shape >= 10 ? menu_cursors[want_shape - 10] : want_shape ? hand : arrow) {
                     SDL_SetCursor(c);
                 }
                 shown = want_shape;
