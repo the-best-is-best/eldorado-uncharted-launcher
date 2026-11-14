@@ -203,6 +203,10 @@ def u2_guardian(runs, root):
     return Result(LOOK, "U2 ice cave Guardian pin: on Explorer and Easy (launcher level) the Guardian is not healed after your first hit. Mark it.")         if runs else Result(NOT_TRIED, "Play the ice cave Guardian pin on Easy and on Normal: on Easy it falls with a few shots in the second pin")
 
 
+def u2_lazarevic(runs, root):
+    return Result(LOOK, "U2 Tree of Life: Lazarevic's attack pace and bursts follow the launcher level (Explorer slowest, Hard the game's own). Mark it.")         if runs else Result(NOT_TRIED, "Play the Tree of Life fight against Lazarevic on two launcher levels and compare how often he attacks")
+
+
 def u1_square_prompt(runs, root):
     return seen(runs, r"Button prompts: Uncharted 1 square prompt drawn as keyboard and mouse keys",
                 what="Uncharted 1, the fight after the boat: the Square prompt shows your Square key (mark it)")
@@ -398,6 +402,7 @@ ITEMS = [
     Item("u2_train_helicopter", "U2 train chapter: the cliff helicopter falls after 111 / 151 / 221 hits (by level)", u2_train_helicopter),
     Item("u2_nepal_helicopter", "U2 Nepal helicopter: 3 / 10 / 14 hits (by level)", u2_nepal_helicopter),
     Item("u2_guardian", "U2 ice cave Guardian pin: no heal after the first hit on Explorer / Easy", u2_guardian),
+    Item("u2_lazarevic", "U2 Tree of Life: Lazarevic's attack pace follows the launcher level", u2_lazarevic),
     Item("trophies_cheat", "Unlock all trophies (CHEATS)", trophies_cheat),
     Item("menu_sensitivity", "Insert menu: aiming and vertical sensitivity", menu_sensitivity),
     Item("checkpoint_jump", "Insert menu: double-click a checkpoint", checkpoint_jump),

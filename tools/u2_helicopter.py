@@ -87,7 +87,35 @@ def ice_cave_guardian(data, level):
     return bytes(out)
 
 
+# ss-sham.bin, the Tree of Life fight against Lazarevic (state-script 0xea0). Its lambda 0x1d490 picks two parameters of his
+# behaviour from get-dda in four rungs: dda >= 5 (0x17fbf14c 9.5, 0x61bccc66 4), >= 4 (11.5, 4), >= 3 (13.5, 3), else (15, 3).
+# The three compares (code at 0x34348, instructions 3, 21 and 39: `r0 = r0 fge r1`) become "r0 = 1" or "r0 = 0" (op 0x0c, imm16)
+# so the launcher's level picks the rung: Explorer the lowest, Easy the next, Normal the third, Hard the game's own top one.
+SHAM_COMPARES = (0x34354, 0x3439C, 0x343E4)
+SHAM_FGE = bytes.fromhex("24000001")
+
+
+def sham_boss(data, level):
+    out = bytearray(data)
+    for offset in SHAM_COMPARES:
+        if bytes(out[offset:offset + 4]) != SHAM_FGE:
+            return None
+    # level 3 takes the first rung (dda >= 5), 2 the second, 1 the third, 0 the last (no compare true).
+    true_at = {3: 0, 2: 1, 1: 2}.get(level, None)
+    for i, offset in enumerate(SHAM_COMPARES):
+        out[offset:offset + 4] = bytes([0x0C, 0x00, 1 if i == true_at else 0, 0x00])
+    return bytes(out)
+
+
+SHAM_RUNGS = {0: "15 and 3 (the easiest rung)", 1: "13.5 and 3", 2: "11.5 and 4", 3: "9.5 and 4 (the game's own top rung)"}
+
 FILES = {
+    "ss-sham.bin": {      # the Tree of Life: Lazarevic (update 1.02's file)
+        "md5": "4e90a710c0135229cce8cbcb85bf6542",
+        "builder": sham_boss,
+        "name": "Lazarevic",
+        "log": lambda level: f"his attack parameters {SHAM_RUNGS[level]}",
+    },
     "ss-warzone.bin": {   # update 1.02's file (Game and Game original agree)
         "md5": "51bd4f5d54af1e18868aac6091edf936",
         "limits": NEPAL_LIMITS,
