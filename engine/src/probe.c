@@ -1087,6 +1087,11 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
             if (strstr(c->name,switches[k].text) && e && e[0]=='0') off=switches[k].env;
         }
         if (off) { printf("Callbacks: %s at %#" PRIx64 " off (%s=0)\n",c->name,c->offset,off); continue; }
+        /* Diagnostics that are off unless asked (left out without a word): who hurts Nate (runtime_damage.c). */
+        if (strstr(c->name,"damage source")) {
+            const char *e=getenv("BB_DAMAGE_SOURCE");
+            if (!e || e[0]!='1') continue;
+        }
         if (!c->callback) {
             memcpy(image+c->offset,c->patch,c->moved);
             if (is_stub) stub_in=1;

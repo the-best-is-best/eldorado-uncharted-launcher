@@ -2151,6 +2151,16 @@ static const unsigned char u1_102_jetski_skill_code[]={
 static const unsigned char u1_102_onehit_code[]={
     0x44,0x8a,0xbb,0x29,0x2d,0x00,0x00,0xc6,0x83,0x29,0x2d,0x00,0x00,0x00,
 };
+/* Uncharted 2 1.02, who hurts Nate (BB_DAMAGE_SOURCE=1, runtime_damage.c; observation only, left out unless set): the
+ * AttackInfo send 0x4c08e0 (11 bytes moved), the player's Health object (vtable 0x103f200): TakeDamage 0x54c330 after its
+ * stores (0x54c362), SetCurrent 0x54c2b0, SetCurrentAtTime 0x54c260; the NPC fire 0x24d020 and the helicopter's gun
+ * 0xa855e0 (the shooters). */
+static const unsigned char u2_dmg_send_code[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x54,0x53,0x48,0x83,0xec,0x50,0x4c,0x8b,0x35};
+static const unsigned char u2_dmg_take_code[]={0xb8,0xf8,0x01,0x00,0x00,0x83,0x3d};
+static const unsigned char u2_dmg_set_code[]={0xb8,0xf8,0x01,0x00,0x00,0x83,0x3d};
+static const unsigned char u2_dmg_set_at_code[]={0x89,0x77,0x2c,0x8b,0x02,0x89,0x47,0x20,0xc3};
+static const unsigned char u2_dmg_npc_fire_code[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xe4,0xe0};
+static const unsigned char u2_dmg_heli_gun_code[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0x38,0x02,0x00,0x00};
 static const RuntimeGuestCallback guest_callbacks[]={
     {"U2 main menu Quit (EU)",0x29d7da,u2_eu_menu_store,sizeof(u2_eu_menu_store),7,runtime_exit_menu_u2_data,NULL},
     {"U2 main menu Quit (1.02)",0x5c5433,u2_us_menu_store,sizeof(u2_us_menu_store),7,runtime_exit_menu_u2_data,NULL},
@@ -2281,6 +2291,12 @@ static const RuntimeGuestCallback guest_callbacks[]={
      u3_102_camera_input,NULL},
     {"U1 1.02 jet ski: Elena rides (One hit kills)",0x4bf80,u1_102_jetski_skill_code,sizeof(u1_102_jetski_skill_code),6,u1_102_jetski_skill,NULL},
     {"U1 1.02 One hit kills",0x1472e,u1_102_onehit_code,sizeof(u1_102_onehit_code),14,u1_102_onehit,NULL},
+    {"U2 1.02 damage source: AttackInfo send",0x4c08e0,u2_dmg_send_code,sizeof(u2_dmg_send_code),11,runtime_damage_attack_send,NULL},
+    {"U2 1.02 damage source: TakeDamage",0x54c362,u2_dmg_take_code,sizeof(u2_dmg_take_code),5,runtime_damage_take,NULL},
+    {"U2 1.02 damage source: SetCurrent",0x54c2b0,u2_dmg_set_code,sizeof(u2_dmg_set_code),5,runtime_damage_set,NULL},
+    {"U2 1.02 damage source: SetCurrentAtTime",0x54c260,u2_dmg_set_at_code,sizeof(u2_dmg_set_at_code),5,runtime_damage_set_at,NULL},
+    {"U2 1.02 damage source: NPC fire",0x24d020,u2_dmg_npc_fire_code,sizeof(u2_dmg_npc_fire_code),6,runtime_damage_npc_fire,NULL},
+    {"U2 1.02 damage source: helicopter gun",0xa855e0,u2_dmg_heli_gun_code,sizeof(u2_dmg_heli_gun_code),6,runtime_damage_heli_gun,NULL},
 };
 const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count) {
     *count=sizeof(guest_callbacks)/sizeof(*guest_callbacks);

@@ -111,6 +111,7 @@ extern "C" void runtime_mouse_get(float* look, float* aim, float* vertical); // 
 extern "C" void runtime_mouse_set(float look, float aim, float vertical);
 extern "C" int runtime_menu_open(void);        // runtime_menu_watch.c: a pause menu page is on screen in play
 extern "C" int runtime_dev_text_shown(void);  // runtime_pad.c: developer text 1 shown, 0 hidden, -1 no developer mode
+extern "C" int runtime_damage_notice(int index, char* text, int size, float* age, int* severe); // runtime_damage.c (BB_DAMAGE_SOURCE=1)
 
 namespace BbOverlay {
 
@@ -1603,6 +1604,32 @@ void StoryProgressBanner() {
     }
 }
 
+// BB_DAMAGE_SOURCE=1 (diagnostic, Uncharted 2 1.02): who hurts Nate, a short small line at the top of the screen for about
+// 2 s ("Soldier bullet -12", "Explosion", "Script kill"); the newest first, a hit that kills in red. Nothing else is drawn.
+void DamageNotices() {
+    char text[64];
+    float age = 0.0f;
+    int severe = 0;
+    ImDrawList* draw = ImGui::GetForegroundDrawList();
+    ImFont* font = ImGui::GetFont();
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float s = base_scale, px = 15.0f * s;
+    float y = viewport->Pos.y + 10.0f * s;
+    for (int i = 0; i < 4; ++i) {
+        if (!runtime_damage_notice(i, text, static_cast<int>(sizeof(text)), &age, &severe)) {
+            continue;
+        }
+        const float alpha = std::min(1.0f, (2.0f - age) / 0.4f);
+        const ImVec2 size = font->CalcTextSizeA(px, FLT_MAX, 0.0f, text);
+        const float x = viewport->Pos.x + (viewport->Size.x - size.x) * 0.5f;
+        const int a = static_cast<int>(alpha * 255.0f);
+        draw->AddRectFilled(ImVec2(x - 8.0f * s, y - 2.0f * s), ImVec2(x + size.x + 8.0f * s, y + size.y + 2.0f * s),
+                            IM_COL32(0x12, 0x15, 0x1b, a * 200 / 255), 6.0f * s);
+        draw->AddText(font, px, ImVec2(x, y), severe ? IM_COL32(0xff, 0x55, 0x55, a) : IM_COL32(0xee, 0xf1, 0xf6, a), text);
+        y += size.y + 6.0f * s;
+    }
+}
+
 void ScreenshotNotice() {
     if (!shot_notice_on) {
         return;
@@ -2450,6 +2477,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     }
     TrophyToast();
     ScreenshotNotice();
+    DamageNotices();
     ShaderPreparation();
     if (!prep_screen.load(std::memory_order_relaxed)) { // the preparation page has its own screen
         LoadingScreen();

@@ -126,6 +126,16 @@ void runtime_menu_watch(int game, const unsigned char *host);
 /* True while a game's main menu is on screen (its back button then asks to close the game, runtime_pad.c). */
 int runtime_menu_at_main(void);
 int runtime_menu_open(void);
+/* runtime_damage.c, BB_DAMAGE_SOURCE=1 (Uncharted 2 1.02): who hurts Nate (hooks in runtime_pad.c's table) and the text on
+ * screen: line `index` (0 newest) when it is younger than 2 s (the overlay draws it). */
+#define RUNTIME_DAMAGE_HOOK(name) void __attribute__((ms_abi)) name(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14, const uint64_t *regs)
+RUNTIME_DAMAGE_HOOK(runtime_damage_attack_send);
+RUNTIME_DAMAGE_HOOK(runtime_damage_take);
+RUNTIME_DAMAGE_HOOK(runtime_damage_set);
+RUNTIME_DAMAGE_HOOK(runtime_damage_set_at);
+RUNTIME_DAMAGE_HOOK(runtime_damage_npc_fire);
+RUNTIME_DAMAGE_HOOK(runtime_damage_heli_gun);
+int runtime_damage_notice(int index, char *text, int size, float *age, int *severe);
 void runtime_pause_armed(void);
 /* runtime_menu_watch.c, BB_SKIP_TITLE=1: the Cross taps that move the title page and the start screens on, up to
  * the main menu (or-ed into the pad, runtime_pad.c). */

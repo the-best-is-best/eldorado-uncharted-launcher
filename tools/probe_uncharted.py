@@ -487,6 +487,11 @@ def game_environment(args, game, executable, game_dir):
         env["BB_DOF"] = "0"
     if env_flag("UNCHARTED_UNLOCK"):
         env["BB_UNLOCK_CHAPTERS"] = "1"
+    # Diagnostic, off by default (no launcher setting): who hurts Nate in Uncharted 2 1.02, in the engine log and as a short
+    # text on screen (engine/src/runtime_damage.c).
+    # (or the file analysis/uncharted-user/damage-source.on exists: delete it to turn it off)
+    if env_flag("UNCHARTED_DAMAGE_SOURCE") or (USER / "damage-source.on").exists():
+        env["BB_DAMAGE_SOURCE"] = "1"
     env["BB_OFFLINE_NPID"] = "1"
     # The launcher's language for the engine's own texts (close question, save list, loading screen); the engine
     # shows English for one it lacks.
