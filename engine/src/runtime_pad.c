@@ -2070,16 +2070,57 @@ static void __attribute__((ms_abi)) u3_platdelta(uint64_t rdi, uint64_t rsi, uin
     const uint64_t owner=oslot>0x10000 ? *(const uint64_t *)(uintptr_t)oslot : 0;
     if (owner<0x10000 || !oid || *(const uint32_t *)(uintptr_t)(owner+0x7c)!=oid) return;
     const uint64_t pslot=*(const uint64_t *)(uintptr_t)(owner+0xb8); const uint32_t pid=*(const uint32_t *)(uintptr_t)(owner+0xc0);
-    /* the last platform per owner id (owners move in memory; their id does not) */
-    static struct { uint32_t oid, pid; uint64_t pslot; } last[64];
-    int i=0, free_i=-1;
-    for (;i<64;++i) { if (last[i].oid==oid) break; if (!last[i].oid && free_i<0) free_i=i; }
-    if (i==64) { if (free_i<0) free_i=(int)(oid%64u); i=free_i; last[i].oid=oid; last[i].pid=pid; last[i].pslot=pslot; return; }
+    /* The last platform per owner id (owners move in memory; their id does not). 2026-11-13: the table was 64 entries
+     * that were never freed, and a full table shared slots: two characters in one slot saw a platform change every
+     * frame, their platform motion was zeroed every frame and they hopped across the screen in busy moving-platform
+     * scenes (the ship's container yard). Now 512 entries, the one seen longest ago is reused, and only a delta no
+     * platform can make is zeroed: stepping between moving platforms keeps its real motion. */
+    enum { SLOTS=512 };
+    static struct { uint32_t oid, pid; uint64_t pslot, seen; } last[SLOTS];
+    static uint64_t stamp;
+    static uint64_t zeroed, changes, window_start;
+    ++stamp;
+    int i=0, oldest=0;
+    for (;i<SLOTS;++i) {
+        if (last[i].oid==oid) break;
+        if (last[i].seen<last[oldest].seen) oldest=i;
+    }
+    if (i==SLOTS) {
+        i=oldest;
+        last[i].oid=oid; last[i].pid=pid; last[i].pslot=pslot; last[i].seen=stamp;
+        return;
+    }
+    last[i].seen=stamp;
     const int changed=last[i].pid!=pid || last[i].pslot!=pslot;
     last[i].pid=pid; last[i].pslot=pslot;
+    /* every ~20000 calls (a few seconds in a busy scene): how many platform changes and how many were zeroed */
+    if (stamp-window_start>=20000) {
+        if (changes) {
+            printf("U3 platform delta: %llu platform changes, %llu impossible jumps zeroed\n",
+                   (unsigned long long)changes,(unsigned long long)zeroed);
+            fflush(stdout);
+        }
+        changes=zeroed=0;
+        window_start=stamp;
+    }
     if (!changed) return;
+    ++changes;
     float *d=(float *)(uintptr_t)(ctrl+0x90), *q=(float *)(uintptr_t)(ctrl+0xa0);
-    d[0]=d[1]=d[2]=0.0f; q[0]=q[1]=q[2]=0.0f; q[3]=1.0f;
+    /* +0x90 is displacement / dt (m/s): the restart glitch was ~3000 m/s and a 40 degree turn; the ship and its
+     * containers move at most ~25 m/s and turn far less than a degree per frame */
+    const float speed2=d[0]*d[0]+d[1]*d[1]+d[2]*d[2];
+    const float w=q[3]<0.0f ? -q[3] : q[3];
+    const int implausible=speed2>200.0f*200.0f || w<0.9962f; /* cos(5 deg): a turn over 10 degrees in one frame */
+    if (implausible) {
+        ++zeroed;
+        static int told;
+        if (told++ < 40) {
+            printf("U3 platform delta: owner %08x changed platform with %.0f m/s, turn w %.4f: zeroed\n",oid,
+                   (double)sqrtf(speed2),(double)w);
+            fflush(stdout);
+        }
+        d[0]=d[1]=d[2]=0.0f; q[0]=q[1]=q[2]=0.0f; q[3]=1.0f;
+    }
 }
 /* "Quit" in Uncharted 2's and 3's main menus (runtime_exit_menu.c): the store of the menu data's pointer after its
  * lookup (7 bytes moved) and the menu handler (13 push bytes moved), per game and code version. */
@@ -2173,7 +2214,27 @@ static const unsigned char u2_diff8_code[]={0x8b,0x88,0xa4,0x48,0x00,0x00};
 static const unsigned char u2_diff9_code[]={0x8b,0x89,0xa4,0x48,0x00,0x00};
 static const unsigned char u2_diff10_code[]={0x8b,0x88,0xa4,0x48,0x00,0x00};
 static const unsigned char u2_diff11_code[]={0x8b,0x89,0xa4,0x48,0x00,0x00};
+/* BB_NPC_LOG diagnosis (runtime_npcdiag.c): inside U2 1.02 NpcLog, after its va_list is built (mov rdi,[rbx+0x21b0]). */
+static const unsigned char u2_npclog_102[]={0x48,0x8b,0xbb,0xb0,0x21,0x00,0x00,0x48,0x85,0xff,0x74,0x0f};
+void __attribute__((ms_abi)) runtime_npclog_line(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14, const uint64_t *regs);
+/* U2 companions jitter after reaching their combat spot (runtime_buddyzone.c; BB_U2_BUDDY_ZONE=0: off): 1.02 the in-zone
+ * test inlined in BuddyOpenCombatSkill (vmulss xmm1,xmm1,xmm1; vpermilps xmm1,xmm1,0 moved; then vcmpltps, vmovmskps,
+ * cmp eax,0xf, jne), 1.00 Npc::IsInZone after Zone::Contains (mov rcx,[r14]; cmp rcx,[rbp-0x18] moved; jne; add rsp). */
+static const unsigned char u2_buddy_zone_102[]={0xc5,0xf2,0x59,0xc9,0xc4,0xe3,0x79,0x04,0xc9,0x00,0xc5,0xf0,0xc2,0xc0,0x01,
+                                               0xc5,0xf8,0x50,0xc0,0x83,0xf8,0x0f,0x0f,0x85};
+static const unsigned char u2_buddy_zone_100[]={0x49,0x8b,0x0e,0x48,0x3b,0x4d,0xe8,0x75,0x09,0x48,0x83,0xc4,0x40};
+void __attribute__((ms_abi)) runtime_u2_buddy_zone_102(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14, const uint64_t *regs);
+static const unsigned char u2_buddy_move_100[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0x68,0x01,0x00,0x00,0x41,0x89,0xcf};
+void __attribute__((ms_abi)) runtime_u2_buddy_move_100(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14, const uint64_t *regs);
+void __attribute__((ms_abi)) runtime_u2_buddy_zone_100(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14, const uint64_t *regs);
+static const unsigned char u2_navcmd_102[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0xa8,0x00,0x00,0x00,0x49,0x89,0xf4};
+void __attribute__((ms_abi)) runtime_npclog_command(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14, const uint64_t *regs);
 static const RuntimeGuestCallback guest_callbacks[]={
+    {"U2 buddy zone: Siege #257 Tenzin (1.02)",0x30d4a3,u2_buddy_zone_102,sizeof(u2_buddy_zone_102),10,runtime_u2_buddy_zone_102,NULL},
+    {"U2 buddy zone: Siege #257 Tenzin (1.00)",0x2c393,u2_buddy_zone_100,sizeof(u2_buddy_zone_100),7,runtime_u2_buddy_zone_100,NULL},
+    {"U2 buddy move trace (diagnosis, 1.00)",0x11180,u2_buddy_move_100,sizeof(u2_buddy_move_100),6,runtime_u2_buddy_move_100,NULL},
+    {"U2 NPC navigation command (diagnosis, 1.02)",0x383ef0,u2_navcmd_102,sizeof(u2_navcmd_102),6,runtime_npclog_command,NULL},
+    {"U2 NPC debug log (diagnosis, 1.02)",0x214c50,u2_npclog_102,sizeof(u2_npclog_102),7,runtime_npclog_line,NULL},
     {"U2 main menu Quit (EU)",0x29d7da,u2_eu_menu_store,sizeof(u2_eu_menu_store),7,runtime_exit_menu_u2_data,NULL},
     {"U2 main menu Quit (1.02)",0x5c5433,u2_us_menu_store,sizeof(u2_us_menu_store),7,runtime_exit_menu_u2_data,NULL},
     {"U3 main menu Quit (EU)",0x1e408a,u3_eu_menu_store,sizeof(u3_eu_menu_store),7,runtime_exit_menu_u3_data,NULL},
