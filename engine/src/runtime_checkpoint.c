@@ -302,10 +302,12 @@ void __attribute__((ms_abi)) runtime_checkpoint_frame_u1_us(uint64_t rdi, uint64
     old_frame(&old_builds[1],image);
 }
 OLD_FRAME(runtime_checkpoint_frame_u2_eu,2)
+void runtime_npcdiag_frame(uint64_t image, int code);
+void runtime_npclog_frame(uint64_t image);
 void __attribute__((ms_abi)) runtime_checkpoint_frame_u2_us(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
                                                            const uint64_t *regs) {
     (void)rdi; (void)rsi; (void)r14; (void)regs;
-    give_treasures(image,0x3fea90,"55 48 89 e5 41 57 41 56 53 50 83 fe 04 75","Uncharted 2 1.02");
-    runtime_menu_watch(1,runtime_menu_host[1]);
+    runtime_npcdiag_frame(image,3); /* BB_NPC_DUMP diagnosis (runtime_npcdiag.c) */
+    runtime_npclog_frame(image);    /* BB_NPC_LOG diagnosis */
     old_frame(&old_builds[3],image);
 }
