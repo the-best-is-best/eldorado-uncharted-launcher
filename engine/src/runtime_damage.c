@@ -324,3 +324,41 @@ void __attribute__((ms_abi)) runtime_damage_set_at(uint64_t rdi, uint64_t rsi, u
     (void)r14;
     health_set(rdi, rsi, image, regs, "SetCurrentAtTime");
 }
+
+/* ---- which of the game's difficulty reads run (the Guardian fight: where the AI reads the game's difficulty) ----
+ * Each hook counts one read site of the difficulty field (game+0x48a4); every 3 s the sites that ran are logged with their
+ * counts ("Difficulty reads: 0x24feb7 x120 ..."). The first one (0x4ab9e5) is the damage rating, which runs with every
+ * hit on Nate: the control. Observation only. */
+static const uint64_t diff_sites[] = {0x4ab9e5, 0x24feb7, 0x25ec47, 0x2e2cfb, 0x32d0d6, 0x32f467, 0x3376ed, 0x3416c6,
+                                      0x342689, 0x3450b6, 0x3464f4, 0x38f7de};
+static volatile unsigned diff_counts[12];
+static volatile uint64_t diff_logged_us;
+static void diff_hit(unsigned index) {
+    if (!enabled()) return;
+    __atomic_add_fetch(&diff_counts[index], 1, __ATOMIC_RELAXED);
+    const uint64_t now = clock_us();
+    uint64_t last = __atomic_load_n(&diff_logged_us, __ATOMIC_RELAXED);
+    if (last == 0) { __atomic_store_n(&diff_logged_us, now, __ATOMIC_RELAXED); return; }
+    if (now - last < 3000000u || !__atomic_compare_exchange_n(&diff_logged_us, &last, now, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return;
+    char line[400];
+    int n = snprintf(line, sizeof(line), "Difficulty reads:");
+    int any = 0;
+    for (unsigned i = 0; i < 12; ++i) {
+        const unsigned c = __atomic_exchange_n(&diff_counts[i], 0, __ATOMIC_RELAXED);
+        if (c && n < (int)sizeof(line) - 30) { n += snprintf(line + n, sizeof(line) - n, " 0x%llx x%u", (unsigned long long)diff_sites[i], c); any = 1; }
+    }
+    if (any) { printf("%s\n", line); fflush(stdout); }
+}
+#define DIFF_HOOK(i) void __attribute__((ms_abi)) runtime_diff_##i(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14, const uint64_t *regs) { (void)rdi; (void)rsi; (void)image; (void)r14; (void)regs; diff_hit(i); }
+DIFF_HOOK(0)
+DIFF_HOOK(1)
+DIFF_HOOK(2)
+DIFF_HOOK(3)
+DIFF_HOOK(4)
+DIFF_HOOK(5)
+DIFF_HOOK(6)
+DIFF_HOOK(7)
+DIFF_HOOK(8)
+DIFF_HOOK(9)
+DIFF_HOOK(10)
+DIFF_HOOK(11)

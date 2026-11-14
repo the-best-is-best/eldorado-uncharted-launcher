@@ -135,6 +135,18 @@ RUNTIME_DAMAGE_HOOK(runtime_damage_set);
 RUNTIME_DAMAGE_HOOK(runtime_damage_set_at);
 RUNTIME_DAMAGE_HOOK(runtime_damage_npc_fire);
 RUNTIME_DAMAGE_HOOK(runtime_damage_heli_gun);
+RUNTIME_DAMAGE_HOOK(runtime_diff_0);
+RUNTIME_DAMAGE_HOOK(runtime_diff_1);
+RUNTIME_DAMAGE_HOOK(runtime_diff_2);
+RUNTIME_DAMAGE_HOOK(runtime_diff_3);
+RUNTIME_DAMAGE_HOOK(runtime_diff_4);
+RUNTIME_DAMAGE_HOOK(runtime_diff_5);
+RUNTIME_DAMAGE_HOOK(runtime_diff_6);
+RUNTIME_DAMAGE_HOOK(runtime_diff_7);
+RUNTIME_DAMAGE_HOOK(runtime_diff_8);
+RUNTIME_DAMAGE_HOOK(runtime_diff_9);
+RUNTIME_DAMAGE_HOOK(runtime_diff_10);
+RUNTIME_DAMAGE_HOOK(runtime_diff_11);
 int runtime_damage_notice(int index, char *text, int size, float *age, int *severe);
 void runtime_pause_armed(void);
 /* runtime_menu_watch.c, BB_SKIP_TITLE=1: the Cross taps that move the title page and the start screens on, up to

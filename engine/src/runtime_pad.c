@@ -2161,6 +2161,18 @@ static const unsigned char u2_dmg_set_code[]={0xb8,0xf8,0x01,0x00,0x00,0x83,0x3d
 static const unsigned char u2_dmg_set_at_code[]={0x89,0x77,0x2c,0x8b,0x02,0x89,0x47,0x20,0xc3};
 static const unsigned char u2_dmg_npc_fire_code[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xe4,0xe0};
 static const unsigned char u2_dmg_heli_gun_code[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0x38,0x02,0x00,0x00};
+static const unsigned char u2_diff0_code[]={0x8b,0x80,0xa4,0x48,0x00,0x00};
+static const unsigned char u2_diff1_code[]={0x8b,0x89,0xa4,0x48,0x00,0x00};
+static const unsigned char u2_diff2_code[]={0x8b,0x89,0xa4,0x48,0x00,0x00};
+static const unsigned char u2_diff3_code[]={0x8b,0x89,0xa4,0x48,0x00,0x00};
+static const unsigned char u2_diff4_code[]={0x8b,0x88,0xa4,0x48,0x00,0x00};
+static const unsigned char u2_diff5_code[]={0x8b,0x80,0xa4,0x48,0x00,0x00};
+static const unsigned char u2_diff6_code[]={0x8b,0x89,0xa4,0x48,0x00,0x00};
+static const unsigned char u2_diff7_code[]={0x8b,0x89,0xa4,0x48,0x00,0x00};
+static const unsigned char u2_diff8_code[]={0x8b,0x88,0xa4,0x48,0x00,0x00};
+static const unsigned char u2_diff9_code[]={0x8b,0x89,0xa4,0x48,0x00,0x00};
+static const unsigned char u2_diff10_code[]={0x8b,0x88,0xa4,0x48,0x00,0x00};
+static const unsigned char u2_diff11_code[]={0x8b,0x89,0xa4,0x48,0x00,0x00};
 static const RuntimeGuestCallback guest_callbacks[]={
     {"U2 main menu Quit (EU)",0x29d7da,u2_eu_menu_store,sizeof(u2_eu_menu_store),7,runtime_exit_menu_u2_data,NULL},
     {"U2 main menu Quit (1.02)",0x5c5433,u2_us_menu_store,sizeof(u2_us_menu_store),7,runtime_exit_menu_u2_data,NULL},
@@ -2297,6 +2309,18 @@ static const RuntimeGuestCallback guest_callbacks[]={
     {"U2 1.02 damage source: SetCurrentAtTime",0x54c260,u2_dmg_set_at_code,sizeof(u2_dmg_set_at_code),5,runtime_damage_set_at,NULL},
     {"U2 1.02 damage source: NPC fire",0x24d020,u2_dmg_npc_fire_code,sizeof(u2_dmg_npc_fire_code),6,runtime_damage_npc_fire,NULL},
     {"U2 1.02 damage source: helicopter gun",0xa855e0,u2_dmg_heli_gun_code,sizeof(u2_dmg_heli_gun_code),6,runtime_damage_heli_gun,NULL},
+    {"U2 1.02 damage source: difficulty read 0x4ab9e5",0x4ab9e5,u2_diff0_code,sizeof(u2_diff0_code),6,runtime_diff_0,NULL},
+    {"U2 1.02 damage source: difficulty read 0x24feb7",0x24feb7,u2_diff1_code,sizeof(u2_diff1_code),6,runtime_diff_1,NULL},
+    {"U2 1.02 damage source: difficulty read 0x25ec47",0x25ec47,u2_diff2_code,sizeof(u2_diff2_code),6,runtime_diff_2,NULL},
+    {"U2 1.02 damage source: difficulty read 0x2e2cfb",0x2e2cfb,u2_diff3_code,sizeof(u2_diff3_code),6,runtime_diff_3,NULL},
+    {"U2 1.02 damage source: difficulty read 0x32d0d6",0x32d0d6,u2_diff4_code,sizeof(u2_diff4_code),6,runtime_diff_4,NULL},
+    {"U2 1.02 damage source: difficulty read 0x32f467",0x32f467,u2_diff5_code,sizeof(u2_diff5_code),6,runtime_diff_5,NULL},
+    {"U2 1.02 damage source: difficulty read 0x3376ed",0x3376ed,u2_diff6_code,sizeof(u2_diff6_code),6,runtime_diff_6,NULL},
+    {"U2 1.02 damage source: difficulty read 0x3416c6",0x3416c6,u2_diff7_code,sizeof(u2_diff7_code),6,runtime_diff_7,NULL},
+    {"U2 1.02 damage source: difficulty read 0x342689",0x342689,u2_diff8_code,sizeof(u2_diff8_code),6,runtime_diff_8,NULL},
+    {"U2 1.02 damage source: difficulty read 0x3450b6",0x3450b6,u2_diff9_code,sizeof(u2_diff9_code),6,runtime_diff_9,NULL},
+    {"U2 1.02 damage source: difficulty read 0x3464f4",0x3464f4,u2_diff10_code,sizeof(u2_diff10_code),6,runtime_diff_10,NULL},
+    {"U2 1.02 damage source: difficulty read 0x38f7de",0x38f7de,u2_diff11_code,sizeof(u2_diff11_code),6,runtime_diff_11,NULL},
 };
 const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count) {
     *count=sizeof(guest_callbacks)/sizeof(*guest_callbacks);
