@@ -558,6 +558,8 @@ def game_environment(args, game, executable, game_dir):
     # when Nate gets up after a fall): the engine keeps the game's unknown button-sized pictures (at most 150 a run)
     # for tools/test_report.py.
     env.setdefault("BB_BUTTON_PROMPTS_DUMP", str(USER / "prompt-dumps"))
+    # The hashes of prompt-sized pictures the engine does not know yet, one log line each (to add a prompt to its table).
+    env.setdefault("BB_BUTTON_PROMPTS_LOG", "1")
     (USER / "prompt-dumps").mkdir(parents=True, exist_ok=True)
     env["BB_JOB_SLEEP"] = job_sleep(game)
     # U3 characters sinking into the ground, floating or twitching (SuperMedo dca99bb): what the raycaster
