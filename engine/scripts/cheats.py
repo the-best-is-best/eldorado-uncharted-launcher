@@ -207,7 +207,7 @@ def _asm(at, items):
             return len(item)
         if item[0] == 'label':
             return 0
-        if item[0] in ('je', 'jne', 'jg'):
+        if item[0] in ('je', 'jne', 'jg', 'jbe'):
             return 2
         if item[0] in ('jmp', 'call'):
             return 5
@@ -222,11 +222,11 @@ def _asm(at, items):
         n = size(item)
         if isinstance(item, bytes):
             out += item
-        elif item[0] in ('je', 'jne', 'jg'):
+        elif item[0] in ('je', 'jne', 'jg', 'jbe'):
             rel = labels.get(item[1], item[1]) - (pc + 2)
             if not -128 <= rel < 128:
                 raise ValueError('short jump out of range')
-            out += bytes([{'je': 0x74, 'jne': 0x75, 'jg': 0x7f}[item[0]]]) + struct.pack('<b', rel)
+            out += bytes([{'je': 0x74, 'jne': 0x75, 'jg': 0x7f, 'jbe': 0x76}[item[0]]]) + struct.pack('<b', rel)
         elif item[0] in ('jmp', 'call'):
             out += (b'\xe9' if item[0] == 'jmp' else b'\xe8') + struct.pack('<i', labels.get(item[1], item[1]) - (pc + 5))
         elif item[0] == 'rip':
@@ -243,12 +243,32 @@ def _imm(opcode, level, length):
     return (bytes([opcode]) + struct.pack('<I', level)).ljust(length, b'\x90')
 
 
+def _guarded_load(at, original, cave, level):
+    """The game's difficulty load "lea reg, [rip+game] / mov r32, [reg+disp32]" (13 bytes) as min(game, L): the site
+    jumps to a cave that runs the original two instructions, then "cmp r32, L / jbe back / mov r32, L" and returns."""
+    code = bytes.fromhex(original)
+    assert len(code) == 13 and code[:2] == bytes([0x48, 0x8d]) and code[2] in (0x05, 0x0d) and code[7] == 0x8b
+    dest = (code[8] >> 3) & 7
+    target = at + 7 + struct.unpack_from('<i', code, 3)[0]
+    body = _asm(cave, [('rip', code[:3], target, code[7:]), bytes([0x83, 0xf8 + dest, level]), ('jbe', 'back'),
+                       _imm(0xb8 + dest, level, 5), ('label', 'back'), ('jmp', at + 13)])
+    return [(at, original, _jump_to(at, cave, 13).hex()), (cave, '00' * len(body), body.hex())]
+
+
 def _getter_cases(blocks, explorer_read, default_tail, level):
     """The tweak getter's case blocks [(address, original, Explorer offset)] -> patches for level."""
     patches = []
     for address, original, offset in blocks:
         length = len(original) // 2
-        code = (explorer_read(offset) if level == 0 else b'') + default_tail(address + (6 if level == 0 else 0))
+        if level == 0:
+            code = explorer_read(offset) + default_tail(address + 6)
+        else:
+            # The game's own difficulty is in eax: below L the block is the game's own (the original "jne" target
+            # tests eax == 0 for Explorer's value, else the default); from L up the default (level L > 0 has no value).
+            block = bytes.fromhex(original)
+            assert block[:4] == bytes.fromhex('83f80575')
+            rel = address + 5 + struct.unpack('<b', block[4:5])[0] - (address + 5)
+            code = bytes([0x83, 0xf8, level, 0x72, rel]) + default_tail(address + 5)
         patches.append((address, original, code.ljust(length, b'\x90').hex()))
     return patches
 
@@ -263,16 +283,16 @@ def _u1_nate(level):
         lambda at: b'\xe9' + struct.pack('<i', end - (at + 5)), level)
     stub_a, game = 0x9115a0, 0x958208                                           # the game settings, difficulty +0x4878
     load = [('rip', b'\x48\x8d\x05', game, b''), bytes.fromhex('8bb878480000')]  # lea rax, [game]; mov edi, [rax+0x4878]
-    a = _asm(stub_a, [('rip', b'\x48\x8d\x05', 0x16205, b''), bytes.fromhex('48394508'), ('jne', 'orig'),
-                      _imm(0xbf, level, 5), ('jmp', 0x31ef8e), ('label', 'orig')] + load + [('jmp', 0x31ef8e)])
+    a = _asm(stub_a, [('rip', b'\x48\x8d\x05', 0x16205, b''), bytes.fromhex('48394508'), ('jne', 'orig')] + load +
+             [bytes([0x83, 0xff, level]), ('jbe', 'fin'), _imm(0xbf, level, 5), ('label', 'fin'), ('jmp', 0x31ef8e),
+              ('label', 'orig')] + load + [('jmp', 0x31ef8e)])
     # Not patched: the hard-difficulty factor 0x31edf0 in the weapon damage 0x15e50. That function serves every
     # shooter, the player's shots included, and has no target in a register a stub could check (r15 is not one of
     # its registers): a first version read r15 and gave the player's own shots level L (7 Nov 2026: enemies died
     # from one shot).
     cave = a
-    return patches + [
+    return patches + _guarded_load(0x1629c, '488d05651f94008b8078480000', 0x911700, level) + [
         (0x31ef81, '488d05809263008bb878480000', _jump_to(0x31ef81, stub_a, 13).hex()),
-        (0x1629c, '488d05651f94008b8078480000', _imm(0xb8, level, 13).hex()),
         (stub_a, '00' * len(cave), cave.hex())]
 
 
@@ -290,11 +310,11 @@ def _u2_nate(level):
     for ret in (0x24fc55, 0x24fe51, 0x24fe73, 0xa8624f):
         items += [('rip', b'\x48\x8d\x0d', ret, b''), bytes.fromhex('4839c8'), ('je', 'nate')]
     items += [('rip', b'\x48\x8d\x05', 0x1059640, b''), bytes.fromhex('8bb8a4480000'), ('jmp', back),
-              ('label', 'nate'), _imm(0xbf, level, 5), ('jmp', back)]
+              ('label', 'nate'), ('rip', b'\x48\x8d\x05', 0x1059640, b''), bytes.fromhex('8bb8a4480000'),
+              bytes([0x83, 0xff, level]), ('jbe', 'fin'), _imm(0xbf, level, 5), ('label', 'fin'), ('jmp', back)]
     code = _asm(stub, items)
-    return patches + [
+    return patches + _guarded_load(0x24feb0, '488d0d8997e0008b89a4480000', 0xfe2f20, level) + [
         (0x4abae8, '488d0551dbba008bb8a4480000', _jump_to(0x4abae8, stub, 13).hex()),
-        (0x24feb0, '488d0d8997e0008b89a4480000', _imm(0xb9, level, 13).hex()),
         (stub, '00' * len(code), code.hex())]
 
 
@@ -302,19 +322,20 @@ def _u3_nate(level):
     patches = _u23_cases(level, [(0x12c250b, '83f8057551c5fa1007c3', 0x24), (0x12c2515, '83f8057551c5fa104704c3', 0x28),
                                  (0x12c252b, '83f805754fc5fa10470cc3', 0x30), (0x12c2536, '83f805754ec5fa104710c3', 0x34),
                                  (0x12c254c, '83f805754dc5fa10471cc3', 0x44)])
-    stub, back = 0x16466d0, 0x552b39                                            # rax holds the call target: rcx only
+    stub, back = 0x1646900, 0x552b39                                            # rax holds the call target: rcx only
     items = []
     for ret in (0x366c2e, 0x366df2, 0x365a03, 0xcbafbc, 0xcefc3d):              # NPC weapon x2, 0x365160's %-of-health hit, helicopter gun, strafing plane
         items += [('rip', b'\x48\x8d\x0d', ret, b''), bytes.fromhex('48394d08'), ('je', 'nate')]
     items += [('rip', b'\x48\x8d\x0d', 0x17b6368, b''), bytes.fromhex('8bb1484c0000'), ('jmp', back),
-              ('label', 'nate'), _imm(0xbe, level, 5), ('jmp', back)]
+              ('label', 'nate'), ('rip', b'\x48\x8d\x0d', 0x17b6368, b''), bytes.fromhex('8bb1484c0000'),
+              bytes([0x83, 0xfe, level]), ('jbe', 'fin'), _imm(0xbe, level, 5), ('label', 'fin'), ('jmp', back)]
     code = _asm(stub, items)
+    loads = [(0x366e59, '488d0d08f544018b89484c0000'), (0x366e7f, '488d0de2f444018b89484c0000'),
+             (0x366f60, '488d0501f444018b80484c0000'), (0x366fd8, '488d0d89f344018b89484c0000')]
+    for number, (address, original) in enumerate(loads):
+        patches += _guarded_load(address, original, 0x1646a00 + 0x20 * number, level)
     return patches + [
         (0x552b2c, '488d0d353826018bb1484c0000', _jump_to(0x552b2c, stub, 13).hex()),
-        (0x366e59, '488d0d08f544018b89484c0000', _imm(0xb9, level, 13).hex()),
-        (0x366e7f, '488d0de2f444018b89484c0000', _imm(0xb9, level, 13).hex()),
-        (0x366f60, '488d0501f444018b80484c0000', _imm(0xb8, level, 13).hex()),
-        (0x366fd8, '488d0d89f344018b89484c0000', _imm(0xb9, level, 13).hex()),
         (stub, '00' * len(code), code.hex())] + _u3_melee(level)
 
 
@@ -329,7 +350,9 @@ def _u3_melee(level):
                           bytes.fromhex('48c745f001000000'), ('jmp', 0x8d2538)])
     read = _asm(read_cave, [bytes.fromhex('48837df000'), ('jne', 'npc'), ('rip', b'\x48\x8d\x05', 0x17b6368, b''),
                             bytes.fromhex('8b88484c0000'), ('jmp', 0x8d25ab), ('label', 'npc'),
-                            _imm(0xb9, level, 5), ('jmp', 0x8d25ab)])
+                            ('rip', b'\x48\x8d\x05', 0x17b6368, b''), bytes.fromhex('8b88484c0000'),
+                            bytes.fromhex('83f9') + bytes([level]), ('jbe', 'fin'), _imm(0xb9, level, 5),
+                            ('label', 'fin'), ('jmp', 0x8d25ab)])
     return [(0x8d2465, '5031c0', '31c050'),
             (0x8d252d, 'bf0b1538190f83a7000000', _jump_to(0x8d252d, npc_cave, 11).hex()),
             (0x8d259e, '488d05c33dee008b88484c0000', _jump_to(0x8d259e, read_cave, 13).hex()),
@@ -379,14 +402,25 @@ def _u2_ai(level):
              ('rip', b'\x48\x8d\x0d', U2_AI_RETURNS[0], b''), bytes.fromhex('4829c8')]   # rax = return - first
     for ret in U2_AI_RETURNS:
         items += [bytes.fromhex('483d') + struct.pack('<i', ret - U2_AI_RETURNS[0]), ('je', 'ai')]
-    items += [('jmp', 'done'), ('label', 'ai'), _imm(0xbf, level, 5), ('label', 'done'), bytes.fromhex('be010000005d'),
+    items += [('jmp', 'done'), ('label', 'ai'), bytes([0x83, 0xff, level]), ('jbe', 'done'), _imm(0xbf, level, 5), ('label', 'done'),
+              bytes.fromhex('be010000005d'),
               ('jmp', tail)]
     code = _asm(stub, items)
     patches = [(join, 'be010000005de900000000', _jump_to(join, stub, 11).hex())]
-    for address, original, opcode in U2_AI_LOADS:
-        patches.append((address, original, _imm(opcode, level, len(original) // 2).hex()))
-    for address in U2_AI_LOADS_R12:
-        patches.append((address, '458ba0a4480000', (b'\x41\xbc' + struct.pack('<I', level)).ljust(7, b'\x90').hex()))
+    # The direct loads are min(game difficulty, L): the load jumps to a cave (the original load, "cmp reg, L / jbe back
+    # / mov reg, L / jmp back"); the flags the cave changes are dead at every site (the next instruction compares or
+    # the stores run into a call).
+    cave = 0xfe2d40
+    for address, original, opcode in U2_AI_LOADS + tuple((a, '458ba0a4480000', 0) for a in U2_AI_LOADS_R12):
+        length = len(original) // 2
+        if opcode:
+            compare, move = bytes([0x83, 0xf8 + opcode - 0xb8, level]), _imm(opcode, level, 5)
+        else:
+            compare, move = bytes([0x41, 0x83, 0xfc, level]), bytes([0x41, 0xbc]) + struct.pack('<I', level)
+        body = _asm(cave, [bytes.fromhex(original), compare, ('jbe', 'back'), move, ('label', 'back'),
+                           ('jmp', address + length)])
+        patches += [(address, original, _jump_to(address, cave, length).hex()), (cave, '00' * len(body), body.hex())]
+        cave += 0x20
     return patches + [(stub, '00' * len(code), code.hex())]
 
 
@@ -410,7 +444,8 @@ def _u3_ai(level):
     items = [('rip', b'\x48\x8d\x0d', 0x552b16 + 0x1283142, b''), bytes.fromhex('80790900'), ('jne', 'done')]
     for ret in U3_AI_RETURNS:
         items += [('rip', b'\x48\x8d\x0d', ret, b''), bytes.fromhex('48394d08'), ('je', 'ai')]
-    items += [('jmp', 'done'), ('label', 'ai'), _imm(0xbe, level, 5), ('label', 'done'), bytes.fromhex(original)]
+    items += [('jmp', 'done'), ('label', 'ai'), bytes([0x83, 0xfe, level]), ('jbe', 'done'), _imm(0xbe, level, 5),
+              ('label', 'done'), bytes.fromhex(original)]
     code = _asm(stub, items)
     return [(join, original, _jump_to(join, stub, 14).hex()), (stub, '00' * len(code), code.hex())]
 
