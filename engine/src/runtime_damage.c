@@ -293,6 +293,24 @@ static void health_set(uint64_t rdi, uint64_t rsi, uint64_t image, const uint64_
         printf("Damage: ONE-HIT KILL: %s took Nate from full health %d to %d (caller 0x%llx)\n", source, (int)before,
                (int)value, (unsigned long long)offset);
     }
+    if (value <= 0) {
+        /* Who started this: the stack above the return address holds the callers' return addresses (among other
+         * words); those that sit right after a call instruction are listed, up to 10, nearest first. */
+        const uint64_t *stack = regs + 25;
+        printf("Damage: stack of the set to %d:", (int)value);
+        int shown = 0;
+        for (int i = 1; i < 160 && shown < 10; ++i) {
+            const uint64_t word = stack[i];
+            if (word < image + 0x1000 || word >= image + 0xfe4000) continue;
+            const unsigned char *code = (const unsigned char *)(uintptr_t)word;
+            const int call = code[-5] == 0xe8 || code[-2] == 0xff || code[-3] == 0xff || code[-6] == 0xff ||
+                             code[-7] == 0xff;
+            if (!call) continue;
+            printf(" 0x%llx", (unsigned long long)(word - image));
+            ++shown;
+        }
+        printf("\n");
+    }
     fflush(stdout);
     post_notice(source, value <= 0);
 }
