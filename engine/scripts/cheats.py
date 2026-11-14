@@ -207,7 +207,7 @@ def _asm(at, items):
             return len(item)
         if item[0] == 'label':
             return 0
-        if item[0] in ('je', 'jne'):
+        if item[0] in ('je', 'jne', 'jg'):
             return 2
         if item[0] in ('jmp', 'call'):
             return 5
@@ -222,11 +222,11 @@ def _asm(at, items):
         n = size(item)
         if isinstance(item, bytes):
             out += item
-        elif item[0] in ('je', 'jne'):
+        elif item[0] in ('je', 'jne', 'jg'):
             rel = labels.get(item[1], item[1]) - (pc + 2)
             if not -128 <= rel < 128:
                 raise ValueError('short jump out of range')
-            out += bytes([0x74 if item[0] == 'je' else 0x75]) + struct.pack('<b', rel)
+            out += bytes([{'je': 0x74, 'jne': 0x75, 'jg': 0x7f}[item[0]]]) + struct.pack('<b', rel)
         elif item[0] in ('jmp', 'call'):
             out += (b'\xe9' if item[0] == 'jmp' else b'\xe8') + struct.pack('<i', labels.get(item[1], item[1]) - (pc + 5))
         elif item[0] == 'rip':
@@ -340,6 +340,82 @@ for _code, _build in ((US['eboot.bin'], _u1_nate), (US['big2-ps4_Shipping.elf'],
                       (US['big3-ps4_Shipping.elf'], _u3_nate)):
     for _level in range(NATE_LEVELS):
         PATCHES[_code][f'nathealth{_level}'] = _build(_level)
+# ailevel<L> (El Dorado's "Enemy behaviour", 1.02 code): the enemies' behaviour numbers follow difficulty L (the same
+# order as nathealth) whatever the chosen one; nathealth's damage to Nate, saves, trophies, the UI and everything not
+# listed here keep the chosen difficulty. Only code of the NPC (enemy) classes is patched, each site proven by its
+# function's own asserts (npc.h GetKnowledge/GetConfiguration, shooting-logic.cpp) or by its caller chain.
+# Uncharted 2 (the others are not done, see the report): the difficulty value 0x4aba00 (the *-difficulty-settings*
+# interpolated by the dynamic difficulty) ends in "mov esi, 1 / pop rbp / jmp 0x4abb00" at 0x4abaf5, the join of the
+# multiplayer path and of nathealth's stub (which jumps back to it, so both compose): that tail jumps to a stub that
+# sets edi = L when 0x4aba00's return address is one of the enemy callers (single player only, the same global as the
+# game's own multiplayer test). The callers: 0x24d020 the NPC fire (fire rate, npc-difficulty.bin +0x10), 0x24c120 an
+# NPC timing test (info table +0x84), 0x251cf0 npc.cpp (info tables +0x68/+0x7c), 0x2579c0 (info table +0x28, called by
+# the NPC functions 0x24f480 and 0x258300), 0x2a4940 shooting-logic.cpp (the burst pause and count of
+# npc-difficulty.bin), 0x31d090 (an NPC's random spread between two table values, called by the npc.h functions 0x316430
+# and 0x31ae70), 0x357360 (npc.h, the grenade throw) and the wrapper 0x4ac0d0 (called only by the NPC function 0x24f480).
+# Left alone: the damage sites nathealth reads (0x24fbe0, helicopter 0xa855e0), the debug text of 0x258300, the dynamic
+# difficulty and tweak code (0xa5c320, 0xa61320, 0xa619e0, 0x96f5f0: the physics damage helper, shared with Nate), the
+# script natives 0x9fd010 / 0x9fdad0, the player's code (0x93c690 turret, 0x831e30 / 0x832920 melee) and the task
+# initialisers 0x69bab0..0x69cd50 (enemy use not proven).
+# Direct reads of the chosen difficulty ([game+0x48a4]) in NPC code become "mov reg, L" (only the load; the rest of the
+# instruction stream is the game's): 0x24d020's distance table per difficulty (0x24db2c), the projectile set of an NPC's
+# throw (EmitProjectileProcess key: Hard and up use another set; nine sites in the npc.h functions 0x316430, 0x319d70,
+# 0x32ce40, 0x32d330, 0x3360a0, 0x33ff10, 0x342270, 0x344b30, 0x3461a0) and the Explorer-only timer scale of 0x35dbf0
+# (npc.h; three loads). Not patched: the Explorer-only branches whose enemy use is unproven (0x233600 spawn, 0x244ef0
+# armor damage) and every site of a function without npc.h evidence (0x25ead0, 0x2e2c30, 0x38ef30, 0x35f600, 0x629460).
+# The stub sits after nathealth's, in the same reserved space.
+U2_AI_RETURNS = (0x24d4af, 0x24c25f, 0x254007, 0x254027, 0x257a7d, 0x2a4ab8, 0x2a4acd, 0x31d1e8, 0x31d1fe, 0x31d2b5,
+                 0x357d63, 0x4ac15b)
+U2_AI_LOADS = ((0x24db2c, '8b80a4480000', 0xb8), (0x31850b, '8b89a4480000', 0xb9), (0x31a093, '8b88a4480000', 0xb9),
+               (0x32d0d6, '8b88a4480000', 0xb9), (0x32f467, '8b80a4480000', 0xb8), (0x3376ed, '8b89a4480000', 0xb9),
+               (0x3416c6, '8b89a4480000', 0xb9), (0x342689, '8b88a4480000', 0xb9), (0x3450b6, '8b89a4480000', 0xb9),
+               (0x3464f4, '8b88a4480000', 0xb9), (0x35f095, '418b80a4480000', 0xb8))
+U2_AI_LOADS_R12 = (0x35eaaf, 0x35ec39)                                          # mov r12d, [r8+0x48a4]
+
+
+def _u2_ai(level):
+    stub, tail, join = 0xfe2c80, 0x4abb00, 0x4abaf5
+    items = [('rip', b'\x83\x3d', 0x1022e9b + 0x4abada + 7, b'\x01'), ('jg', 'done'), bytes.fromhex('488b4508'),
+             ('rip', b'\x48\x8d\x0d', U2_AI_RETURNS[0], b''), bytes.fromhex('4829c8')]   # rax = return - first
+    for ret in U2_AI_RETURNS:
+        items += [bytes.fromhex('483d') + struct.pack('<i', ret - U2_AI_RETURNS[0]), ('je', 'ai')]
+    items += [('jmp', 'done'), ('label', 'ai'), _imm(0xbf, level, 5), ('label', 'done'), bytes.fromhex('be010000005d'),
+              ('jmp', tail)]
+    code = _asm(stub, items)
+    patches = [(join, 'be010000005de900000000', _jump_to(join, stub, 11).hex())]
+    for address, original, opcode in U2_AI_LOADS:
+        patches.append((address, original, _imm(opcode, level, len(original) // 2).hex()))
+    for address in U2_AI_LOADS_R12:
+        patches.append((address, '458ba0a4480000', (b'\x41\xbc' + struct.pack('<I', level)).ljust(7, b'\x90').hex()))
+    return patches + [(stub, '00' * len(code), code.hex())]
+
+
+PATCHES[US['big2-ps4_Shipping.elf']].update({f'ailevel{_level}': _u2_ai(_level) for _level in range(NATE_LEVELS)})
+# Uncharted 3: the difficulty object's value 0x552a20 (the same role as Uncharted 2's 0x4aba00; its single-player
+# difficulty load is nathealth's 0x552b2c) ends in "mov edx, 1 / mov rdi, r14 / pop / jmp rax" at 0x552b39, the join of
+# the multiplayer path and of nathealth's stub: that tail jumps to a stub that sets esi = L when the return address
+# is one of the enemy callers (single player only: the game's own multiplayer test, [0x17d5c58 + 9]). Proven callers
+# (functions with their own npc.h / archetype.h asserts): 0x320a60 (NPC with nav character; 0x322fc3, table +0x28),
+# 0x3631c0 (archetype.h GetInfo, NPC knowledge: 0x363378, table +0x7c) and 0x369c70 (npc.h GetNpc: 0x36c51b and 0x36c543,
+# tables +0x6c/+0x80, the same shape as Uncharted 2's 0x251cf0); and by their data, the npc-difficulty.bin burst tables
+# of 0x3ce220 (0x3ce4a8, 0x3ce4c3; Uncharted 2's shooting-logic.cpp burst, same layout). Not patched: the two other
+# npc-difficulty readers (0x553670 / 0x5538c0, accessors whose users 0x3d0c70 / 0xd6c7b0 are unknown), 0x36661a (the
+# second damage multiplier of 0x365160, probably Nate's: nathealth leaves it), the NPC callers without asserts, the
+# direct difficulty reads ([game+0x4c48]) and everything player side.
+U3_AI_RETURNS = (0x322fc3, 0x363378, 0x36c51b, 0x36c543, 0x3ce4a8, 0x3ce4c3)
+
+
+def _u3_ai(level):
+    stub, join, original = 0x1646800, 0x552b39, 'ba010000004c89f75b415e5dffe0'
+    items = [('rip', b'\x48\x8d\x0d', 0x552b16 + 0x1283142, b''), bytes.fromhex('80790900'), ('jne', 'done')]
+    for ret in U3_AI_RETURNS:
+        items += [('rip', b'\x48\x8d\x0d', ret, b''), bytes.fromhex('48394d08'), ('je', 'ai')]
+    items += [('jmp', 'done'), ('label', 'ai'), _imm(0xbe, level, 5), ('label', 'done'), bytes.fromhex(original)]
+    code = _asm(stub, items)
+    return [(join, original, _jump_to(join, stub, 14).hex()), (stub, '00' * len(code), code.hex())]
+
+
+PATCHES[US['big3-ps4_Shipping.elf']].update({f'ailevel{_level}': _u3_ai(_level) for _level in range(NATE_LEVELS)})
 # text<n> (El Dorado's "Arabic" language, 1.02 code): the games load text1/ps4/<n>.common whatever the console language.
 # The text loader (text.cpp, "%s/%s%i.%s" with "build/main/text1/ps4/") reads the file number from the language's
 # table entry: "mov eax, esi; imul rax, rax, 0x38; lea rdx, [table]; mov r9d, [rdx+rax+0x14]" becomes

@@ -513,6 +513,10 @@ def game_environment(args, game, executable, game_dir):
     nate = os.environ.get("UNCHARTED_NATE_DAMAGE", "").strip()
     if nate in ("0", "1", "2", "3"):
         option_cheats += [f"{g}:nathealth{nate}" for g in ("u1", "u2", "u3")]
+        # Enemy accuracy, fire rate and timing as on the same level (cheats.py ailevel<L>: U2 and U3 1.02 code; off with
+        # UNCHARTED_AI_FOLLOWS_LEVEL=0). Enemy health stays the game's.
+        if os.environ.get("UNCHARTED_AI_FOLLOWS_LEVEL", "1") != "0":
+            option_cheats += [f"{g}:ailevel{nate}" for g in ("u2", "u3")]
     env["BB_CHEATS"] = ",".join([f"{g}:{CHEAT_NAMES[c]}" for g in ("u1", "u2", "u3") for c in cheats if c in CHEAT_NAMES]
                                 + [f"{g}:{c}" for c in cheats for g in CHEAT_PATCHES.get(c, ())]
                                 + option_cheats + arabic_cheats)
